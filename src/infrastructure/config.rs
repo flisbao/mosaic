@@ -38,6 +38,8 @@ pub enum ConfigError {
     Parse(String),
     #[error("widget duplicado na configuração: '{0}'")]
     DuplicateWidgetId(String),
+    #[error("widget '{widget}': '{field}' precisa ser maior que zero")]
+    InvalidValue { widget: String, field: &'static str },
     #[error("não foi possível descobrir o diretório de configuração")]
     MissingConfigDirectory,
 }
@@ -72,18 +74,46 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         if !seen.insert(widget.id.clone()) {
             return Err(ConfigError::DuplicateWidgetId(widget.id));
         }
+        let interval_seconds = positive_or_default(
+            widget.interval_seconds,
+            DEFAULT_INTERVAL_SECONDS,
+            &widget.id,
+            "interval_seconds",
+        )?;
+        let timeout_seconds = positive_or_default(
+            widget.timeout_seconds,
+            DEFAULT_TIMEOUT_SECONDS,
+            &widget.id,
+            "timeout_seconds",
+        )?;
         widgets.push(WidgetSettings {
             id: WidgetId::new(widget.id),
             command: widget.command,
             args: widget.args,
             env: widget.env.into_iter().collect(),
-            interval_seconds: widget.interval_seconds.unwrap_or(DEFAULT_INTERVAL_SECONDS),
-            timeout_seconds: widget.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS),
+            interval_seconds,
+            timeout_seconds,
             span: widget.span.unwrap_or(DEFAULT_SPAN),
             tab: widget.tab,
         });
     }
     Ok(AppConfig { widgets })
+}
+
+fn positive_or_default(
+    value: Option<u64>,
+    default: u64,
+    widget: &str,
+    field: &'static str,
+) -> Result<u64, ConfigError> {
+    match value {
+        Some(0) => Err(ConfigError::InvalidValue {
+            widget: widget.to_string(),
+            field,
+        }),
+        Some(seconds) => Ok(seconds),
+        None => Ok(default),
+    }
 }
 
 pub fn config_directory() -> Result<PathBuf, ConfigError> {
@@ -154,6 +184,32 @@ mod tests {
         assert_eq!(
             result.unwrap_err(),
             ConfigError::DuplicateWidgetId("kanban".to_string())
+        );
+    }
+
+    #[test]
+    fn zero_interval_is_rejected() {
+        let result =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ninterval_seconds = 0\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::InvalidValue {
+                widget: "a".to_string(),
+                field: "interval_seconds"
+            }
+        );
+    }
+
+    #[test]
+    fn zero_timeout_is_rejected() {
+        let result =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntimeout_seconds = 0\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::InvalidValue {
+                widget: "a".to_string(),
+                field: "timeout_seconds"
+            }
         );
     }
 
