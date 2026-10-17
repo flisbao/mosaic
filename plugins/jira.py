@@ -26,6 +26,8 @@ DEFAULT_STATE_DIRECTORY = "~/.local/state/panel-tui/jira"
 SITE_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
 PROJECT_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 MAXIMUM_SITE_LENGTH = 253
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+HTTP_REDIRECT_FLOOR = 300
 REQUEST_TIMEOUT_SECONDS = 20
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
@@ -111,13 +113,25 @@ def load_config(environ):
         unassigned_hours=_read_positive(environ, "JIRA_UNASSIGNED_HOURS", DEFAULT_UNASSIGNED_HOURS),
         state_dir=Path(environ.get("JIRA_STATE_DIR", DEFAULT_STATE_DIRECTORY)).expanduser(),
         budget_seconds=_read_positive(environ, "JIRA_BUDGET_SECONDS", DEFAULT_BUDGET_SECONDS),
-        base_url=environ.get("JIRA_BASE_URL", "").strip() or f"https://{site}",
+        base_url=_read_base_url(environ, site),
     )
+
+
+def _read_base_url(environ, site):
+    override = environ.get("JIRA_BASE_URL", "").strip()
+    if not override:
+        return f"https://{site}"
+    parsed = urllib.parse.urlparse(override)
+    is_secure = parsed.scheme == "https" and bool(parsed.hostname)
+    is_local = parsed.scheme == "http" and parsed.hostname in LOCAL_HOSTS
+    if not (is_secure or is_local) or any(character.isspace() for character in override):
+        raise ConfigError("JIRA_BASE_URL precisa ser https ou um endereço local de teste")
+    return override.rstrip("/")
 
 
 def _read_site(environ):
     site = environ.get("JIRA_SITE", "")
-    if not site or len(site) > MAXIMUM_SITE_LENGTH or not SITE_PATTERN.match(site):
+    if not site or len(site) > MAXIMUM_SITE_LENGTH or not SITE_PATTERN.fullmatch(site):
         raise ConfigError("JIRA_SITE precisa ser só o nome do host (ex.: empresa.atlassian.net)")
     return site
 
@@ -135,7 +149,7 @@ def _read_project(environ):
     raw = environ.get("JIRA_PROJECT")
     if raw is None or raw == "":
         return None
-    if not PROJECT_PATTERN.match(raw):
+    if not PROJECT_PATTERN.fullmatch(raw):
         raise ConfigError("JIRA_PROJECT precisa ser um prefixo como VHPJ")
     return raw
 
@@ -197,10 +211,18 @@ class UnexpectedResponseError(JiraError):
     pass
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects)
+
+
 def urllib_http(url, method, headers, timeout):
     request = urllib.request.Request(url, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, error.read()
@@ -233,7 +255,7 @@ class JiraClient:
             raise AuthError(f"credenciais inválidas para {self._config.site}")
         if status == HTTP_TOO_MANY_REQUESTS:
             raise RateLimitError("limite de requisições do Jira; tentando de novo mais tarde")
-        if status >= HTTP_ERROR_FLOOR:
+        if status >= HTTP_REDIRECT_FLOOR:
             raise UnexpectedResponseError(f"resposta inesperada do Jira (HTTP {status})")
         try:
             return json.loads(body)
@@ -265,8 +287,13 @@ class Issue:
     def from_raw(raw):
         values = dict(raw)
         for name in ("created", "updated", "resolved"):
-            values[name] = datetime.fromisoformat(values[name]) if values[name] else None
+            parsed = datetime.fromisoformat(values[name]) if values[name] else None
+            values[name] = parsed.replace(tzinfo=timezone.utc) if parsed and parsed.tzinfo is None else parsed
         return Issue(**values)
+
+
+def _as_dict(value):
+    return value if isinstance(value, dict) else {}
 
 
 def parse_timestamp(text):
@@ -292,15 +319,15 @@ def parse_issue(payload):
     updated = parse_timestamp(fields.get("updated"))
     if created is None or updated is None:
         return None
-    assignee = fields.get("assignee") or {}
-    creator = fields.get("creator") or {}
-    status = fields.get("status") or {}
-    priority = fields.get("priority") or {}
-    category = ((status.get("statusCategory") or {}).get("key")) if isinstance(status, dict) else None
+    assignee = _as_dict(fields.get("assignee"))
+    creator = _as_dict(fields.get("creator"))
+    status = _as_dict(fields.get("status"))
+    priority = _as_dict(fields.get("priority"))
+    category = _as_dict(status.get("statusCategory")).get("key")
     return Issue(
         key=key,
         summary=str(fields.get("summary") or ""),
-        status=str(status.get("name") or "") if isinstance(status, dict) else "",
+        status=str(status.get("name") or ""),
         status_category=category if category in STATUS_CATEGORIES else UNKNOWN_CATEGORY,
         assignee_id=assignee.get("accountId"),
         assignee_name=assignee.get("displayName"),
@@ -436,7 +463,8 @@ class StateStore:
         return self._write(STATE_FILE, state)
 
     def load_history(self):
-        return self._read_dict(HISTORY_FILE)
+        data = self._read_dict(HISTORY_FILE)
+        return {key: value for key, value in data.items() if isinstance(value, dict)}
 
     def save_history(self, history):
         return self._write(HISTORY_FILE, history)
@@ -498,13 +526,14 @@ def find_work_start(client, issue_key, categories):
     payload = client.get_json(
         ISSUE_PATH.format(key=issue_key), {"expand": "changelog", "fields": "status"}
     )
-    histories = ((payload or {}).get("changelog") or {}).get("histories") or []
+    histories = _as_dict(_as_dict(payload).get("changelog")).get("histories")
     transitions = []
-    for entry in histories:
+    for entry in histories if isinstance(histories, list) else []:
         created = parse_timestamp(entry.get("created")) if isinstance(entry, dict) else None
         if created is None:
             continue
-        for item in entry.get("items") or []:
+        items = entry.get("items")
+        for item in items if isinstance(items, list) else []:
             if isinstance(item, dict) and item.get("field") == "status":
                 transitions.append((created, item.get("toString")))
     for created, status_name in sorted(transitions, key=lambda transition: transition[0]):
@@ -513,20 +542,34 @@ def find_work_start(client, issue_key, categories):
     return None
 
 
-def update_history(history, issues, client, categories, now):
+def update_history(history, issues, client, categories, now, out_of_time=None):
     merged = dict(history)
     for issue in issues:
-        previous = merged.get(issue.key) or {}
-        started = previous.get("started")
-        if needs_changelog(previous, issue):
+        previous = _as_dict(merged.get(issue.key))
+        started = _valid_started(previous.get("started"))
+        if needs_changelog(previous, issue) and (out_of_time is None or not out_of_time()):
             started = _read_work_start(client, issue, categories) or started
         merged[issue.key] = _history_record(issue, started)
     return merged
 
 
+def _valid_started(raw):
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
 def needs_changelog(previous, issue):
+    previous = _as_dict(previous)
     return issue.status_category == "done" and (
-        previous.get("updated") != issue.updated.isoformat() or not previous.get("started")
+        previous.get("updated") != issue.updated.isoformat()
+        or _valid_started(previous.get("started")) is None
     )
 
 
@@ -806,7 +849,13 @@ def _build_snapshot(config, issues, history, team, last_seen_at, now, offline_at
     return build_personal_snapshot(issues, history, config, last_seen_at, now, offline_at)
 
 
+def _accounts_of(state):
+    accounts = state.get("accounts")
+    return accounts if isinstance(accounts, dict) else {}
+
+
 def _run_online(config, store, client, now, clock):
+    started_at = clock()
     state = store.load_state()
     last_seen_at = last_seen(state, config.mode, now)
     issues = fetch_scope(
@@ -819,14 +868,18 @@ def _run_online(config, store, client, now, clock):
             categories = fetch_status_categories(client)
         except JiraError:
             categories = {}
-    history = update_history(history, issues, client, categories, now)
+    history = update_history(
+        history, issues, client, categories, now,
+        out_of_time=lambda: clock() - started_at > config.budget_seconds,
+    )
     store.save_history(history)
     team = TeamResolution({}, [])
     if config.mode == "manager":
-        team, accounts = resolve_team(config.team, issues, client, state.get("accounts") or {})
-        if accounts != (state.get("accounts") or {}):
-            state["accounts"] = accounts
-            store.save_state(state)
+        team, accounts = resolve_team(config.team, issues, client, _accounts_of(state))
+        if accounts != _accounts_of(state):
+            fresh_state = store.load_state()
+            fresh_state["accounts"] = accounts
+            store.save_state(fresh_state)
     store.save_snapshot(config.mode, issues, now)
     return _build_snapshot(config, issues, history, team, last_seen_at, now)
 
@@ -839,7 +892,7 @@ def _run_offline(config, store, now):
     state = store.load_state()
     team = TeamResolution({}, [])
     if config.mode == "manager":
-        team, _ = resolve_team(config.team, issues, _OfflineClient(), state.get("accounts") or {})
+        team, _ = resolve_team(config.team, issues, _OfflineClient(), _accounts_of(state))
         team.warnings = []
     return _build_snapshot(
         config, issues, store.load_history(), team, last_seen(state, config.mode, now), now, saved_at
@@ -850,10 +903,11 @@ def _command_snapshot(config, store, http, now, clock, stdout, stderr):
     client = JiraClient(config, http)
     try:
         snapshot = _run_online(config, store, client, now, clock)
-    except JiraError as error:
+    except Exception as error:
         snapshot = _run_offline(config, store, now)
         if snapshot is None:
-            stderr.write(f"erro: {error}\n")
+            reason = str(error) if isinstance(error, JiraError) else f"erro inesperado ({type(error).__name__})"
+            stderr.write(f"erro: {reason}\n")
             return 1
     stdout.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
     return 0

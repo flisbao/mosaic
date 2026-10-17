@@ -1097,7 +1097,7 @@ class MainTests(unittest.TestCase):
 
     def test_budget_exhaustion_prints_partial_data(self):
         page = {"issues": raw_issues_for_main(), "nextPageToken": "t2"}
-        ticks = iter([0.0, 0.0, 1000.0, 2000.0])
+        ticks = iter([0.0, 0.0, 0.0] + [1000.0 * n for n in range(1, 40)])
         code, out, err = self.run_main(
             ["snapshot"], {"/rest/api/3/search/jql": (200, page)}, clock=lambda: next(ticks)
         )
@@ -1193,6 +1193,212 @@ class MainTests(unittest.TestCase):
             for action in snapshot["actions"]:
                 self.assertIn(action["applies_to"], ("widget", "item"))
                 self.assertTrue(action["id"] and action["label"])
+
+
+class ReviewFixTests(unittest.TestCase):
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.state_dir = Path(self._directory.name) / "estado"
+
+    def tearDown(self):
+        self._directory.cleanup()
+
+    def run_main(self, arguments, routes=None, stdin_text="", clock=None, opener=None, http=None, **overrides):
+        environment = base_environment(JIRA_STATE_DIR=str(self.state_dir), **overrides)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = jira.main(
+            arguments,
+            environ=environment,
+            http=http or RoutedHttp({**STATUS_ROUTE, **(routes or {})}),
+            now=NOW,
+            clock=clock or (lambda: 0.0),
+            opener=opener or (lambda url: None),
+            stdin=io.StringIO(stdin_text),
+            stdout=stdout,
+            stderr=stderr,
+        )
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def store(self):
+        return jira.StateStore(self.state_dir / "empresa.atlassian.net-VHPJ")
+
+    def search(self, issues):
+        return {"/rest/api/3/search/jql": (200, {"issues": issues})}
+
+    # 1. trailing newline accepted by "$"
+    def test_site_and_project_with_trailing_newline_are_rejected(self):
+        with self.assertRaises(jira.ConfigError):
+            jira.load_config(base_environment(JIRA_SITE="x.net\n"))
+        with self.assertRaises(jira.ConfigError):
+            jira.load_config(base_environment(JIRA_PROJECT="VHPJ\n"))
+        opened = []
+        code, _, _ = self.run_main(
+            ["action", "open"], stdin_text='{"item_id": "AB-1"}', opener=opened.append, JIRA_SITE="x.net\n"
+        )
+        self.assertEqual((code, opened), (1, []))
+
+    # 2. corrupted history / state
+    def test_corrupt_history_and_state_do_not_crash_the_snapshot(self):
+        store = self.store()
+        store.save_history({"VHPJ-1": "texto", "VHPJ-2": {"started": "lixo", "updated": 5}, "VHPJ-3": {"started": "2026-10-17T08:00:00"}})
+        store.save_state({"accounts": "nao-eh-dict", "last_seen_manager": 12})
+        done = raw_issue(
+            key="VHPJ-3",
+            status={"name": "Done", "statusCategory": {"key": "done"}},
+            resolutiondate="2026-10-17T11:00:00.000+0000",
+        )
+        issues = [raw_issue(key="VHPJ-1"), raw_issue(key="VHPJ-2"), done]
+        code, out, err = self.run_main(["snapshot"], self.search(issues), JIRA_TEAM="a@x.com")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("Traceback", err)
+        json.loads(out)
+
+    def test_update_history_tolerates_bad_records(self):
+        done = done_issue()
+        history = {"VHPJ-5": {"started": "naive-ou-lixo", "updated": None}, "OUTRO": 7}
+        result = jira.update_history(history, [done], client_for(RoutedHttp({})), CATEGORIES, NOW)
+        self.assertIn("VHPJ-5", result)
+
+    def test_unexpected_payload_types_do_not_crash_parsing(self):
+        weird = raw_issue(assignee="Ana", creator=[1], priority="High", status="x")
+        issue = jira.parse_issue(weird)
+        self.assertIsNotNone(issue)
+        self.assertIsNone(issue.assignee_id)
+        self.assertIsNone(jira.find_work_start(client_for(RoutedHttp({"/rest/api/3/issue/VHPJ-1": (200, [1])})), "VHPJ-1", CATEGORIES))
+
+    def test_unexpected_exception_falls_back_to_the_offline_cache_or_a_clean_error(self):
+        self.run_main(["snapshot"], self.search([raw_issue()]))
+
+        def exploding(url, method, headers, timeout):
+            raise RuntimeError("bug inesperado " + SECRET)
+
+        code, out, err = self.run_main(["snapshot"], http=exploding)
+        self.assertEqual(code, 0, err)
+        self.assertIn("(offline)", summary_texts(json.loads(out))[0])
+        self.assertNotIn(SECRET, out + err)
+        fresh = tempfile.TemporaryDirectory()
+        self.state_dir = Path(fresh.name) / "novo"
+        code, out, err = self.run_main(["snapshot"], http=exploding)
+        self.assertEqual(code, 1)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn(SECRET, out + err)
+        fresh.cleanup()
+
+    def test_naive_dates_in_the_offline_cache_are_treated_as_utc(self):
+        raw = jira.parse_issue(raw_issue()).to_raw()
+        raw["created"] = "2026-10-17T08:00:00"
+        raw["updated"] = "2026-10-17T09:00:00"
+        issue = jira.Issue.from_raw(raw)
+        self.assertEqual(issue.created.tzinfo, timezone.utc)
+        self.assertEqual(issue.updated.tzinfo, timezone.utc)
+
+    # 3. race between snapshot and mark_seen
+    def test_mark_seen_during_a_snapshot_is_not_lost(self):
+        store = self.store()
+        marker = NOW.isoformat()
+
+        def http(url, method, headers, timeout):
+            path = urllib.parse.urlparse(url).path
+            if path == "/rest/api/3/search/jql":
+                return 200, json.dumps({"issues": [raw_issue()]}).encode()
+            if path == "/rest/api/3/user/search":
+                state = store.load_state()
+                state["last_seen_manager"] = marker
+                store.save_state(state)
+                return 200, json.dumps([{"accountId": "acc-x", "displayName": "X"}]).encode()
+            return 200, b"[]"
+
+        code, _, err = self.run_main(["snapshot"], http=http, JIRA_TEAM="x@x.com")
+        self.assertEqual(code, 0, err)
+        state = store.load_state()
+        self.assertEqual(state["last_seen_manager"], marker)
+        self.assertEqual(state["accounts"]["x@x.com"]["id"], "acc-x")
+
+    # 4. changelog fetches respect the time budget
+    def test_changelog_fetches_stop_when_time_runs_out(self):
+        issues = [done_issue(key=f"VHPJ-{n}") for n in range(10, 15)]
+        http = RoutedHttp({f"/rest/api/3/issue/VHPJ-{n}": (200, HistoryTests.changelog) for n in range(10, 15)})
+        remaining = iter([False, False, True, True, True, True])
+        history = jira.update_history(
+            {}, issues, client_for(http), CATEGORIES, NOW, out_of_time=lambda: next(remaining)
+        )
+        self.assertEqual(len(http.calls), 2)
+        self.assertEqual(len(history), 5)
+
+    def test_main_passes_a_shared_budget_to_the_history_update(self):
+        done = [
+            raw_issue(
+                key=f"VHPJ-{n}",
+                status={"name": "Done", "statusCategory": {"key": "done"}},
+                resolutiondate="2026-10-17T11:00:00.000+0000",
+            )
+            for n in range(10, 16)
+        ]
+        routes = self.search(done)
+        for n in range(10, 16):
+            routes[f"/rest/api/3/issue/VHPJ-{n}"] = (200, HistoryTests.changelog)
+        ticks = {"value": 0.0}
+
+        def clock():
+            ticks["value"] += 20.0
+            return ticks["value"]
+
+        http = RoutedHttp({**STATUS_ROUTE, **routes})
+        code, _, err = self.run_main(["snapshot"], clock=clock, http=http)
+        self.assertEqual(code, 0, err)
+        changelog_calls = [path for path in http.calls if "/issue/" in path]
+        self.assertLess(len(changelog_calls), 6)
+
+    # 5. redirects must not forward credentials; base url restricted
+    def test_redirects_are_not_followed_and_credentials_are_not_forwarded(self):
+        received = []
+
+        class Target(BaseHTTPRequestHandler):
+            def do_GET(self):
+                received.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *arguments):
+                pass
+
+        target = ThreadingHTTPServer(("127.0.0.1", 0), Target)
+        threading.Thread(target=target.serve_forever, daemon=True).start()
+        destination = f"http://127.0.0.1:{target.server_address[1]}/alvo"
+
+        class Redirector(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", destination)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *arguments):
+                pass
+
+        origin = ThreadingHTTPServer(("127.0.0.1", 0), Redirector)
+        threading.Thread(target=origin.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{origin.server_address[1]}"
+            status, _ = jira.urllib_http(f"{base}/x", "GET", {"Authorization": "Basic abc"}, 5)
+            self.assertEqual(status, 302)
+            client = make_client(jira.urllib_http, JIRA_BASE_URL=base)
+            with self.assertRaises(jira.UnexpectedResponseError):
+                client.get_json("/x")
+            self.assertEqual(received, [])
+        finally:
+            for server in (origin, target):
+                server.shutdown()
+                server.server_close()
+
+    def test_base_url_must_be_https_or_localhost(self):
+        for url in ("http://evil.example.com", "ftp://x", "file:///etc/passwd", "evil.com", "http://127.0.0.1.evil.com"):
+            with self.assertRaises(jira.ConfigError, msg=url):
+                jira.load_config(base_environment(JIRA_BASE_URL=url))
+        for url in ("https://empresa.atlassian.net", "http://127.0.0.1:8080", "http://localhost:9"):
+            jira.load_config(base_environment(JIRA_BASE_URL=url))
 
 
 if __name__ == "__main__":
