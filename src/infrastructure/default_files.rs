@@ -11,6 +11,7 @@ command = "python3"
 args = ["plugins/kanban.py"]
 interval_seconds = 15
 tab = true
+llm_sections = ["inbox", "in progress", "acompanhar_jira"]
 
 [widgets.env]
 KANBAN_DIR = "~/kanban"
@@ -24,7 +25,28 @@ args = ["plugins/example.py"]
 id = "example-node"
 command = "node"
 args = ["plugins/example.js"]
+
+[pomodoro]
+enabled = true
+focus_minutes = 25
+short_break_minutes = 5
+long_break_minutes = 15
+cycles_before_long_break = 4
+suggestions = ["Beber água", "Levantar e alongar", "Tomar um café"]
+bell = true
+notify_command = ""
+
+[llm]
+enabled = true
+harness = "claude"
+timeout_seconds = 120
+confirm_before_send = true
+priority_prompt = "prompts/prioridade.md"
 "#;
+
+const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
+const PROMPTS_DIRECTORY_NAME: &str = "prompts";
+const PRIORITY_PROMPT_FILE_NAME: &str = "prioridade.md";
 
 const BUNDLED_PLUGINS: [(&str, &str); 3] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
@@ -34,6 +56,10 @@ const BUNDLED_PLUGINS: [(&str, &str); 3] = [
 
 pub fn default_config_text() -> &'static str {
     DEFAULT_CONFIG
+}
+
+pub fn default_priority_prompt() -> &'static str {
+    PRIORITY_PROMPT
 }
 
 pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError> {
@@ -46,6 +72,13 @@ pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError
     for (name, content) in BUNDLED_PLUGINS {
         fs::write(plugins_directory.join(name), content).map_err(to_io_error)?;
     }
+    let prompts_directory = directory.join(PROMPTS_DIRECTORY_NAME);
+    fs::create_dir_all(&prompts_directory).map_err(to_io_error)?;
+    fs::write(
+        prompts_directory.join(PRIORITY_PROMPT_FILE_NAME),
+        PRIORITY_PROMPT,
+    )
+    .map_err(to_io_error)?;
     fs::write(config_path, DEFAULT_CONFIG).map_err(to_io_error)?;
     Ok(true)
 }
@@ -78,6 +111,39 @@ mod tests {
                 "{plugin}"
             );
         }
+    }
+
+    #[test]
+    fn default_config_enables_kanban_for_the_llm() {
+        let config = parse_config(default_config_text()).unwrap();
+        assert_eq!(
+            config.widgets[0].llm_sections,
+            vec!["inbox", "in progress", "acompanhar_jira"]
+        );
+        assert!(config.widgets[1].llm_sections.is_empty());
+    }
+
+    #[test]
+    fn default_config_parses_with_pomodoro_and_llm_sections() {
+        let config = parse_config(default_config_text()).unwrap();
+        assert!(config.pomodoro.enabled);
+        assert_eq!(config.pomodoro.notify_command, None);
+        assert!(config.llm.confirm_before_send);
+        assert_eq!(config.llm.priority_prompt, "prompts/prioridade.md");
+    }
+
+    #[test]
+    fn install_creates_the_priority_prompt() {
+        let directory = tempfile::tempdir().unwrap();
+        install_defaults_if_missing(directory.path()).unwrap();
+        let installed =
+            std::fs::read_to_string(directory.path().join("prompts/prioridade.md")).unwrap();
+        assert_eq!(installed, default_priority_prompt());
+    }
+
+    #[test]
+    fn default_priority_prompt_mentions_output_format() {
+        assert!(default_priority_prompt().contains("Comece por"));
     }
 
     #[test]
