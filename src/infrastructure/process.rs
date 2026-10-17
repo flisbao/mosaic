@@ -11,8 +11,24 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const READ_CHUNK_BYTES: usize = 8192;
 
 #[derive(Debug, Error)]
-#[error("{0}")]
-pub struct ProcessError(String);
+#[error("{message}")]
+pub struct ProcessError {
+    message: String,
+    program_not_found: bool,
+}
+
+impl ProcessError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            program_not_found: false,
+        }
+    }
+
+    pub fn program_not_found(&self) -> bool {
+        self.program_not_found
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessLimits {
@@ -36,7 +52,10 @@ pub fn run_process(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| ProcessError(format!("não foi possível iniciar '{program}': {error}")))?;
+        .map_err(|error| ProcessError {
+            message: format!("não foi possível iniciar '{program}': {error}"),
+            program_not_found: error.kind() == std::io::ErrorKind::NotFound,
+        })?;
     if let Some(mut stdin) = child.stdin.take() {
         if let Some(text) = stdin_text {
             let _ = stdin.write_all(text.as_bytes());
@@ -50,14 +69,14 @@ pub fn run_process(
     let stderr_bytes = join_output(stderr, limits)?;
     if !status.success() {
         let message = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
-        return Err(ProcessError(if message.is_empty() {
+        return Err(ProcessError::new(if message.is_empty() {
             format!("processo terminou com falha ({status})")
         } else {
             message
         }));
     }
     String::from_utf8(stdout_bytes)
-        .map_err(|_| ProcessError("saída do processo não é UTF-8 válido".to_string()))
+        .map_err(|_| ProcessError::new("saída do processo não é UTF-8 válido".to_string()))
 }
 
 fn wait_for_exit(
@@ -75,14 +94,14 @@ fn wait_for_exit(
             Ok(Some(status)) => return Ok(status),
             Ok(None) if Instant::now() >= deadline => {
                 terminate(child);
-                return Err(ProcessError(format!(
+                return Err(ProcessError::new(format!(
                     "processo excedeu o tempo limite de {}s",
                     limits.timeout.as_secs()
                 )));
             }
             Ok(None) => thread::sleep(POLL_INTERVAL),
             Err(error) => {
-                return Err(ProcessError(format!(
+                return Err(ProcessError::new(format!(
                     "falha ao aguardar o processo: {error}"
                 )))
             }
@@ -91,7 +110,7 @@ fn wait_for_exit(
 }
 
 fn overflow_error(limits: &ProcessLimits) -> ProcessError {
-    ProcessError(format!(
+    ProcessError::new(format!(
         "saída excedeu o limite de {} bytes",
         limits.maximum_output_bytes
     ))
@@ -139,7 +158,7 @@ fn join_output(output: CapturedOutput, limits: &ProcessLimits) -> Result<Vec<u8>
     let bytes = output
         .handle
         .join()
-        .map_err(|_| ProcessError("falha ao ler a saída do processo".to_string()))?;
+        .map_err(|_| ProcessError::new("falha ao ler a saída do processo".to_string()))?;
     if output.overflowed.load(Ordering::SeqCst) {
         return Err(overflow_error(limits));
     }
@@ -194,6 +213,19 @@ mod tests {
         let error = run_process(shell("exec sleep 30"), None, &limits(1, 1024)).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(error.to_string().contains("tempo"), "{error}");
+    }
+
+    #[test]
+    fn run_process_flags_a_missing_program() {
+        let error = run_process(
+            Command::new("programa-que-nao-existe-xyz"),
+            None,
+            &limits(5, 1024),
+        )
+        .unwrap_err();
+        assert!(error.program_not_found());
+        let failure = run_process(shell("exit 3"), None, &limits(5, 1024)).unwrap_err();
+        assert!(!failure.program_not_found());
     }
 
     #[test]
