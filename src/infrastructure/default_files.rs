@@ -42,16 +42,57 @@ harness = "claude"
 timeout_seconds = 120
 confirm_before_send = true
 priority_prompt = "prompts/prioridade.md"
+
+# --- Jira (descomente e ajuste; veja docs/jira.md) ---
+# Guarde o token numa variável de ambiente, por exemplo:
+#   export JIRA_TOKEN_EMPRESA="seu-token-de-api"
+#
+# Gerente: acompanha o time.
+# [[widgets]]
+# id = "jira-empresa-time"
+# command = "python3"
+# args = ["plugins/jira.py"]
+# interval_seconds = 120
+# timeout_seconds = 45
+# tab = true
+# llm_sections = ["Sem dono", "Em andamento"]
+#
+# [widgets.env]
+# JIRA_SITE = "empresa.atlassian.net"
+# JIRA_EMAIL = "voce@empresa.com"
+# JIRA_TOKEN_ENV = "JIRA_TOKEN_EMPRESA"
+# JIRA_MODE = "manager"
+# JIRA_PROJECT = "VHPJ"
+# JIRA_BOARD = "42"
+# JIRA_TEAM = "ana@empresa.com, bruno@empresa.com"
+#
+# Pessoa do projeto: só os seus tickets.
+# [[widgets]]
+# id = "jira-cliente-meus"
+# command = "python3"
+# args = ["plugins/jira.py"]
+# interval_seconds = 120
+# timeout_seconds = 45
+# tab = true
+# llm_sections = ["Meus tickets"]
+#
+# [widgets.env]
+# JIRA_SITE = "cliente.atlassian.net"
+# JIRA_EMAIL = "voce@consultoria.com"
+# JIRA_TOKEN_ENV = "JIRA_TOKEN_CLIENTE"
+# JIRA_MODE = "personal"
+# JIRA_PROJECT = "CLI"
 "#;
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
 const PROMPTS_DIRECTORY_NAME: &str = "prompts";
 const PRIORITY_PROMPT_FILE_NAME: &str = "prioridade.md";
 
-const BUNDLED_PLUGINS: [(&str, &str); 3] = [
+const BUNDLED_PLUGINS: [(&str, &str); 4] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
     ("example.py", include_str!("../../plugins/example.py")),
     ("example.js", include_str!("../../plugins/example.js")),
+    ("jira.py", include_str!("../../plugins/jira.py")),
 ];
 
 pub fn default_config_text() -> &'static str {
@@ -144,6 +185,31 @@ mod tests {
     #[test]
     fn default_priority_prompt_mentions_output_format() {
         assert!(default_priority_prompt().contains("Comece por"));
+    }
+
+    #[test]
+    fn install_creates_the_jira_plugin() {
+        let directory = tempfile::tempdir().unwrap();
+        install_defaults_if_missing(directory.path()).unwrap();
+        let installed = std::fs::read_to_string(directory.path().join("plugins/jira.py")).unwrap();
+        assert!(installed.contains("def main("));
+    }
+
+    #[test]
+    fn default_config_still_parses_and_has_no_active_jira_widget() {
+        let config = parse_config(default_config_text()).unwrap();
+        assert!(config
+            .widgets
+            .iter()
+            .all(|widget| !widget.id.as_str().starts_with("jira")));
+    }
+
+    #[test]
+    fn default_config_documents_jira_examples() {
+        let text = default_config_text();
+        assert!(text.contains("JIRA_SITE"));
+        assert!(text.contains("JIRA_MODE = \"manager\""));
+        assert!(text.contains("JIRA_MODE = \"personal\""));
     }
 
     #[test]
