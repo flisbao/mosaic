@@ -26,6 +26,10 @@ impl ProposedAction {
         })
     }
 
+    pub fn item_id(&self) -> Option<&str> {
+        self.item_id.as_deref()
+    }
+
     pub fn describe(&self) -> String {
         match &self.spec.description {
             Some(description) => description.clone(),
@@ -127,6 +131,12 @@ mod tests {
 
     fn propose(spec: ActionSpec, item: Option<&str>) -> ProposedAction {
         ProposedAction::new(WidgetId::new("kanban"), spec, item.map(str::to_string)).unwrap()
+    }
+
+    #[test]
+    fn proposed_action_exposes_item_id() {
+        let action = propose(spec(ActionScope::Item, None, "{}"), Some("inbox/a.md"));
+        assert_eq!(action.item_id(), Some("inbox/a.md"));
     }
 
     #[test]
