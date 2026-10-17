@@ -1,5 +1,7 @@
 import base64
 import json
+import os
+import stat
 import sys
 import tempfile
 import threading
@@ -453,6 +455,100 @@ class FetchScopeTests(unittest.TestCase):
     def test_auth_error_propagates(self):
         with self.assertRaises(jira.AuthError):
             fetch(ScriptedHttp([(401, {})]))
+
+
+class StateStoreTests(unittest.TestCase):
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.root = Path(self._directory.name) / "estado" / "chave"
+        self.store = jira.StateStore(self.root)
+
+    def tearDown(self):
+        self._directory.cleanup()
+
+    def mode_of(self, path):
+        return stat.S_IMODE(os.stat(path).st_mode)
+
+    def test_round_trips_state_history_and_snapshot(self):
+        self.assertTrue(self.store.save_state({"last_seen_manager": "2026-10-17T00:00:00+00:00"}))
+        self.assertTrue(self.store.save_history({"VHPJ-1": {"assignee": "Ana"}}))
+        issue = jira.parse_issue(raw_issue())
+        self.assertTrue(self.store.save_snapshot("manager", [issue], NOW))
+        self.assertEqual(self.store.load_state()["last_seen_manager"], "2026-10-17T00:00:00+00:00")
+        self.assertEqual(self.store.load_history(), {"VHPJ-1": {"assignee": "Ana"}})
+        self.assertEqual(self.store.load_snapshot("manager"), ([issue], NOW))
+
+    def test_files_are_private(self):
+        self.store.save_state({"a": 1})
+        self.store.save_history({})
+        self.store.save_snapshot("personal", [], NOW)
+        self.assertEqual(self.mode_of(self.root), 0o700)
+        for name in ("state.json", "history.json", "snapshot-personal.json"):
+            self.assertEqual(self.mode_of(self.root / name), 0o600, name)
+
+    def test_missing_empty_and_corrupt_files_return_defaults(self):
+        self.assertEqual(self.store.load_state(), {})
+        self.assertEqual(self.store.load_history(), {})
+        self.assertIsNone(self.store.load_snapshot("manager"))
+        self.root.mkdir(parents=True)
+        for content in ("", "{nao json", "[1,2]", "null", '"texto"'):
+            for name in ("state.json", "history.json", "snapshot-manager.json"):
+                (self.root / name).write_text(content, encoding="utf-8")
+            self.assertEqual(self.store.load_state(), {}, content)
+            self.assertEqual(self.store.load_history(), {}, content)
+            self.assertIsNone(self.store.load_snapshot("manager"), content)
+
+    def test_snapshot_with_bad_issue_data_returns_none(self):
+        self.root.mkdir(parents=True)
+        (self.root / "snapshot-manager.json").write_text(
+            json.dumps({"saved_at": NOW.isoformat(), "issues": [{"key": "X"}]}), encoding="utf-8"
+        )
+        self.assertIsNone(self.store.load_snapshot("manager"))
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignora permissões")
+    def test_unreadable_file_returns_default(self):
+        self.store.save_state({"a": 1})
+        os.chmod(self.root / "state.json", 0o000)
+        self.assertEqual(self.store.load_state(), {})
+
+    def test_save_into_unwritable_directory_returns_false(self):
+        blocker = Path(self._directory.name) / "arquivo"
+        blocker.write_text("x", encoding="utf-8")
+        store = jira.StateStore(blocker / "dentro")
+        self.assertFalse(store.save_state({"a": 1}))
+        self.assertFalse(store.save_history({}))
+        self.assertFalse(store.save_snapshot("manager", [], NOW))
+
+    def test_write_is_atomic_no_temp_files_left(self):
+        for number in range(5):
+            self.store.save_history({"n": number})
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["history.json"])
+
+    def test_last_seen_defaults_to_24_hours_ago(self):
+        self.assertEqual(jira.last_seen({}, "manager", NOW), NOW - timedelta(hours=24))
+        self.assertEqual(
+            jira.last_seen({"last_seen_manager": "lixo"}, "manager", NOW), NOW - timedelta(hours=24)
+        )
+
+    def test_last_seen_is_per_mode(self):
+        state = {"last_seen_manager": "2026-10-17T10:00:00+00:00"}
+        self.assertEqual(jira.last_seen(state, "manager", NOW), datetime(2026, 10, 17, 10, tzinfo=timezone.utc))
+        self.assertEqual(jira.last_seen(state, "personal", NOW), NOW - timedelta(hours=24))
+
+    def test_state_key_is_filesystem_safe(self):
+        config = jira.load_config(base_environment(JIRA_BOARD="7"))
+        key = jira.state_key(config)
+        self.assertEqual(key, "empresa.atlassian.net-VHPJ-board7")
+        board_only = jira.load_config(base_environment(JIRA_PROJECT=None, JIRA_BOARD="7"))
+        self.assertEqual(jira.state_key(board_only), "empresa.atlassian.net-board7")
+        self.assertNotIn("/", key)
+
+    def test_state_never_contains_the_token(self):
+        self.store.save_state({"accounts": {"a@x.com": "acc-1"}})
+        self.store.save_history({"VHPJ-1": {"assignee": "Ana"}})
+        self.store.save_snapshot("manager", [jira.parse_issue(raw_issue())], NOW)
+        for path in self.root.iterdir():
+            self.assertNotIn(SECRET, path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -6,8 +6,10 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import os
 import re
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +43,13 @@ PAGE_SIZE = 100
 ISSUE_FIELDS = "summary,status,assignee,creator,created,updated,resolutiondate,priority"
 SEARCH_PATH = "/rest/api/3/search/jql"
 BOARD_ISSUES_PATH = "/rest/agile/1.0/board/{board}/issue"
+DIRECTORY_MODE = 0o700
+FILE_MODE = 0o600
+FIRST_SEEN_LOOKBACK_HOURS = 24
+STATE_FILE = "state.json"
+HISTORY_FILE = "history.json"
+SNAPSHOT_FILE = "snapshot-{mode}.json"
+UNSAFE_KEY_CHARACTERS = re.compile(r"[^A-Za-z0-9._-]")
 
 
 class ConfigError(Exception):
@@ -376,6 +385,82 @@ def _read_board_pages(client, config, jql, clock, deadline, collected):
         if len(collected) >= MAXIMUM_ISSUES:
             return
         start_at += len(page_issues)
+
+
+def state_key(config):
+    parts = [config.site]
+    if config.project:
+        parts.append(config.project)
+    if config.board is not None:
+        parts.append(f"board{config.board}")
+    return UNSAFE_KEY_CHARACTERS.sub("_", "-".join(parts))
+
+
+def last_seen(state, mode, now):
+    default = now - timedelta(hours=FIRST_SEEN_LOOKBACK_HOURS)
+    raw = state.get(f"last_seen_{mode}") if isinstance(state, dict) else None
+    if not isinstance(raw, str):
+        return default
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return default
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+class StateStore:
+    def __init__(self, directory):
+        self._directory = Path(directory)
+
+    def load_state(self):
+        return self._read_dict(STATE_FILE)
+
+    def save_state(self, state):
+        return self._write(STATE_FILE, state)
+
+    def load_history(self):
+        return self._read_dict(HISTORY_FILE)
+
+    def save_history(self, history):
+        return self._write(HISTORY_FILE, history)
+
+    def load_snapshot(self, mode):
+        data = self._read_dict(SNAPSHOT_FILE.format(mode=mode))
+        try:
+            saved_at = datetime.fromisoformat(data["saved_at"])
+            issues = [Issue.from_raw(raw) for raw in data["issues"]]
+        except (KeyError, TypeError, ValueError):
+            return None
+        return issues, saved_at
+
+    def save_snapshot(self, mode, issues, saved_at):
+        payload = {"saved_at": saved_at.isoformat(), "issues": [issue.to_raw() for issue in issues]}
+        return self._write(SNAPSHOT_FILE.format(mode=mode), payload)
+
+    def _read_dict(self, name):
+        try:
+            data = json.loads((self._directory / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write(self, name, payload):
+        try:
+            self._directory.mkdir(parents=True, exist_ok=True, mode=DIRECTORY_MODE)
+            os.chmod(self._directory, DIRECTORY_MODE)
+            descriptor, temporary = tempfile.mkstemp(dir=self._directory, prefix=".tmp-")
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, ensure_ascii=False)
+                os.chmod(temporary, FILE_MODE)
+                os.replace(temporary, self._directory / name)
+            except BaseException:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+                raise
+        except (OSError, TypeError, ValueError):
+            return False
+        return True
 
 
 if __name__ == "__main__":
