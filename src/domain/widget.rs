@@ -43,6 +43,7 @@ pub struct DetailItem {
     pub id: Option<String>,
     pub text: String,
     pub flag: Option<Flag>,
+    pub meta: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

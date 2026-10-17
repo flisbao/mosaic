@@ -50,6 +50,7 @@ struct RawItem {
     id: Option<String>,
     text: String,
     flag: Option<String>,
+    meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +91,7 @@ pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
                             id: item.id,
                             text: item.text,
                             flag: parse_flag(item.flag.as_deref()),
+                            meta: text_meta(item.meta),
                         })
                         .collect(),
                 })
@@ -113,6 +115,13 @@ fn convert_action(raw: RawAction) -> ActionSpec {
             .map(|params| params.to_string())
             .unwrap_or_else(|| EMPTY_PARAMS_JSON.to_string()),
     }
+}
+
+fn text_meta(meta: Option<serde_json::Map<String, serde_json::Value>>) -> Vec<(String, String)> {
+    meta.into_iter()
+        .flatten()
+        .filter_map(|(key, value)| value.as_str().map(|text| (key, text.to_string())))
+        .collect()
 }
 
 fn parse_flag(flag: Option<&str>) -> Option<Flag> {
@@ -173,6 +182,46 @@ mod tests {
         let refresh = &snapshot.actions[1];
         assert_eq!(refresh.scope, ActionScope::Widget);
         assert_eq!(refresh.params_json, "{}");
+    }
+
+    #[test]
+    fn parses_item_meta_in_order() {
+        let snapshot = parse_snapshot(
+            r#"{"summary":{"title":"K","lines":[]},
+                "detail":{"sections":[{"heading":"h","items":[
+                    {"text":"x","meta":{"prioridade":"alta","parado_ha":"2h30"}}]}]}}"#,
+        )
+        .unwrap();
+        let item = &snapshot.detail.unwrap()[0].items[0];
+        assert_eq!(
+            item.meta,
+            vec![
+                ("prioridade".to_string(), "alta".to_string()),
+                ("parado_ha".to_string(), "2h30".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_meta_is_empty() {
+        let snapshot = parse_snapshot(
+            r#"{"summary":{"title":"K","lines":[]},
+                "detail":{"sections":[{"heading":"h","items":[{"text":"x"}]}]}}"#,
+        )
+        .unwrap();
+        assert!(snapshot.detail.unwrap()[0].items[0].meta.is_empty());
+    }
+
+    #[test]
+    fn non_text_meta_values_are_ignored() {
+        let snapshot = parse_snapshot(
+            r#"{"summary":{"title":"K","lines":[]},
+                "detail":{"sections":[{"heading":"h","items":[
+                    {"text":"x","meta":{"a":"x","b":3}}]}]}}"#,
+        )
+        .unwrap();
+        let item = &snapshot.detail.unwrap()[0].items[0];
+        assert_eq!(item.meta, vec![("a".to_string(), "x".to_string())]);
     }
 
     #[test]

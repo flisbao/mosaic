@@ -373,11 +373,13 @@ mod tests {
                     id: Some("inbox/a.md".to_string()),
                     text: "Tarefa A".to_string(),
                     flag: Some(Flag::Warning),
+                    meta: vec![],
                 },
                 DetailItem {
                     id: Some("inbox/b.md".to_string()),
                     text: "Tarefa B".to_string(),
                     flag: None,
+                    meta: vec![],
                 },
             ],
         }]);

@@ -305,6 +305,7 @@ mod tests {
             id: Some(id.to_string()),
             text: id.to_string(),
             flag: None,
+            meta: vec![],
         };
         WidgetState::Ready(WidgetSnapshot {
             summary: Summary {
