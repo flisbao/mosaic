@@ -1,12 +1,14 @@
 use chrono::NaiveDateTime;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::application::pomodoro_notifications::AlertMessage;
 use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
+use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
 use crate::domain::widget::{Flag, WidgetState};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 
@@ -17,6 +19,9 @@ const LOADING_TEXT: &str = "carregando…";
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
 const MODAL_FRAME_THICKNESS: u16 = 2;
 const MINIMUM_DRAWABLE_SIDE: u16 = 3;
+const SECONDS_PER_MINUTE: u64 = 60;
+const ALERT_DISMISS_HINT: &str = "Qualquer tecla fecha";
+const WRAP_CONTINUATION_INDENT: &str = "  ";
 const SELECTION_MARKER: &str = "> ";
 const NO_SELECTION_MARKER: &str = "  ";
 
@@ -33,6 +38,7 @@ pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDate
     }
     render_notice(frame, state, area);
     render_modal(frame, state, area);
+    render_alert(frame, state, area);
 }
 
 fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
@@ -57,6 +63,35 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
         spans.push(Span::styled(format!(" {name} "), style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), bar);
+    if let Some(timer) = state.pomodoro() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                pomodoro_text(timer),
+                Style::default().fg(Color::Green),
+            ))
+            .alignment(Alignment::Right),
+            bar,
+        );
+    }
+}
+
+fn pomodoro_text(timer: &PomodoroTimer) -> String {
+    let seconds = timer.remaining().as_secs();
+    let phase = match timer.phase() {
+        Phase::Focus => "foco",
+        Phase::ShortBreak => "descanso curto",
+        Phase::LongBreak => "descanso longo",
+    };
+    let suffix = match timer.status() {
+        PomodoroStatus::Running => "",
+        PomodoroStatus::Paused => " (pausado)",
+        PomodoroStatus::Stopped => " (parado)",
+    };
+    format!(
+        "🍅 {:02}:{:02} {phase}{suffix} ",
+        seconds / SECONDS_PER_MINUTE,
+        seconds % SECONDS_PER_MINUTE
+    )
 }
 
 fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], area: Rect) {
@@ -189,13 +224,23 @@ fn detail_lines(entry: &WidgetEntry, selected: usize, width: usize) -> (Vec<Line
             } else {
                 NO_SELECTION_MARKER
             };
-            let text = format!("{marker}{}", flagged(item.flag, &item.text));
             let style = if is_selected {
                 Style::default().fg(Color::Cyan)
             } else {
                 Style::default()
             };
-            lines.push(Line::styled(truncate_to_width(&text, width), style));
+            let wrap_width = width.saturating_sub(WRAP_CONTINUATION_INDENT.width());
+            for (position, piece) in wrap_to_width(&flagged(item.flag, &item.text), wrap_width)
+                .into_iter()
+                .enumerate()
+            {
+                let prefix = if position == 0 {
+                    marker
+                } else {
+                    WRAP_CONTINUATION_INDENT
+                };
+                lines.push(Line::styled(format!("{prefix}{piece}"), style));
+            }
             item_index += 1;
         }
     }
@@ -242,6 +287,20 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             ("Confirmar ação", lines)
         }
     };
+    draw_popup(frame, area, title, &lines);
+}
+
+fn render_alert(frame: &mut Frame, state: &AppState, area: Rect) {
+    let Some(AlertMessage { title, body }) = state.alert() else {
+        return;
+    };
+    let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+    lines.push(String::new());
+    lines.push(ALERT_DISMISS_HINT.to_string());
+    draw_popup(frame, area, title, &lines);
+}
+
+fn draw_popup(frame: &mut Frame, area: Rect, title: &str, lines: &[String]) {
     let width = area.width.min(MODAL_MAXIMUM_WIDTH);
     let height = (lines.len() as u16 + MODAL_FRAME_THICKNESS).min(area.height);
     if width < MINIMUM_DRAWABLE_SIDE || height < MINIMUM_DRAWABLE_SIDE {
@@ -254,7 +313,7 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
         height,
     );
     let block = Block::bordered()
-        .title(title)
+        .title(title.to_string())
         .border_style(Style::default().fg(Color::Yellow));
     let inner = block.inner(popup);
     let text: Vec<Line> = lines
@@ -303,6 +362,26 @@ fn to_rect(origin: Rect, cell: CellRect) -> Rect {
         cell.width,
         cell.height,
     )
+}
+
+fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut used = 0;
+    for character in text.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if used + character_width > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push(character);
+        used += character_width;
+    }
+    lines.push(current);
+    lines
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
@@ -559,5 +638,156 @@ mod tests {
         state.show_notice("Cartão movido".to_string());
         let rows = draw(&state, 100, 30);
         assert!(rows[29].contains("Cartão movido"));
+    }
+    fn pomodoro_timer() -> crate::domain::pomodoro::PomodoroTimer {
+        crate::domain::pomodoro::PomodoroTimer::new(crate::domain::pomodoro::PomodoroSettings {
+            focus: std::time::Duration::from_secs(25 * 60),
+            short_break: std::time::Duration::from_secs(5 * 60),
+            long_break: std::time::Duration::from_secs(15 * 60),
+            cycles_before_long_break: 4,
+            suggestions: vec!["Beber água".to_string()],
+        })
+    }
+
+    fn app_with_pomodoro() -> AppState {
+        AppState::new(vec![kanban_entry()]).with_pomodoro(pomodoro_timer())
+    }
+
+    #[test]
+    fn top_bar_shows_running_pomodoro_remaining_time() {
+        let mut state = app_with_pomodoro();
+        press(&mut state, &[KeyInput::Character('p')]);
+        state.advance_pomodoro(std::time::Duration::from_secs(7 * 60));
+        let first_row = draw(&state, 100, 30).remove(0);
+        assert!(first_row.contains("18:00"), "{first_row}");
+        assert!(first_row.contains("foco"), "{first_row}");
+        assert!(!first_row.contains("pausado"));
+    }
+
+    #[test]
+    fn top_bar_marks_paused_and_stopped_pomodoro() {
+        let mut state = app_with_pomodoro();
+        let stopped = draw(&state, 100, 30).remove(0);
+        assert!(
+            stopped.contains("25:00") && stopped.contains("(parado)"),
+            "{stopped}"
+        );
+        press(
+            &mut state,
+            &[KeyInput::Character('p'), KeyInput::Character('p')],
+        );
+        let paused = draw(&state, 100, 30).remove(0);
+        assert!(paused.contains("(pausado)"), "{paused}");
+    }
+
+    #[test]
+    fn top_bar_without_pomodoro_has_no_timer_text() {
+        let state = AppState::new(vec![kanban_entry()]);
+        let first_row = draw(&state, 100, 30).remove(0);
+        assert!(!first_row.contains("foco") && !first_row.contains("parado"));
+    }
+
+    #[test]
+    fn alert_box_shows_title_body_and_dismiss_hint() {
+        let mut state = app_with_pomodoro();
+        press(&mut state, &[KeyInput::Character('p')]);
+        state.advance_pomodoro(std::time::Duration::from_secs(25 * 60));
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("Foco concluído"), "{text}");
+        assert!(text.contains("Beber água"));
+        assert!(text.contains("Próximo: descanso curto"));
+        assert!(text.contains("Qualquer tecla fecha"));
+    }
+
+    #[test]
+    fn send_confirmation_modal_shows_text_and_keys() {
+        let mut state = AppState::new(vec![kanban_entry()]);
+        state.ask_send_confirmation(
+            "Enviar 3 itens (~40 tokens, estimativa) para claude?".to_string(),
+            crate::application::recommendation::RecommendationPlan {
+                prompt: "p".to_string(),
+                item_count: 3,
+                estimated_tokens: 40,
+            },
+        );
+        let text = screen(&state, 100, 30);
+        assert!(
+            text.contains("Enviar 3 itens (~40 tokens, estimativa) para claude?"),
+            "{text}"
+        );
+        assert!(text.contains("[s] confirma"));
+        assert!(text.contains("[n] cancela"));
+    }
+
+    #[test]
+    fn wrap_to_width_splits_on_width_and_keeps_all_text() {
+        let text = "uma frase bem longa para quebrar em varias linhas";
+        let lines = wrap_to_width(text, 10);
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|line| line.width() <= 10));
+        assert_eq!(lines.concat(), text);
+    }
+
+    #[test]
+    fn wrap_to_width_handles_wide_characters_and_zero_width() {
+        let lines = wrap_to_width("日本語日本語", 5);
+        assert!(lines.iter().all(|line| line.width() <= 5));
+        assert_eq!(lines.concat(), "日本語日本語");
+        assert_eq!(wrap_to_width("", 5), vec![String::new()]);
+        assert!(wrap_to_width("abc", 0).is_empty());
+        assert_eq!(wrap_to_width("日", 1), vec!["日".to_string()]);
+    }
+
+    #[test]
+    fn long_detail_item_is_wrapped_not_truncated() {
+        let sentence = format!("{} FIM-DA-FRASE", "palavra ".repeat(30));
+        let mut state = AppState::new(vec![entry(
+            "ia",
+            WidgetState::Ready(WidgetSnapshot {
+                summary: Summary {
+                    title: "IA".to_string(),
+                    lines: vec![],
+                },
+                detail: Some(vec![DetailSection {
+                    heading: "Recomendação".to_string(),
+                    items: vec![DetailItem {
+                        id: None,
+                        text: sentence,
+                        flag: None,
+                        meta: vec![],
+                    }],
+                }]),
+                actions: vec![],
+            }),
+            true,
+        )]);
+        press(&mut state, &[KeyInput::Tab]);
+        assert!(screen(&state, 100, 30).contains("FIM-DA-FRASE"));
+    }
+
+    #[test]
+    fn small_terminal_with_alert_does_not_panic() {
+        let mut state = app_with_pomodoro();
+        press(&mut state, &[KeyInput::Character('p')]);
+        state.advance_pomodoro(std::time::Duration::from_secs(25 * 60));
+        for width in 0..=14u16 {
+            for height in 0..=14u16 {
+                draw(&state, width, height);
+            }
+        }
+        let mut modal = AppState::new(vec![kanban_entry()]);
+        modal.ask_send_confirmation(
+            "x".repeat(200),
+            crate::application::recommendation::RecommendationPlan {
+                prompt: String::new(),
+                item_count: 0,
+                estimated_tokens: 0,
+            },
+        );
+        for width in 0..=14u16 {
+            for height in 0..=14u16 {
+                draw(&modal, width, height);
+            }
+        }
     }
 }
