@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::application::pomodoro_notifications::{alert_for, AlertMessage};
 use crate::application::recommendation::RecommendationPlan;
+use crate::application::recommendation_view::IA_WIDGET_ID;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::widget::{ActionScope, ActionSpec, DetailItem, WidgetId, WidgetState};
@@ -10,6 +11,7 @@ use crate::presentation::key_input::KeyInput;
 const HOME_TAB: usize = 0;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
 const POMODORO_DISABLED_NOTICE: &str = "Pomodoro desligado na configuração";
+const IA_BUSY_NOTICE: &str = "A IA já está processando um pedido";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -192,6 +194,9 @@ impl AppState {
             KeyInput::Enter => self.open_selected_widget_tab(),
             KeyInput::Character('a') => self.open_action_menu(),
             KeyInput::Character('r') => return Some(Command::RefreshAll),
+            KeyInput::Character('i') if self.ia_is_loading() => {
+                self.notice = Some(IA_BUSY_NOTICE.to_string())
+            }
             KeyInput::Character('i') => return Some(Command::RequestRecommendation),
             KeyInput::Character('p') => self.toggle_pomodoro(),
             KeyInput::Character('P') => self.reset_pomodoro(),
@@ -249,6 +254,12 @@ impl AppState {
                 None
             }
         }
+    }
+
+    fn ia_is_loading(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.id.as_str() == IA_WIDGET_ID && entry.state == WidgetState::Loading)
     }
 
     fn toggle_pomodoro(&mut self) {
@@ -728,5 +739,16 @@ mod tests {
         app.ask_send_confirmation("Enviar?".to_string(), plan());
         assert_eq!(app.handle_key(character('q')), None);
         assert!(matches!(app.mode(), Mode::ConfirmingSend { .. }));
+    }
+    #[test]
+    fn i_is_blocked_with_notice_while_the_ia_is_loading() {
+        let mut app = AppState::new(vec![entry("ia", WidgetState::Loading, true)]);
+        assert_eq!(app.handle_key(character('i')), None);
+        assert!(app.notice().unwrap().contains("processando"));
+        app.update_widget(&WidgetId::new("ia"), WidgetState::Failed("x".to_string()));
+        assert_eq!(
+            app.handle_key(character('i')),
+            Some(Command::RequestRecommendation)
+        );
     }
 }

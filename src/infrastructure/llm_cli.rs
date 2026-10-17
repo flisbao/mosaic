@@ -1,14 +1,16 @@
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
 use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
+use crate::infrastructure::private_directory::prepare_private_directory;
 use crate::infrastructure::process::{run_process, ProcessLimits};
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
 const ARGUMENT_SEPARATOR: &str = "--";
+const OPENCODE_CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
+const OPENCODE_RESTRICTED_CONFIG: &str = r#"{"permission":{"bash":"deny","edit":"deny","webfetch":"deny"},"tools":{"write":false,"edit":false,"bash":false,"webfetch":false,"read":false,"grep":false,"glob":false,"list":false}}"#;
 
 pub struct ClaudeCli {
     program: String,
@@ -39,6 +41,9 @@ impl ClaudeCli {
             "",
             "--strict-mcp-config",
             "--disable-slash-commands",
+            "--setting-sources",
+            "",
+            "--no-session-persistence",
         ]
         .iter()
         .map(|argument| argument.to_string())
@@ -53,12 +58,19 @@ impl ClaudeCli {
     }
 }
 
+impl ClaudeCli {
+    pub fn environment(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+}
+
 impl LlmRunner for ClaudeCli {
     fn run(&self, request: &LlmRequest) -> Result<String, LlmError> {
         run_cli(
             &self.program,
             &self.working_directory,
             &self.arguments(request),
+            &self.environment(),
             Some(&request.prompt),
             self.timeout,
         )
@@ -95,12 +107,22 @@ impl OpenCodeCli {
     }
 }
 
+impl OpenCodeCli {
+    pub fn environment(&self) -> Vec<(String, String)> {
+        vec![(
+            OPENCODE_CONFIG_VARIABLE.to_string(),
+            OPENCODE_RESTRICTED_CONFIG.to_string(),
+        )]
+    }
+}
+
 impl LlmRunner for OpenCodeCli {
     fn run(&self, request: &LlmRequest) -> Result<String, LlmError> {
         run_cli(
             &self.program,
             &self.working_directory,
             &self.arguments(request),
+            &self.environment(),
             None,
             self.timeout,
         )
@@ -111,16 +133,17 @@ fn run_cli(
     program: &str,
     working_directory: &PathBuf,
     arguments: &[String],
+    environment: &[(String, String)],
     stdin_text: Option<&str>,
     timeout: Duration,
 ) -> Result<String, LlmError> {
-    fs::create_dir_all(working_directory).map_err(|error| {
-        LlmError::Failed(format!(
-            "não foi possível criar o diretório de trabalho da IA: {error}"
-        ))
-    })?;
+    prepare_private_directory(working_directory)
+        .map_err(|error| LlmError::Failed(error.to_string()))?;
     let mut command = Command::new(program);
-    command.args(arguments).current_dir(working_directory);
+    command
+        .args(arguments)
+        .envs(environment.iter().map(|(name, value)| (name, value)))
+        .current_dir(working_directory);
     let limits = ProcessLimits {
         timeout,
         maximum_output_bytes: MAXIMUM_LLM_OUTPUT_BYTES,
@@ -205,7 +228,10 @@ mod tests {
                 "--tools",
                 "",
                 "--strict-mcp-config",
-                "--disable-slash-commands"
+                "--disable-slash-commands",
+                "--setting-sources",
+                "",
+                "--no-session-persistence"
             ]
         );
     }
@@ -244,6 +270,47 @@ mod tests {
         let separator = arguments.iter().position(|a| a == "--").unwrap();
         assert_eq!(arguments[separator + 1], "--help me");
         assert_eq!(arguments.iter().filter(|a| *a == "--help me").count(), 1);
+    }
+
+    #[test]
+    fn opencode_restricts_tools_through_the_config_environment() {
+        let cli = opencode("opencode".to_string(), Path::new("/tmp"), 5);
+        let environment = cli.environment();
+        let (name, content) = &environment[0];
+        assert_eq!(name, "OPENCODE_CONFIG_CONTENT");
+        let config: serde_json::Value = serde_json::from_str(content).unwrap();
+        for permission in ["bash", "edit", "webfetch"] {
+            assert_eq!(config["permission"][permission], "deny", "{permission}");
+        }
+        for tool in ["write", "edit", "bash", "webfetch"] {
+            assert_eq!(config["tools"][tool], false, "{tool}");
+        }
+    }
+
+    #[test]
+    fn opencode_environment_reaches_the_process_and_claude_has_none() {
+        let directory = tempfile::tempdir().unwrap();
+        let program = fake_program(directory.path(), "printf '%s' \"$OPENCODE_CONFIG_CONTENT\"");
+        let output = opencode(program, directory.path(), 5)
+            .run_retrying(&request("p", None))
+            .unwrap();
+        assert!(output.contains("\"permission\""), "{output}");
+        assert!(claude("claude".to_string(), directory.path(), 5)
+            .environment()
+            .is_empty());
+    }
+
+    #[test]
+    fn refuses_a_symlinked_working_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("fora");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, directory.path().join("neutro")).unwrap();
+        let program = fake_program(directory.path(), "echo nao-deveria-rodar");
+        let error = claude(program, directory.path(), 5)
+            .run_retrying(&request("p", None))
+            .unwrap_err();
+        assert!(matches!(error, LlmError::Failed(_)), "{error:?}");
     }
 
     #[test]

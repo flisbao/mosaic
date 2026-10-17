@@ -4,6 +4,7 @@ pub mod llm_cli;
 pub mod notifiers;
 pub mod plugin_protocol;
 pub mod plugin_runner;
+pub mod private_directory;
 pub mod process;
 pub mod recommendation_file;
 pub mod system_clock;

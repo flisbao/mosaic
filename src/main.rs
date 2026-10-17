@@ -46,7 +46,8 @@ const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
-const LLM_WORKING_DIRECTORY_NAME: &str = "panel-tui-llm";
+const APP_DIRECTORY_NAME: &str = "panel-tui";
+const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const FALLBACK_STORE_FILE_NAME: &str = "panel-tui-recommendation.json";
 const IA_WIDGET_SPAN: u16 = 1;
 
@@ -151,7 +152,11 @@ fn build_services(config: &AppConfig, directory: &Path, sender: &Sender<AppEvent
 }
 
 fn build_llm_services(config: &AppConfig) -> LlmServices {
-    let working_directory = std::env::temp_dir().join(LLM_WORKING_DIRECTORY_NAME);
+    let working_directory = dirs::state_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(APP_DIRECTORY_NAME)
+        .join(LLM_WORKING_DIRECTORY_NAME);
     let timeout = Duration::from_secs(config.llm.timeout_seconds);
     let runner: Arc<dyn LlmRunner> = match config.llm.harness {
         Harness::Claude => Arc::new(ClaudeCli::new(

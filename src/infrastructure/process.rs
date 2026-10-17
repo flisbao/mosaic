@@ -57,9 +57,12 @@ pub fn run_process(
             program_not_found: error.kind() == std::io::ErrorKind::NotFound,
         })?;
     if let Some(mut stdin) = child.stdin.take() {
-        if let Some(text) = stdin_text {
-            let _ = stdin.write_all(text.as_bytes());
-        }
+        let text = stdin_text.map(str::to_string);
+        thread::spawn(move || {
+            if let Some(text) = text {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+        });
     }
     let stdout = capture(child.stdout.take(), limits.maximum_output_bytes, true);
     let stderr = capture(child.stderr.take(), limits.maximum_output_bytes, false);
@@ -211,6 +214,16 @@ mod tests {
     fn run_process_times_out() {
         let started = std::time::Instant::now();
         let error = run_process(shell("exec sleep 30"), None, &limits(1, 1024)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(error.to_string().contains("tempo"), "{error}");
+    }
+
+    #[test]
+    fn run_process_times_out_even_when_stdin_is_never_read() {
+        let started = std::time::Instant::now();
+        let input = "a".repeat(300_000);
+        let error =
+            run_process(shell("exec sleep 30"), Some(&input), &limits(1, 1024)).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(error.to_string().contains("tempo"), "{error}");
     }
