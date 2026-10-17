@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -228,6 +229,97 @@ class UrllibHttpTests(unittest.TestCase):
     def test_client_over_real_http_with_base_url_override(self):
         client = make_client(jira.urllib_http, JIRA_BASE_URL=self.base)
         self.assertEqual(client.get_json("/rest/api/3/myself"), {"path": "/rest/api/3/myself"})
+
+
+def raw_issue(key="VHPJ-1", **fields):
+    base = {
+        "summary": "Corrigir login",
+        "status": {"name": "To Do", "statusCategory": {"key": "new"}},
+        "assignee": {"accountId": "acc-1", "displayName": "Ana"},
+        "creator": {"accountId": "acc-9", "displayName": "Carla"},
+        "priority": {"name": "High"},
+        "created": "2026-10-17T08:00:00.000+0000",
+        "updated": "2026-10-17T09:30:00.000+0000",
+        "resolutiondate": None,
+    }
+    base.update(fields)
+    return {"key": key, "fields": base}
+
+
+class IssueTests(unittest.TestCase):
+    def test_parses_a_complete_issue(self):
+        issue = jira.parse_issue(raw_issue())
+        self.assertEqual(issue.key, "VHPJ-1")
+        self.assertEqual(issue.summary, "Corrigir login")
+        self.assertEqual(issue.status, "To Do")
+        self.assertEqual(issue.status_category, "new")
+        self.assertEqual((issue.assignee_id, issue.assignee_name), ("acc-1", "Ana"))
+        self.assertEqual(issue.creator_name, "Carla")
+        self.assertEqual(issue.priority, "High")
+        self.assertEqual(issue.created, datetime(2026, 10, 17, 8, 0, tzinfo=timezone.utc))
+        self.assertEqual(issue.updated, datetime(2026, 10, 17, 9, 30, tzinfo=timezone.utc))
+        self.assertIsNone(issue.resolved)
+
+    def test_null_assignee_creator_priority_are_none(self):
+        issue = jira.parse_issue(raw_issue(assignee=None, creator=None, priority=None))
+        self.assertIsNone(issue.assignee_id)
+        self.assertIsNone(issue.assignee_name)
+        self.assertIsNone(issue.creator_name)
+        self.assertIsNone(issue.priority)
+
+    def test_unknown_status_category_is_unknown(self):
+        issue = jira.parse_issue(raw_issue(status={"name": "X", "statusCategory": {"key": "weird"}}))
+        self.assertEqual(issue.status_category, "unknown")
+        issue = jira.parse_issue(raw_issue(status=None))
+        self.assertEqual(issue.status_category, "unknown")
+
+    def test_missing_key_returns_none(self):
+        self.assertIsNone(jira.parse_issue({"fields": {}}))
+        self.assertIsNone(jira.parse_issue({"key": 5, "fields": {}}))
+        self.assertIsNone(jira.parse_issue("lixo"))
+        self.assertIsNone(jira.parse_issue({"key": "A-1"}))
+
+    def test_unreadable_dates_return_none(self):
+        self.assertIsNone(jira.parse_issue(raw_issue(created="ontem")))
+        self.assertIsNone(jira.parse_issue(raw_issue(updated=None)))
+
+    def test_timestamp_formats(self):
+        expected = datetime(2026, 10, 17, 13, 0, tzinfo=timezone.utc)
+        for text in (
+            "2026-10-17T10:00:00.000-0300",
+            "2026-10-17T10:00:00-03:00",
+            "2026-10-17T13:00:00Z",
+            "2026-10-17T13:00:00.000+0000",
+            "2026-10-17T13:00:00+0000",
+        ):
+            self.assertEqual(jira.parse_timestamp(text), expected, text)
+        self.assertEqual(
+            jira.parse_timestamp("2026-10-17T13:00:00.5+0000").microsecond, 500000
+        )
+        for text in ("", "x", None, 5):
+            self.assertIsNone(jira.parse_timestamp(text))
+
+    def test_future_dates_give_zero_duration(self):
+        self.assertEqual(jira.format_duration(timedelta(hours=-5)), "0m")
+        self.assertEqual(jira.format_duration(timedelta(0)), "0m")
+
+    def test_format_duration_boundaries(self):
+        self.assertEqual(jira.format_duration(timedelta(minutes=59)), "59m")
+        self.assertEqual(jira.format_duration(timedelta(minutes=60)), "1h")
+        self.assertEqual(jira.format_duration(timedelta(hours=47, minutes=59)), "47h")
+        self.assertEqual(jira.format_duration(timedelta(hours=48)), "2d")
+        self.assertEqual(jira.format_duration(timedelta(days=10)), "10d")
+
+    def test_flatten_text_collapses_and_truncates(self):
+        self.assertEqual(jira.flatten_text("a\n\n b\t c  ", 80), "a b c")
+        flattened = jira.flatten_text("x" * 500, 10)
+        self.assertEqual(flattened, "x" * 9 + "…")
+        self.assertEqual(jira.flatten_text("abc", 0), "")
+
+    def test_raw_round_trip_preserves_the_issue(self):
+        issue = jira.parse_issue(raw_issue(resolutiondate="2026-10-17T12:00:00.000+0000"))
+        self.assertEqual(jira.Issue.from_raw(issue.to_raw()), issue)
+        self.assertEqual(json.loads(json.dumps(issue.to_raw())), issue.to_raw())
 
 
 if __name__ == "__main__":

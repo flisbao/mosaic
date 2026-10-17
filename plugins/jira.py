@@ -11,7 +11,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 MODES = ("manager", "personal")
@@ -26,6 +27,14 @@ HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_ERROR_FLOOR = 400
+STATUS_CATEGORIES = ("new", "indeterminate", "done")
+UNKNOWN_CATEGORY = "unknown"
+TIMESTAMP_FORMATS = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
+SECONDS_PER_MINUTE = 60
+MINUTES_PER_HOUR = 60
+HOURS_PER_DAY = 24
+HOURS_SHOWN_BEFORE_DAYS = 48
+ELLIPSIS = "…"
 
 
 class ConfigError(Exception):
@@ -198,6 +207,98 @@ class JiraClient:
             return json.loads(body)
         except ValueError:
             raise UnexpectedResponseError("a resposta do Jira não é JSON") from None
+
+
+@dataclass(frozen=True)
+class Issue:
+    key: str
+    summary: str
+    status: str
+    status_category: str
+    assignee_id: str | None
+    assignee_name: str | None
+    creator_name: str | None
+    priority: str | None
+    created: datetime
+    updated: datetime
+    resolved: datetime | None
+
+    def to_raw(self):
+        raw = asdict(self)
+        for name in ("created", "updated", "resolved"):
+            raw[name] = raw[name].isoformat() if raw[name] is not None else None
+        return raw
+
+    @staticmethod
+    def from_raw(raw):
+        values = dict(raw)
+        for name in ("created", "updated", "resolved"):
+            values[name] = datetime.fromisoformat(values[name]) if values[name] else None
+        return Issue(**values)
+
+
+def parse_timestamp(text):
+    if not isinstance(text, str) or not text:
+        return None
+    candidate = text[:-1] + "+0000" if text.endswith("Z") else text
+    for timestamp_format in TIMESTAMP_FORMATS:
+        try:
+            return datetime.strptime(candidate, timestamp_format).astimezone(timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_issue(payload):
+    if not isinstance(payload, dict):
+        return None
+    key = payload.get("key")
+    fields = payload.get("fields")
+    if not isinstance(key, str) or not key or not isinstance(fields, dict):
+        return None
+    created = parse_timestamp(fields.get("created"))
+    updated = parse_timestamp(fields.get("updated"))
+    if created is None or updated is None:
+        return None
+    assignee = fields.get("assignee") or {}
+    creator = fields.get("creator") or {}
+    status = fields.get("status") or {}
+    priority = fields.get("priority") or {}
+    category = ((status.get("statusCategory") or {}).get("key")) if isinstance(status, dict) else None
+    return Issue(
+        key=key,
+        summary=str(fields.get("summary") or ""),
+        status=str(status.get("name") or "") if isinstance(status, dict) else "",
+        status_category=category if category in STATUS_CATEGORIES else UNKNOWN_CATEGORY,
+        assignee_id=assignee.get("accountId"),
+        assignee_name=assignee.get("displayName"),
+        creator_name=creator.get("displayName"),
+        priority=priority.get("name"),
+        created=created,
+        updated=updated,
+        resolved=parse_timestamp(fields.get("resolutiondate")),
+    )
+
+
+def format_duration(delta):
+    minutes = int(delta.total_seconds() // SECONDS_PER_MINUTE)
+    if minutes <= 0:
+        return "0m"
+    if minutes < MINUTES_PER_HOUR:
+        return f"{minutes}m"
+    hours = minutes // MINUTES_PER_HOUR
+    if hours < HOURS_SHOWN_BEFORE_DAYS:
+        return f"{hours}h"
+    return f"{hours // HOURS_PER_DAY}d"
+
+
+def flatten_text(text, limit):
+    flattened = " ".join(str(text).split())
+    if len(flattened) <= limit:
+        return flattened
+    if limit <= 0:
+        return ""
+    return flattened[: limit - 1] + ELLIPSIS
 
 
 if __name__ == "__main__":
