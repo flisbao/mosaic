@@ -3,8 +3,14 @@
 
 from __future__ import annotations
 
+import base64
+import http.client
+import json
 import re
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +21,11 @@ DEFAULT_STATE_DIRECTORY = "~/.local/state/panel-tui/jira"
 SITE_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
 PROJECT_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 MAXIMUM_SITE_LENGTH = 253
+REQUEST_TIMEOUT_SECONDS = 20
+HTTP_UNAUTHORIZED = 401
+HTTP_FORBIDDEN = 403
+HTTP_TOO_MANY_REQUESTS = 429
+HTTP_ERROR_FLOOR = 400
 
 
 class ConfigError(Exception):
@@ -123,6 +134,70 @@ def _read_token(environ):
             raise ConfigError("o arquivo de JIRA_TOKEN_FILE está vazio")
         return value
     raise ConfigError("defina JIRA_TOKEN_ENV (nome da variável com o token) ou JIRA_TOKEN_FILE")
+
+
+class JiraError(Exception):
+    pass
+
+
+class AuthError(JiraError):
+    pass
+
+
+class RateLimitError(JiraError):
+    pass
+
+
+class NetworkError(JiraError):
+    pass
+
+
+class UnexpectedResponseError(JiraError):
+    pass
+
+
+def urllib_http(url, method, headers, timeout):
+    request = urllib.request.Request(url, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+class JiraClient:
+    def __init__(self, config, http):
+        self._config = config
+        self._http = http
+        credentials = f"{config.email}:{config.token}".encode("utf-8")
+        self._headers = {
+            "Authorization": "Basic " + base64.b64encode(credentials).decode("ascii"),
+            "Accept": "application/json",
+        }
+
+    def get_json(self, path, params=None):
+        url = self._config.base_url + path
+        if params:
+            url += "?" + urllib.parse.urlencode(params)
+        try:
+            status, body = self._http(url, "GET", self._headers, REQUEST_TIMEOUT_SECONDS)
+        except (OSError, http.client.HTTPException) as error:
+            raise NetworkError(
+                f"falha de rede ao falar com {self._config.site} ({type(error).__name__})"
+            ) from None
+        return self._decode(status, body)
+
+    def _decode(self, status, body):
+        if status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+            raise AuthError(f"credenciais inválidas para {self._config.site}")
+        if status == HTTP_TOO_MANY_REQUESTS:
+            raise RateLimitError("limite de requisições do Jira; tentando de novo mais tarde")
+        if status >= HTTP_ERROR_FLOOR:
+            raise UnexpectedResponseError(f"resposta inesperada do Jira (HTTP {status})")
+        try:
+            return json.loads(body)
+        except ValueError:
+            raise UnexpectedResponseError("a resposta do Jira não é JSON") from None
 
 
 if __name__ == "__main__":
