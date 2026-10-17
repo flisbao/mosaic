@@ -670,5 +670,81 @@ class HistoryTests(unittest.TestCase):
         self.assertNotIn(SECRET, json.dumps(history))
 
 
+def assigned_issue(key, account_id, name):
+    return jira.parse_issue(raw_issue(key=key, assignee={"accountId": account_id, "displayName": name}))
+
+
+class TeamTests(unittest.TestCase):
+    issues = None
+
+    def setUp(self):
+        self.issues = [
+            assigned_issue("VHPJ-1", "acc-ana", "Ana Souza"),
+            assigned_issue("VHPJ-2", "acc-bruno", "Bruno Lima"),
+        ]
+
+    def resolve(self, entries, http=None, cache=None):
+        client = client_for(http or RoutedHttp({}))
+        return jira.resolve_team(entries, self.issues, client, cache if cache is not None else {})
+
+    def test_email_resolves_to_account_id_and_is_cached(self):
+        http = RoutedHttp(
+            {"/rest/api/3/user/search": (200, [{"accountId": "acc-carla", "displayName": "Carla"}])}
+        )
+        team, cache = self.resolve(["carla@x.com"], http)
+        self.assertEqual(team.members, {"acc-carla": "Carla"})
+        self.assertEqual(team.warnings, [])
+        self.assertEqual(cache["carla@x.com"], {"id": "acc-carla", "name": "Carla"})
+
+    def test_cached_email_does_not_call_the_api_again(self):
+        http = RoutedHttp({})
+        cache = {"carla@x.com": {"id": "acc-carla", "name": "Carla"}}
+        team, _ = self.resolve(["carla@x.com"], http, cache)
+        self.assertEqual(team.members, {"acc-carla": "Carla"})
+        self.assertEqual(http.calls, [])
+
+    def test_search_query_uses_the_email(self):
+        urls = []
+
+        def http(url, method, headers, timeout):
+            urls.append(url)
+            return 200, b"[]"
+
+        self.resolve(["carla@x.com"], http)
+        self.assertIn("query=carla%40x.com", urls[0])
+
+    def test_account_id_entry_matches_directly(self):
+        team, _ = self.resolve(["acc-bruno"])
+        self.assertEqual(team.members, {"acc-bruno": "Bruno Lima"})
+
+    def test_display_name_matches_case_insensitively(self):
+        team, _ = self.resolve(["ana souza"])
+        self.assertEqual(team.members, {"acc-ana": "Ana Souza"})
+
+    def test_hidden_email_falls_back_to_display_name_in_scope(self):
+        http = RoutedHttp({"/rest/api/3/user/search": (200, [])})
+        team, _ = self.resolve(["Bruno Lima"], http)
+        self.assertEqual(team.members, {"acc-bruno": "Bruno Lima"})
+
+    def test_unmatched_entry_becomes_a_warning(self):
+        http = RoutedHttp({"/rest/api/3/user/search": (200, [])})
+        team, _ = self.resolve(["ninguem@x.com", "Fantasma"], http)
+        self.assertEqual(team.members, {})
+        self.assertEqual(
+            team.warnings,
+            ['não encontrei "ninguem@x.com" no Jira', 'não encontrei "Fantasma" no Jira'],
+        )
+
+    def test_empty_list_uses_assignees_in_scope(self):
+        team, _ = self.resolve([])
+        self.assertEqual(team.members, {"acc-ana": "Ana Souza", "acc-bruno": "Bruno Lima"})
+
+    def test_search_failure_becomes_a_warning(self):
+        http = RoutedHttp({"/rest/api/3/user/search": jira.NetworkError("fora")})
+        team, cache = self.resolve(["carla@x.com"], http)
+        self.assertEqual(team.warnings, ['não encontrei "carla@x.com" no Jira'])
+        self.assertNotIn("carla@x.com", cache)
+
+
 if __name__ == "__main__":
     unittest.main()

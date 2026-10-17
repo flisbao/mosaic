@@ -53,6 +53,7 @@ UNSAFE_KEY_CHARACTERS = re.compile(r"[^A-Za-z0-9._-]")
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-[0-9]+$")
 STATUS_PATH = "/rest/api/3/status"
 ISSUE_PATH = "/rest/api/3/issue/{key}"
+USER_SEARCH_PATH = "/rest/api/3/user/search"
 SECONDS_PER_HOUR = 3600
 CYCLE_HOURS_DECIMALS = 1
 
@@ -541,6 +542,62 @@ def _history_record(issue, started):
         "resolved": issue.resolved.isoformat() if issue.resolved else None,
         "cycle_hours": cycle_hours,
     }
+
+
+@dataclass
+class TeamResolution:
+    members: dict
+    warnings: list
+
+
+def resolve_team(entries, issues, client, cache):
+    in_scope = {}
+    for issue in issues:
+        if issue.assignee_id and issue.assignee_name:
+            in_scope.setdefault(issue.assignee_id, issue.assignee_name)
+    updated_cache = dict(cache)
+    if not entries:
+        return TeamResolution(dict(in_scope), []), updated_cache
+    members = {}
+    warnings = []
+    for entry in entries:
+        found = _lookup_entry(entry, in_scope, client, updated_cache)
+        if found is None:
+            warnings.append(f'não encontrei "{entry}" no Jira')
+        else:
+            members[found[0]] = found[1]
+    return TeamResolution(members, warnings), updated_cache
+
+
+def _lookup_entry(entry, in_scope, client, cache):
+    if "@" in entry:
+        found = _lookup_email(entry, client, cache)
+        if found is not None:
+            return found
+    if entry in in_scope:
+        return entry, in_scope[entry]
+    for account_id, name in in_scope.items():
+        if name.casefold() == entry.casefold():
+            return account_id, name
+    return None
+
+
+def _lookup_email(email, client, cache):
+    cached = cache.get(email)
+    if isinstance(cached, dict) and cached.get("id"):
+        return cached["id"], cached.get("name") or email
+    try:
+        users = client.get_json(USER_SEARCH_PATH, {"query": email})
+    except JiraError:
+        return None
+    if not isinstance(users, list) or not users or not isinstance(users[0], dict):
+        return None
+    account_id = users[0].get("accountId")
+    if not account_id:
+        return None
+    name = users[0].get("displayName") or email
+    cache[email] = {"id": account_id, "name": name}
+    return account_id, name
 
 
 if __name__ == "__main__":
