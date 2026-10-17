@@ -551,5 +551,124 @@ class StateStoreTests(unittest.TestCase):
             self.assertNotIn(SECRET, path.read_text(encoding="utf-8"))
 
 
+class RoutedHttp:
+    def __init__(self, routes):
+        self.routes = routes
+        self.calls = []
+
+    def __call__(self, url, method, headers, timeout):
+        path = urllib.parse.urlparse(url).path
+        self.calls.append(path)
+        outcome = self.routes.get(path)
+        if outcome is None:
+            return 404, b"{}"
+        if isinstance(outcome, Exception):
+            raise outcome
+        status, body = outcome
+        return status, json.dumps(body).encode("utf-8")
+
+
+CATEGORIES = {"To Do": "new", "In Progress": "indeterminate", "Done": "done"}
+
+
+def history_entry(created, to_status):
+    return {"created": created, "items": [{"field": "status", "toString": to_status}]}
+
+
+def done_issue(key="VHPJ-5", updated="2026-10-17T12:00:00.000+0000"):
+    return jira.parse_issue(
+        raw_issue(
+            key=key,
+            status={"name": "Done", "statusCategory": {"key": "done"}},
+            updated=updated,
+            resolutiondate="2026-10-17T12:00:00.000+0000",
+        )
+    )
+
+
+def client_for(http):
+    return jira.JiraClient(jira.load_config(base_environment()), http)
+
+
+class HistoryTests(unittest.TestCase):
+    changelog = {
+        "changelog": {
+            "histories": [
+                history_entry("2026-10-17T11:00:00.000+0000", "Done"),
+                history_entry("2026-10-17T09:00:00.000+0000", "To Do"),
+                history_entry("2026-10-17T10:00:00.000+0000", "In Progress"),
+            ]
+        }
+    }
+
+    def test_status_categories_map_names_to_categories(self):
+        http = RoutedHttp(
+            {"/rest/api/3/status": (200, [{"name": "To Do", "statusCategory": {"key": "new"}}, {"name": "X"}, "lixo"])}
+        )
+        self.assertEqual(jira.fetch_status_categories(client_for(http)), {"To Do": "new"})
+        self.assertEqual(jira.fetch_status_categories(client_for(RoutedHttp({"/rest/api/3/status": (200, {})}))), {})
+
+    def test_new_issue_creates_a_record_without_calling_the_changelog(self):
+        http = RoutedHttp({})
+        issue = jira.parse_issue(raw_issue())
+        history = jira.update_history({}, [issue], client_for(http), CATEGORIES, NOW)
+        record = history["VHPJ-1"]
+        self.assertEqual(record["assignee"], "Ana")
+        self.assertEqual(record["summary"], "Corrigir login")
+        self.assertEqual(record["status"], "To Do")
+        self.assertIsNone(record["resolved"])
+        self.assertEqual(http.calls, [])
+
+    def test_existing_records_are_merged_and_old_ones_kept(self):
+        old = {"key": "OLD-1", "assignee": "Zé"}
+        history = jira.update_history({"OLD-1": old}, [jira.parse_issue(raw_issue())], client_for(RoutedHttp({})), CATEGORIES, NOW)
+        self.assertEqual(history["OLD-1"], old)
+        self.assertIn("VHPJ-1", history)
+
+    def test_done_issue_gets_started_from_first_in_progress_transition(self):
+        http = RoutedHttp({"/rest/api/3/issue/VHPJ-5": (200, self.changelog)})
+        history = jira.update_history({}, [done_issue()], client_for(http), CATEGORIES, NOW)
+        record = history["VHPJ-5"]
+        self.assertEqual(record["started"], "2026-10-17T10:00:00+00:00")
+        self.assertEqual(record["cycle_hours"], 2.0)
+
+    def test_done_issue_without_transition_uses_created(self):
+        http = RoutedHttp({"/rest/api/3/issue/VHPJ-5": (200, {"changelog": {"histories": []}})})
+        record = jira.update_history({}, [done_issue()], client_for(http), CATEGORIES, NOW)["VHPJ-5"]
+        self.assertEqual(record["started"], "2026-10-17T08:00:00+00:00")
+        self.assertEqual(record["cycle_hours"], 4.0)
+
+    def test_changelog_is_fetched_only_for_done_issues_that_changed(self):
+        http = RoutedHttp({"/rest/api/3/issue/VHPJ-5": (200, self.changelog)})
+        client = client_for(http)
+        history = jira.update_history({}, [done_issue()], client, CATEGORIES, NOW)
+        self.assertEqual(len(http.calls), 1)
+        history = jira.update_history(history, [done_issue()], client, CATEGORIES, NOW)
+        self.assertEqual(len(http.calls), 1)
+        changed = done_issue(updated="2026-10-17T12:30:00.000+0000")
+        jira.update_history(history, [changed], client, CATEGORIES, NOW)
+        self.assertEqual(len(http.calls), 2)
+
+    def test_cycle_hours_are_never_negative(self):
+        early = {"changelog": {"histories": [history_entry("2026-10-17T20:00:00.000+0000", "In Progress")]}}
+        http = RoutedHttp({"/rest/api/3/issue/VHPJ-5": (200, early)})
+        record = jira.update_history({}, [done_issue()], client_for(http), CATEGORIES, NOW)["VHPJ-5"]
+        self.assertEqual(record["cycle_hours"], 0.0)
+
+    def test_changelog_failure_does_not_break_the_update(self):
+        http = RoutedHttp({"/rest/api/3/issue/VHPJ-5": jira.NetworkError("fora")})
+        history = jira.update_history({}, [done_issue()], client_for(http), CATEGORIES, NOW)
+        self.assertIsNone(history["VHPJ-5"]["started"])
+        self.assertIsNone(history["VHPJ-5"]["cycle_hours"])
+        http.routes["/rest/api/3/issue/VHPJ-5"] = (200, self.changelog)
+        history = jira.update_history(history, [done_issue()], client_for(http), CATEGORIES, NOW)
+        self.assertEqual(history["VHPJ-5"]["cycle_hours"], 2.0)
+
+    def test_history_never_stores_the_token(self):
+        http = RoutedHttp({"/rest/api/3/issue/VHPJ-5": (200, self.changelog)})
+        history = jira.update_history({}, [done_issue()], client_for(http), CATEGORIES, NOW)
+        self.assertNotIn(SECRET, json.dumps(history))
+
+
 if __name__ == "__main__":
     unittest.main()

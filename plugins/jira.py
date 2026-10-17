@@ -50,6 +50,11 @@ STATE_FILE = "state.json"
 HISTORY_FILE = "history.json"
 SNAPSHOT_FILE = "snapshot-{mode}.json"
 UNSAFE_KEY_CHARACTERS = re.compile(r"[^A-Za-z0-9._-]")
+ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-[0-9]+$")
+STATUS_PATH = "/rest/api/3/status"
+ISSUE_PATH = "/rest/api/3/issue/{key}"
+SECONDS_PER_HOUR = 3600
+CYCLE_HOURS_DECIMALS = 1
 
 
 class ConfigError(Exception):
@@ -461,6 +466,81 @@ class StateStore:
         except (OSError, TypeError, ValueError):
             return False
         return True
+
+
+def fetch_status_categories(client):
+    payload = client.get_json(STATUS_PATH)
+    categories = {}
+    for status in payload if isinstance(payload, list) else []:
+        if not isinstance(status, dict):
+            continue
+        category = (status.get("statusCategory") or {}).get("key")
+        if status.get("name") and category in STATUS_CATEGORIES:
+            categories[status["name"]] = category
+    return categories
+
+
+def find_work_start(client, issue_key, categories):
+    if not ISSUE_KEY_PATTERN.match(issue_key):
+        return None
+    payload = client.get_json(
+        ISSUE_PATH.format(key=issue_key), {"expand": "changelog", "fields": "status"}
+    )
+    histories = ((payload or {}).get("changelog") or {}).get("histories") or []
+    transitions = []
+    for entry in histories:
+        created = parse_timestamp(entry.get("created")) if isinstance(entry, dict) else None
+        if created is None:
+            continue
+        for item in entry.get("items") or []:
+            if isinstance(item, dict) and item.get("field") == "status":
+                transitions.append((created, item.get("toString")))
+    for created, status_name in sorted(transitions, key=lambda transition: transition[0]):
+        if categories.get(status_name) == "indeterminate":
+            return created
+    return None
+
+
+def update_history(history, issues, client, categories, now):
+    merged = dict(history)
+    for issue in issues:
+        previous = merged.get(issue.key) or {}
+        started = previous.get("started")
+        needs_changelog = issue.status_category == "done" and (
+            previous.get("updated") != issue.updated.isoformat() or not started
+        )
+        if needs_changelog:
+            started = _read_work_start(client, issue, categories) or started
+        merged[issue.key] = _history_record(issue, started)
+    return merged
+
+
+def _read_work_start(client, issue, categories):
+    try:
+        found = find_work_start(client, issue.key, categories)
+    except JiraError:
+        return None
+    return (found or issue.created).isoformat()
+
+
+def _history_record(issue, started):
+    cycle_hours = None
+    if issue.resolved is not None and started:
+        seconds = (issue.resolved - datetime.fromisoformat(started)).total_seconds()
+        cycle_hours = round(max(0.0, seconds / SECONDS_PER_HOUR), CYCLE_HOURS_DECIMALS)
+    return {
+        "key": issue.key,
+        "assignee": issue.assignee_name,
+        "assignee_id": issue.assignee_id,
+        "summary": issue.summary,
+        "status": issue.status,
+        "status_category": issue.status_category,
+        "created": issue.created.isoformat(),
+        "updated": issue.updated.isoformat(),
+        "started": started,
+        "resolved": issue.resolved.isoformat() if issue.resolved else None,
+        "cycle_hours": cycle_hours,
+    }
 
 
 if __name__ == "__main__":
