@@ -168,7 +168,7 @@ fn event_loop(
             Some(Command::Quit) => return Ok(()),
             Some(Command::RefreshAll) => trigger_refresh(runtime),
             Some(Command::Execute(action)) => spawn_action(action, runtime, sender),
-            None => {}
+            Some(Command::RequestRecommendation | Command::SendRecommendation(_)) | None => {}
         }
     }
 }

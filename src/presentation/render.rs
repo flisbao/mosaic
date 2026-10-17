@@ -223,6 +223,14 @@ fn render_notice(frame: &mut Frame, state: &AppState, area: Rect) {
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
     let (title, lines) = match state.mode() {
         Mode::Browsing => return,
+        Mode::ConfirmingSend { text, .. } => (
+            "Enviar à IA",
+            vec![
+                text.clone(),
+                String::new(),
+                "[s] confirma  [n] cancela".to_string(),
+            ],
+        ),
         Mode::ChoosingAction { selected } => ("Ações", action_menu_lines(state, *selected)),
         Mode::Confirming(proposed) => {
             let mut lines = vec![proposed.describe()];

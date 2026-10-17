@@ -1,9 +1,15 @@
+use std::time::Duration;
+
+use crate::application::pomodoro_notifications::{alert_for, AlertMessage};
+use crate::application::recommendation::RecommendationPlan;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
+use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::widget::{ActionScope, ActionSpec, DetailItem, WidgetId, WidgetState};
 use crate::presentation::key_input::KeyInput;
 
 const HOME_TAB: usize = 0;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
+const POMODORO_DISABLED_NOTICE: &str = "Pomodoro desligado na configuração";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,8 +22,14 @@ pub struct WidgetEntry {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
     Browsing,
-    ChoosingAction { selected: usize },
+    ChoosingAction {
+        selected: usize,
+    },
     Confirming(ProposedAction),
+    ConfirmingSend {
+        text: String,
+        plan: RecommendationPlan,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +37,8 @@ pub enum Command {
     Quit,
     RefreshAll,
     Execute(ConfirmedAction),
+    RequestRecommendation,
+    SendRecommendation(RecommendationPlan),
 }
 
 pub struct AppState {
@@ -34,6 +48,8 @@ pub struct AppState {
     selected_item: usize,
     mode: Mode,
     notice: Option<String>,
+    pomodoro: Option<PomodoroTimer>,
+    alert: Option<AlertMessage>,
 }
 
 impl AppState {
@@ -51,7 +67,33 @@ impl AppState {
             selected_item: 0,
             mode: Mode::Browsing,
             notice: None,
+            pomodoro: None,
+            alert: None,
         }
+    }
+
+    pub fn with_pomodoro(mut self, timer: PomodoroTimer) -> Self {
+        self.pomodoro = Some(timer);
+        self
+    }
+
+    pub fn pomodoro(&self) -> Option<&PomodoroTimer> {
+        self.pomodoro.as_ref()
+    }
+
+    pub fn alert(&self) -> Option<&AlertMessage> {
+        self.alert.as_ref()
+    }
+
+    pub fn advance_pomodoro(&mut self, elapsed: Duration) -> Option<AlertMessage> {
+        let ended = self.pomodoro.as_mut()?.advance(elapsed)?;
+        let alert = alert_for(&ended);
+        self.alert = Some(alert.clone());
+        Some(alert)
+    }
+
+    pub fn ask_send_confirmation(&mut self, text: String, plan: RecommendationPlan) {
+        self.mode = Mode::ConfirmingSend { text, plan };
     }
 
     pub fn entries(&self) -> &[WidgetEntry] {
@@ -125,6 +167,9 @@ impl AppState {
 
     pub fn handle_key(&mut self, key: KeyInput) -> Option<Command> {
         self.notice = None;
+        if self.alert.take().is_some() {
+            return None;
+        }
         match std::mem::replace(&mut self.mode, Mode::Browsing) {
             Mode::Browsing => self.handle_browsing_key(key),
             Mode::ChoosingAction { selected } => {
@@ -132,6 +177,9 @@ impl AppState {
                 None
             }
             Mode::Confirming(proposed) => self.handle_confirmation_key(key, proposed),
+            Mode::ConfirmingSend { text, plan } => {
+                self.handle_send_confirmation_key(key, text, plan)
+            }
         }
     }
 
@@ -144,6 +192,9 @@ impl AppState {
             KeyInput::Enter => self.open_selected_widget_tab(),
             KeyInput::Character('a') => self.open_action_menu(),
             KeyInput::Character('r') => return Some(Command::RefreshAll),
+            KeyInput::Character('i') => return Some(Command::RequestRecommendation),
+            KeyInput::Character('p') => self.toggle_pomodoro(),
+            KeyInput::Character('P') => self.reset_pomodoro(),
             KeyInput::Character('q') => return Some(Command::Quit),
             _ => {}
         }
@@ -181,6 +232,36 @@ impl AppState {
                 self.mode = Mode::Confirming(proposed);
                 None
             }
+        }
+    }
+
+    fn handle_send_confirmation_key(
+        &mut self,
+        key: KeyInput,
+        text: String,
+        plan: RecommendationPlan,
+    ) -> Option<Command> {
+        match key {
+            KeyInput::Character('s') => Some(Command::SendRecommendation(plan)),
+            KeyInput::Escape | KeyInput::Character('n') => None,
+            _ => {
+                self.mode = Mode::ConfirmingSend { text, plan };
+                None
+            }
+        }
+    }
+
+    fn toggle_pomodoro(&mut self) {
+        match self.pomodoro.as_mut() {
+            Some(timer) => timer.toggle(),
+            None => self.notice = Some(POMODORO_DISABLED_NOTICE.to_string()),
+        }
+    }
+
+    fn reset_pomodoro(&mut self) {
+        match self.pomodoro.as_mut() {
+            Some(timer) => timer.reset(),
+            None => self.notice = Some(POMODORO_DISABLED_NOTICE.to_string()),
         }
     }
 
@@ -509,5 +590,143 @@ mod tests {
         assert_eq!(app.notice(), Some("movido"));
         press(&mut app, &[KeyInput::Down]);
         assert_eq!(app.notice(), None);
+    }
+    fn pomodoro_settings() -> crate::domain::pomodoro::PomodoroSettings {
+        crate::domain::pomodoro::PomodoroSettings {
+            focus: std::time::Duration::from_secs(25 * 60),
+            short_break: std::time::Duration::from_secs(5 * 60),
+            long_break: std::time::Duration::from_secs(15 * 60),
+            cycles_before_long_break: 4,
+            suggestions: vec!["Beber água".to_string()],
+        }
+    }
+
+    fn app_with_pomodoro() -> AppState {
+        app().with_pomodoro(crate::domain::pomodoro::PomodoroTimer::new(
+            pomodoro_settings(),
+        ))
+    }
+
+    fn plan() -> RecommendationPlan {
+        RecommendationPlan {
+            prompt: "pedido".to_string(),
+            item_count: 3,
+            estimated_tokens: 40,
+        }
+    }
+
+    #[test]
+    fn p_toggles_the_pomodoro() {
+        use crate::domain::pomodoro::PomodoroStatus;
+        let mut app = app_with_pomodoro();
+        press(&mut app, &[character('p')]);
+        assert_eq!(app.pomodoro().unwrap().status(), PomodoroStatus::Running);
+        press(&mut app, &[character('p')]);
+        assert_eq!(app.pomodoro().unwrap().status(), PomodoroStatus::Paused);
+    }
+
+    #[test]
+    fn p_without_pomodoro_shows_notice() {
+        let mut app = app();
+        press(&mut app, &[character('p')]);
+        assert!(app.notice().unwrap().contains("Pomodoro desligado"));
+    }
+
+    #[test]
+    fn capital_p_resets_the_pomodoro() {
+        use crate::domain::pomodoro::PomodoroStatus;
+        let mut app = app_with_pomodoro();
+        press(&mut app, &[character('p')]);
+        app.advance_pomodoro(std::time::Duration::from_secs(60));
+        press(&mut app, &[character('P')]);
+        let timer = app.pomodoro().unwrap();
+        assert_eq!(timer.status(), PomodoroStatus::Stopped);
+        assert_eq!(timer.remaining(), std::time::Duration::from_secs(25 * 60));
+    }
+
+    #[test]
+    fn advancing_past_a_phase_end_returns_alert_and_stores_it() {
+        let mut app = app_with_pomodoro();
+        press(&mut app, &[character('p')]);
+        assert_eq!(
+            app.advance_pomodoro(std::time::Duration::from_secs(60)),
+            None
+        );
+        let alert = app
+            .advance_pomodoro(std::time::Duration::from_secs(25 * 60))
+            .expect("aviso de fim de foco");
+        assert_eq!(alert.title, "Foco concluído");
+        assert_eq!(app.alert(), Some(&alert));
+    }
+
+    #[test]
+    fn any_key_dismisses_alert_and_is_consumed() {
+        let mut app = app_with_pomodoro();
+        press(&mut app, &[character('p')]);
+        app.advance_pomodoro(std::time::Duration::from_secs(25 * 60));
+        assert_eq!(app.handle_key(character('q')), None);
+        assert!(app.alert().is_none());
+        assert_eq!(app.handle_key(character('q')), Some(Command::Quit));
+    }
+
+    #[test]
+    fn alert_does_not_change_the_current_mode() {
+        let mut app = app_with_pomodoro();
+        press(&mut app, &[character('p')]);
+        press(
+            &mut app,
+            &[
+                KeyInput::Tab,
+                KeyInput::Down,
+                character('a'),
+                KeyInput::Enter,
+            ],
+        );
+        app.advance_pomodoro(std::time::Duration::from_secs(25 * 60));
+        assert!(app.alert().is_some());
+        assert!(matches!(app.mode(), Mode::Confirming(_)));
+        app.handle_key(KeyInput::Escape);
+        assert!(matches!(app.mode(), Mode::Confirming(_)));
+    }
+
+    #[test]
+    fn i_emits_request_recommendation_only_when_browsing() {
+        let mut app = app();
+        assert_eq!(
+            app.handle_key(character('i')),
+            Some(Command::RequestRecommendation)
+        );
+        let mut confirming = app_confirming_move_of_second_item();
+        assert_eq!(confirming.handle_key(character('i')), None);
+    }
+
+    #[test]
+    fn send_confirmation_s_emits_send_with_the_plan() {
+        let mut app = app();
+        app.ask_send_confirmation("Enviar 3 itens?".to_string(), plan());
+        assert!(matches!(app.mode(), Mode::ConfirmingSend { .. }));
+        assert_eq!(
+            app.handle_key(character('s')),
+            Some(Command::SendRecommendation(plan()))
+        );
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn send_confirmation_cancel_returns_to_browsing() {
+        for cancel in [character('n'), KeyInput::Escape] {
+            let mut app = app();
+            app.ask_send_confirmation("Enviar?".to_string(), plan());
+            assert_eq!(app.handle_key(cancel), None);
+            assert_eq!(app.mode(), &Mode::Browsing);
+        }
+    }
+
+    #[test]
+    fn quit_is_ignored_while_confirming_send() {
+        let mut app = app();
+        app.ask_send_confirmation("Enviar?".to_string(), plan());
+        assert_eq!(app.handle_key(character('q')), None);
+        assert!(matches!(app.mode(), Mode::ConfirmingSend { .. }));
     }
 }
