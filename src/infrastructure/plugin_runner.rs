@@ -1,30 +1,19 @@
-use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
 use crate::infrastructure::config::WidgetSettings;
 use crate::infrastructure::plugin_protocol::parse_snapshot;
+use crate::infrastructure::process::{run_process, ProcessLimits};
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
-
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
-const READ_CHUNK_BYTES: usize = 8192;
 
 pub struct PluginRunner {
     settings: WidgetSettings,
     working_directory: PathBuf,
-}
-
-struct CapturedOutput {
-    handle: JoinHandle<Vec<u8>>,
-    overflowed: Arc<AtomicBool>,
 }
 
 impl PluginRunner {
@@ -36,78 +25,18 @@ impl PluginRunner {
     }
 
     fn run(&self, extra_args: &[&str], stdin_text: Option<&str>) -> Result<String, SourceError> {
-        let mut child = self.spawn(extra_args)?;
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Some(text) = stdin_text {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-        }
-        let stdout = capture(child.stdout.take(), true);
-        let stderr = capture(child.stderr.take(), false);
-        let status = self.wait_for_exit(&mut child, &stdout)?;
-
-        let stdout_bytes = join_output(stdout)?;
-        let stderr_bytes = join_output(stderr)?;
-        if !status.success() {
-            let message = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
-            return Err(SourceError::Failed(if message.is_empty() {
-                format!("plugin terminou com falha ({status})")
-            } else {
-                message
-            }));
-        }
-        String::from_utf8(stdout_bytes)
-            .map_err(|_| SourceError::Failed("saída do plugin não é UTF-8 válido".to_string()))
-    }
-
-    fn spawn(&self, extra_args: &[&str]) -> Result<Child, SourceError> {
-        Command::new(&self.settings.command)
+        let mut command = Command::new(&self.settings.command);
+        command
             .args(&self.settings.args)
             .args(extra_args)
             .envs(self.settings.env.iter().map(|(key, value)| (key, value)))
-            .current_dir(&self.working_directory)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                SourceError::Failed(format!(
-                    "não foi possível iniciar '{}': {error}",
-                    self.settings.command
-                ))
-            })
-    }
-
-    fn wait_for_exit(
-        &self,
-        child: &mut Child,
-        stdout: &CapturedOutput,
-    ) -> Result<std::process::ExitStatus, SourceError> {
-        let deadline = Instant::now() + Duration::from_secs(self.settings.timeout_seconds);
-        loop {
-            if stdout.overflowed.load(Ordering::SeqCst) {
-                terminate(child);
-                return Err(SourceError::Failed(
-                    "saída do plugin excedeu o limite de 1 MiB".to_string(),
-                ));
-            }
-            match child.try_wait() {
-                Ok(Some(status)) => return Ok(status),
-                Ok(None) if Instant::now() >= deadline => {
-                    terminate(child);
-                    return Err(SourceError::Failed(format!(
-                        "plugin excedeu o tempo limite de {}s",
-                        self.settings.timeout_seconds
-                    )));
-                }
-                Ok(None) => thread::sleep(POLL_INTERVAL),
-                Err(error) => {
-                    return Err(SourceError::Failed(format!(
-                        "falha ao aguardar o plugin: {error}"
-                    )))
-                }
-            }
-        }
+            .current_dir(&self.working_directory);
+        let limits = ProcessLimits {
+            timeout: Duration::from_secs(self.settings.timeout_seconds),
+            maximum_output_bytes: MAXIMUM_PLUGIN_OUTPUT_BYTES,
+        };
+        run_process(command, stdin_text, &limits)
+            .map_err(|error| SourceError::Failed(error.to_string()))
     }
 }
 
@@ -126,53 +55,6 @@ impl ActionExecutor for PluginRunner {
             message: output.trim().to_string(),
         })
     }
-}
-
-fn terminate(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn capture(stream: Option<impl Read + Send + 'static>, enforce_limit: bool) -> CapturedOutput {
-    let overflowed = Arc::new(AtomicBool::new(false));
-    let overflow_flag = Arc::clone(&overflowed);
-    let handle = thread::spawn(move || {
-        let mut collected = Vec::new();
-        let Some(mut stream) = stream else {
-            return collected;
-        };
-        let mut chunk = [0u8; READ_CHUNK_BYTES];
-        loop {
-            match stream.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(count) => {
-                    if collected.len() + count > MAXIMUM_PLUGIN_OUTPUT_BYTES {
-                        if enforce_limit {
-                            overflow_flag.store(true, Ordering::SeqCst);
-                            break;
-                        }
-                        continue;
-                    }
-                    collected.extend_from_slice(&chunk[..count]);
-                }
-            }
-        }
-        collected
-    });
-    CapturedOutput { handle, overflowed }
-}
-
-fn join_output(output: CapturedOutput) -> Result<Vec<u8>, SourceError> {
-    let bytes = output
-        .handle
-        .join()
-        .map_err(|_| SourceError::Failed("falha ao ler a saída do plugin".to_string()))?;
-    if output.overflowed.load(Ordering::SeqCst) {
-        return Err(SourceError::Failed(
-            "saída do plugin excedeu o limite de 1 MiB".to_string(),
-        ));
-    }
-    Ok(bytes)
 }
 
 #[cfg(all(test, unix))]
@@ -246,7 +128,7 @@ mod tests {
         let started = Instant::now();
         let message = snapshot_error(&runner);
         assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(message.contains("1 MiB"), "{message}");
+        assert!(message.contains("excedeu o limite"), "{message}");
     }
 
     #[test]
