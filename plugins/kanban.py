@@ -11,6 +11,7 @@ CARD_SUFFIX = ".md"
 HEADING_PREFIX = "# "
 FRONT_MATTER_FENCE = "---"
 DEFAULT_ROOT = "~/kanban"
+META_KEYS = ("jira", "responsavel", "prioridade")
 
 
 def kanban_root():
@@ -48,6 +49,32 @@ def card_title(path):
     return path.stem
 
 
+def front_matter_fields(path):
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != FRONT_MATTER_FENCE:
+        return {}
+    fields = {}
+    for line in lines[1:]:
+        if line.strip() == FRONT_MATTER_FENCE:
+            return fields
+        key, separator, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if separator and key in META_KEYS and value:
+            fields[key] = value
+    return {}
+
+
+def card_item(column, card):
+    item = {"id": f"{column}/{card.name}", "text": card_title(card)}
+    meta = front_matter_fields(card)
+    if meta:
+        item["meta"] = meta
+    return item
+
+
 def build_snapshot(root):
     cards_by_column = {column: list_cards(root, column) for column in COLUMNS}
     return {
@@ -61,10 +88,7 @@ def build_snapshot(root):
             "sections": [
                 {
                     "heading": column,
-                    "items": [
-                        {"id": f"{column}/{card.name}", "text": card_title(card)}
-                        for card in cards_by_column[column]
-                    ],
+                    "items": [card_item(column, card) for card in cards_by_column[column]],
                 }
                 for column in COLUMNS
             ]

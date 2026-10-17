@@ -80,6 +80,38 @@ class SnapshotTests(KanbanTestCase):
         self.assertTrue(all(a["id"] == "move" for a in actions))
 
 
+class MetaTests(KanbanTestCase):
+    def first_item(self):
+        return kanban.build_snapshot(self.root)["detail"]["sections"][0]["items"][0]
+
+    def test_meta_comes_from_front_matter(self):
+        self.write_card(
+            "inbox", "a.md", "---\nprioridade: alta\njira: PAY-1\n---\n# Titulo\n"
+        )
+        self.assertEqual(
+            self.first_item()["meta"], {"prioridade": "alta", "jira": "PAY-1"}
+        )
+
+    def test_meta_ignores_unknown_keys_and_blank_values(self):
+        self.write_card(
+            "inbox", "a.md", "---\nsegredo: x\nresponsavel:   \nprioridade: baixa\n---\n# T\n"
+        )
+        self.assertEqual(self.first_item()["meta"], {"prioridade": "baixa"})
+
+    def test_meta_is_absent_without_front_matter(self):
+        self.write_card("inbox", "a.md", "# Titulo\n")
+        self.assertNotIn("meta", self.first_item())
+
+    def test_malformed_front_matter_yields_no_meta(self):
+        self.write_card("inbox", "a.md", "---\nprioridade: alta\n# Sem fechamento\n")
+        self.assertNotIn("meta", self.first_item())
+
+    def test_unreadable_bytes_yield_no_meta(self):
+        (self.root / "inbox").mkdir()
+        (self.root / "inbox" / "a.md").write_bytes(b"---\n\xff\xfe: x\n---\n# T\n")
+        self.assertNotIn("meta", self.first_item())
+
+
 class MoveTests(KanbanTestCase):
     def test_move_renames_file_between_columns(self):
         self.write_card("inbox", "a.md")
