@@ -10,7 +10,9 @@ pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
 const ARGUMENT_SEPARATOR: &str = "--";
 const OPENCODE_CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
-const OPENCODE_RESTRICTED_CONFIG: &str = r#"{"permission":{"*":"deny","bash":"deny","edit":"deny","webfetch":"deny","read":"deny","external_directory":"deny"},"tools":{"*":false},"mcp":{}}"#;
+const OPENCODE_RESTRICTED_CONFIG: &str = r#"{"permission":{"*":"deny","external_directory":"deny","write":"deny","edit":"deny","bash":"deny","webfetch":"deny","read":"deny","grep":"deny","glob":"deny","list":"deny","patch":"deny","task":"deny","todowrite":"deny","todoread":"deny"},"tools":{"*":false,"write":false,"edit":false,"bash":false,"webfetch":false,"read":false,"grep":false,"glob":false,"list":false,"patch":false,"task":false,"todowrite":false,"todoread":false},"mcp":{}}"#;
+const OPENCODE_CONFIG_HOME_VARIABLE: &str = "XDG_CONFIG_HOME";
+const OPENCODE_ISOLATED_CONFIG_DIRECTORY: &str = "xdg-config";
 
 pub struct ClaudeCli {
     program: String,
@@ -109,10 +111,19 @@ impl OpenCodeCli {
 
 impl OpenCodeCli {
     pub fn environment(&self) -> Vec<(String, String)> {
-        vec![(
-            OPENCODE_CONFIG_VARIABLE.to_string(),
-            OPENCODE_RESTRICTED_CONFIG.to_string(),
-        )]
+        vec![
+            (
+                OPENCODE_CONFIG_VARIABLE.to_string(),
+                OPENCODE_RESTRICTED_CONFIG.to_string(),
+            ),
+            (
+                OPENCODE_CONFIG_HOME_VARIABLE.to_string(),
+                self.working_directory
+                    .join(OPENCODE_ISOLATED_CONFIG_DIRECTORY)
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+        ]
     }
 }
 
@@ -276,21 +287,38 @@ mod tests {
     fn opencode_restricts_tools_through_the_config_environment() {
         let cli = opencode("opencode".to_string(), Path::new("/tmp"), 5);
         let environment = cli.environment();
-        let (name, content) = &environment[0];
-        assert_eq!(name, "OPENCODE_CONFIG_CONTENT");
-        let config: serde_json::Value = serde_json::from_str(content).unwrap();
-        for permission in [
-            "*",
-            "bash",
+        let value = |name: &str| {
+            environment
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| panic!("{name} ausente"))
+        };
+        let config: serde_json::Value =
+            serde_json::from_str(&value("OPENCODE_CONFIG_CONTENT")).unwrap();
+        let tools = [
+            "write",
             "edit",
+            "bash",
             "webfetch",
             "read",
-            "external_directory",
-        ] {
-            assert_eq!(config["permission"][permission], "deny", "{permission}");
+            "grep",
+            "glob",
+            "list",
+            "patch",
+            "task",
+            "todowrite",
+            "todoread",
+        ];
+        assert_eq!(config["permission"]["*"], "deny");
+        assert_eq!(config["permission"]["external_directory"], "deny");
+        for tool in tools {
+            assert_eq!(config["permission"][tool], "deny", "permission {tool}");
+            assert_eq!(config["tools"][tool], false, "tool {tool}");
         }
         assert_eq!(config["tools"]["*"], false);
         assert_eq!(config["mcp"], serde_json::json!({}));
+        assert_eq!(value("XDG_CONFIG_HOME"), "/tmp/neutro/xdg-config");
     }
 
     #[test]
