@@ -909,5 +909,76 @@ class ManagerSnapshotTests(unittest.TestCase):
         self.assertEqual(summary_texts(snapshot), ["sem dono: 0", "em andamento: 0", "atualizados: 0"])
 
 
+def done_of(key, resolved, cycle=None):
+    return issue_of(key, "done", created="2026-10-10T08:00:00.000+0000", updated=resolved, resolved=resolved)
+
+
+class PersonalSnapshotTests(unittest.TestCase):
+    def build(self, issues, history=None, last_seen=LAST_SEEN, offline_at=None):
+        config = manager_config(JIRA_MODE="personal")
+        return jira.build_personal_snapshot(issues, history or {}, config, last_seen, NOW, offline_at)
+
+    def test_summary_has_progress_done_and_median(self):
+        issues = [
+            issue_of("VHPJ-1", "indeterminate"),
+            issue_of("VHPJ-2", "indeterminate"),
+            issue_of("VHPJ-3", "new"),
+            done_of("VHPJ-4", "2026-10-16T10:00:00.000+0000"),
+            done_of("VHPJ-5", "2026-10-15T10:00:00.000+0000"),
+        ]
+        history = {"VHPJ-4": {"cycle_hours": 2.0}, "VHPJ-5": {"cycle_hours": 5.0}}
+        texts = summary_texts(self.build(issues, history))
+        self.assertEqual(texts[:3], ["em andamento: 2", "concluídos em 7 dias: 2", "tempo mediano: 3.5h"])
+
+    def test_median_uses_history_cycle_hours_of_own_done_tickets_within_window(self):
+        issues = [done_of("VHPJ-4", "2026-10-16T10:00:00.000+0000"), done_of("VHPJ-6", "2026-09-01T10:00:00.000+0000")]
+        history = {
+            "VHPJ-4": {"cycle_hours": 2.0},
+            "VHPJ-6": {"cycle_hours": 100.0},
+            "OUTRO-1": {"cycle_hours": 50.0},
+        }
+        self.assertIn("tempo mediano: 2h", summary_texts(self.build(issues, history)))
+
+    def test_median_is_a_dash_without_data(self):
+        issues = [done_of("VHPJ-4", "2026-10-16T10:00:00.000+0000")]
+        self.assertIn("tempo mediano: —", summary_texts(self.build(issues, {})))
+        self.assertIn("tempo mediano: —", summary_texts(self.build([], {})))
+
+    def test_sections_split_open_and_done(self):
+        issues = [issue_of("VHPJ-1", "new"), done_of("VHPJ-4", "2026-10-16T10:00:00.000+0000")]
+        sections = sections_by_name(self.build(issues))
+        self.assertEqual([item["id"] for item in sections["Meus tickets"]], ["VHPJ-1"])
+        self.assertEqual([item["id"] for item in sections["Concluídos (7 dias)"]], ["VHPJ-4"])
+
+    def test_in_progress_comes_first(self):
+        issues = [issue_of("VHPJ-1", "new"), issue_of("VHPJ-2", "indeterminate"), issue_of("VHPJ-3", "new")]
+        items = sections_by_name(self.build(issues))["Meus tickets"]
+        self.assertEqual([item["id"] for item in items], ["VHPJ-2", "VHPJ-1", "VHPJ-3"])
+        self.assertEqual(items[0]["text"], "VHPJ-2 Corrigir login")
+
+    def test_done_outside_the_window_is_excluded(self):
+        issues = [done_of("VHPJ-4", "2026-10-09T10:00:00.000+0000")]
+        self.assertEqual(sections_by_name(self.build(issues))["Concluídos (7 dias)"], [])
+
+    def test_updated_flag_uses_last_seen(self):
+        issues = [
+            issue_of("VHPJ-1", "indeterminate", updated="2026-10-17T10:00:00.000+0000"),
+            issue_of("VHPJ-2", "indeterminate", updated="2026-10-17T08:00:00.000+0000"),
+        ]
+        snapshot = self.build(issues)
+        items = {item["id"]: item for item in sections_by_name(snapshot)["Meus tickets"]}
+        self.assertEqual(items["VHPJ-1"]["flag"], "updated")
+        self.assertNotIn("flag", items["VHPJ-2"])
+        flagged = [line for line in snapshot["summary"]["lines"] if line.get("flag")]
+        self.assertEqual([line["text"] for line in flagged], ["atualizados: 1"])
+
+    def test_offline_adds_first_summary_line_and_actions_exist(self):
+        saved_at = datetime(2026, 10, 17, 11, 5, tzinfo=timezone.utc)
+        snapshot = self.build([], offline_at=saved_at)
+        self.assertEqual(summary_texts(snapshot)[0], f"dados de {saved_at.astimezone().strftime('%H:%M')} (offline)")
+        self.assertEqual([action["id"] for action in snapshot["actions"]], ["mark_seen", "open"])
+        self.assertTrue(snapshot["summary"]["title"].endswith("meus"))
+
+
 if __name__ == "__main__":
     unittest.main()

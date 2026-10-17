@@ -59,6 +59,8 @@ OTHERS_LABEL = "Outros"
 NOBODY_LABEL = "ninguem"
 MISSING_PRIORITY = "-"
 UPDATED_FLAG = "updated"
+PERSONAL_WINDOW_DAYS = 7
+NO_MEDIAN = "—"
 SECONDS_PER_HOUR = 3600
 CYCLE_HOURS_DECIMALS = 1
 
@@ -711,6 +713,60 @@ def build_manager_snapshot(issues, config, team, last_seen, now, offline_at=None
                 {
                     "heading": "Atualizados",
                     "items": [_item(issue, config, now, last_seen) for issue in updated],
+                },
+            ]
+        },
+        "actions": _actions(config),
+    }
+
+
+def _format_median(values):
+    if not values:
+        return NO_MEDIAN
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+    return f"{median:.1f}".rstrip("0").rstrip(".") + "h"
+
+
+def build_personal_snapshot(issues, history, config, last_seen, now, offline_at=None):
+    window = timedelta(days=PERSONAL_WINDOW_DAYS)
+    open_issues = sorted(
+        (issue for issue in issues if issue.status_category != "done"),
+        key=lambda issue: (issue.status_category != "indeterminate", issue.key),
+    )
+    done_issues = sorted(
+        (
+            issue for issue in issues
+            if issue.status_category == "done" and issue.resolved and now - issue.resolved <= window
+        ),
+        key=lambda issue: issue.resolved,
+        reverse=True,
+    )
+    in_progress = [issue for issue in open_issues if issue.status_category == "indeterminate"]
+    cycles = [
+        history[issue.key]["cycle_hours"]
+        for issue in done_issues
+        if isinstance(history.get(issue.key), dict) and history[issue.key].get("cycle_hours") is not None
+    ]
+    updated = [issue for issue in open_issues + done_issues if issue.updated > last_seen]
+    summary_lines = _offline_lines(offline_at) + [
+        _line(f"em andamento: {len(in_progress)}"),
+        _line(f"concluídos em {PERSONAL_WINDOW_DAYS} dias: {len(done_issues)}"),
+        _line(f"tempo mediano: {_format_median(cycles)}"),
+        _line(f"atualizados: {len(updated)}", flagged=bool(updated)),
+    ]
+    return {
+        "summary": {"title": snapshot_title(config), "lines": summary_lines},
+        "detail": {
+            "sections": [
+                {
+                    "heading": "Meus tickets",
+                    "items": [_item(issue, config, now, last_seen) for issue in open_issues],
+                },
+                {
+                    "heading": f"Concluídos ({PERSONAL_WINDOW_DAYS} dias)",
+                    "items": [_item(issue, config, now, last_seen) for issue in done_issues],
                 },
             ]
         },
