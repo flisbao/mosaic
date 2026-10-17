@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import os
 import stat
@@ -555,10 +556,12 @@ class RoutedHttp:
     def __init__(self, routes):
         self.routes = routes
         self.calls = []
+        self.urls = []
 
     def __call__(self, url, method, headers, timeout):
         path = urllib.parse.urlparse(url).path
         self.calls.append(path)
+        self.urls.append(url)
         outcome = self.routes.get(path)
         if outcome is None:
             return 404, b"{}"
@@ -607,6 +610,12 @@ class HistoryTests(unittest.TestCase):
         )
         self.assertEqual(jira.fetch_status_categories(client_for(http)), {"To Do": "new"})
         self.assertEqual(jira.fetch_status_categories(client_for(RoutedHttp({"/rest/api/3/status": (200, {})}))), {})
+
+    def test_work_start_rejects_keys_that_could_alter_the_url(self):
+        http = RoutedHttp({})
+        for key in ("VHPJ-1\n", "../x", "VHPJ-1/changelog", "vhpj-1", ""):
+            self.assertIsNone(jira.find_work_start(client_for(http), key, CATEGORIES), repr(key))
+        self.assertEqual(http.calls, [])
 
     def test_new_issue_creates_a_record_without_calling_the_changelog(self):
         http = RoutedHttp({})
@@ -978,6 +987,212 @@ class PersonalSnapshotTests(unittest.TestCase):
         self.assertEqual(summary_texts(snapshot)[0], f"dados de {saved_at.astimezone().strftime('%H:%M')} (offline)")
         self.assertEqual([action["id"] for action in snapshot["actions"]], ["mark_seen", "open"])
         self.assertTrue(snapshot["summary"]["title"].endswith("meus"))
+
+
+STATUS_ROUTE = {
+    "/rest/api/3/status": (
+        200,
+        [
+            {"name": "To Do", "statusCategory": {"key": "new"}},
+            {"name": "In Progress", "statusCategory": {"key": "indeterminate"}},
+            {"name": "Done", "statusCategory": {"key": "done"}},
+        ],
+    )
+}
+
+
+def raw_issues_for_main():
+    return [
+        raw_issue(key="VHPJ-1", assignee=None, created="2026-10-17T07:00:00.000+0000"),
+        raw_issue(
+            key="VHPJ-2",
+            status={"name": "In Progress", "statusCategory": {"key": "indeterminate"}},
+            updated="2026-10-17T11:00:00.000+0000",
+        ),
+    ]
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.state_dir = Path(self._directory.name) / "estado"
+
+    def tearDown(self):
+        self._directory.cleanup()
+
+    def run_main(self, arguments, routes=None, stdin_text="", opener=None, clock=None, **overrides):
+        environment = base_environment(JIRA_STATE_DIR=str(self.state_dir), **overrides)
+        http = RoutedHttp({**STATUS_ROUTE, **(routes or {})})
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = jira.main(
+            arguments,
+            environ=environment,
+            http=http,
+            now=NOW,
+            clock=clock or (lambda: 0.0),
+            opener=opener or (lambda url: None),
+            stdin=io.StringIO(stdin_text),
+            stdout=stdout,
+            stderr=stderr,
+        )
+        self.http = http
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def search_ok(self, issues=None):
+        return {"/rest/api/3/search/jql": (200, {"issues": issues if issues is not None else raw_issues_for_main()})}
+
+    def state_files(self):
+        return [path for path in self.state_dir.rglob("*") if path.is_file()]
+
+    def test_snapshot_manager_end_to_end_with_fake_jira(self):
+        code, out, err = self.run_main(["snapshot"], self.search_ok())
+        self.assertEqual(code, 0, err)
+        snapshot = json.loads(out)
+        self.assertIn("sem dono: 1", summary_texts(snapshot))
+        self.assertIn("em andamento: 1", summary_texts(snapshot))
+        sections = sections_by_name(snapshot)
+        self.assertEqual([item["id"] for item in sections["Sem dono"]], ["VHPJ-1"])
+        self.assertEqual(sections["Em andamento"][0]["id"], "VHPJ-2")
+
+    def test_snapshot_personal_end_to_end(self):
+        done = raw_issue(
+            key="VHPJ-3",
+            status={"name": "Done", "statusCategory": {"key": "done"}},
+            created="2026-10-16T08:00:00.000+0000",
+            updated="2026-10-16T14:00:00.000+0000",
+            resolutiondate="2026-10-16T14:00:00.000+0000",
+        )
+        routes = self.search_ok(raw_issues_for_main() + [done])
+        routes["/rest/api/3/issue/VHPJ-3"] = (
+            200,
+            {"changelog": {"histories": [history_entry("2026-10-16T10:00:00.000+0000", "In Progress")]}},
+        )
+        code, out, err = self.run_main(["snapshot"], routes, JIRA_MODE="personal")
+        self.assertEqual(code, 0, err)
+        texts = summary_texts(json.loads(out))
+        self.assertIn("concluídos em 7 dias: 1", texts)
+        self.assertIn("tempo mediano: 4h", texts)
+        self.assertIn("assignee+%3D+currentUser%28%29", self.http.urls[0])
+
+    def test_snapshot_updates_history_and_offline_cache(self):
+        self.run_main(["snapshot"], self.search_ok())
+        names = sorted(path.name for path in self.state_files())
+        self.assertEqual(names, ["history.json", "snapshot-manager.json"])
+        history = json.loads(next(p for p in self.state_files() if p.name == "history.json").read_text())
+        self.assertEqual(sorted(history), ["VHPJ-1", "VHPJ-2"])
+
+    def test_auth_error_without_cache_exits_one_with_message(self):
+        code, out, err = self.run_main(["snapshot"], {"/rest/api/3/search/jql": (401, {})})
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("credenciais inválidas", err)
+
+    def test_network_error_with_cache_prints_offline_snapshot(self):
+        self.run_main(["snapshot"], self.search_ok())
+        code, out, err = self.run_main(["snapshot"], {"/rest/api/3/search/jql": jira.NetworkError("fora")})
+        self.assertEqual(code, 0, err)
+        snapshot = json.loads(out)
+        self.assertIn("(offline)", summary_texts(snapshot)[0])
+        self.assertEqual(sections_by_name(snapshot)["Sem dono"][0]["id"], "VHPJ-1")
+
+    def test_budget_exhaustion_prints_partial_data(self):
+        page = {"issues": raw_issues_for_main(), "nextPageToken": "t2"}
+        ticks = iter([0.0, 0.0, 1000.0, 2000.0])
+        code, out, err = self.run_main(
+            ["snapshot"], {"/rest/api/3/search/jql": (200, page)}, clock=lambda: next(ticks)
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("em andamento: 1", summary_texts(json.loads(out)))
+        search_calls = [path for path in self.http.calls if path.endswith("/search/jql")]
+        self.assertEqual(len(search_calls), 1)
+
+    def test_mark_seen_advances_only_the_current_mode(self):
+        code, out, err = self.run_main(["action", "mark_seen"], JIRA_MODE="personal")
+        self.assertEqual(code, 0, err)
+        state = json.loads(next(p for p in self.state_files() if p.name == "state.json").read_text())
+        self.assertEqual(state["last_seen_personal"], NOW.isoformat())
+        self.assertNotIn("last_seen_manager", state)
+
+    def test_mark_seen_makes_the_flag_disappear_on_the_next_snapshot(self):
+        routes = self.search_ok()
+        _, before, _ = self.run_main(["snapshot"], routes)
+        self.assertIn("atualizados: 2", summary_texts(json.loads(before)))
+        self.run_main(["action", "mark_seen"])
+        _, after, _ = self.run_main(["snapshot"], routes)
+        self.assertIn("atualizados: 0", summary_texts(json.loads(after)))
+
+    def test_open_validates_key_and_calls_opener_with_browse_url(self):
+        opened = []
+        code, out, err = self.run_main(
+            ["action", "open"], stdin_text='{"item_id": "VHPJ-12"}', opener=opened.append
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(opened, ["https://empresa.atlassian.net/browse/VHPJ-12"])
+
+    def test_open_rejects_invalid_keys(self):
+        for item_id in ["../x", "A-1; rm -rf", "vhpj-1", "", "VHPJ-", "VHPJ-1 ", "VHPJ-1\n", "-1"]:
+            opened = []
+            code, _, err = self.run_main(
+                ["action", "open"], stdin_text=json.dumps({"item_id": item_id}), opener=opened.append
+            )
+            self.assertEqual(code, 1, repr(item_id))
+            self.assertEqual(opened, [], repr(item_id))
+            self.assertTrue(err.strip())
+        for stdin_text in ["", "{", "[1]", '{"outro": 1}']:
+            opened = []
+            code, _, _ = self.run_main(["action", "open"], stdin_text=stdin_text, opener=opened.append)
+            self.assertEqual(code, 1, repr(stdin_text))
+            self.assertEqual(opened, [])
+
+    def test_open_failure_returns_error(self):
+        def failing(url):
+            raise OSError("sem navegador")
+
+        code, _, err = self.run_main(["action", "open"], stdin_text='{"item_id": "VHPJ-1"}', opener=failing)
+        self.assertEqual(code, 1)
+        self.assertIn("não foi possível abrir", err)
+
+    def test_config_error_exits_one_and_never_prints_the_token(self):
+        for overrides in ({"JIRA_SITE": "https://x.com"}, {"JIRA_MODE": "gerente"}, {"JIRA_PROJECT": None}):
+            code, out, err = self.run_main(["snapshot"], **overrides)
+            self.assertEqual(code, 1)
+            self.assertNotIn(SECRET, out + err)
+
+    def test_output_and_stderr_never_contain_the_token(self):
+        scenarios = [
+            (["snapshot"], self.search_ok()),
+            (["snapshot"], {"/rest/api/3/search/jql": (401, {"echo": SECRET})}),
+            (["snapshot"], {"/rest/api/3/search/jql": jira.NetworkError(SECRET)}),
+            (["action", "mark_seen"], None),
+        ]
+        for arguments, routes in scenarios:
+            _, out, err = self.run_main(arguments, routes)
+            self.assertNotIn(SECRET, out + err)
+        for path in self.state_files():
+            self.assertNotIn(SECRET, path.read_text(encoding="utf-8"))
+
+    def test_unknown_command_exits_two(self):
+        for arguments in ([], ["foo"], ["action"], ["action", "delete"], ["snapshot", "x"]):
+            code, _, err = self.run_main(arguments)
+            self.assertEqual(code, 2, arguments)
+            self.assertTrue(err.strip())
+
+    def test_output_is_valid_protocol_json(self):
+        for mode in ("manager", "personal"):
+            _, out, _ = self.run_main(["snapshot"], self.search_ok(), JIRA_MODE=mode)
+            snapshot = json.loads(out)
+            self.assertIsInstance(snapshot["summary"]["title"], str)
+            for line in snapshot["summary"]["lines"]:
+                self.assertIsInstance(line["text"], str)
+                self.assertIn(line.get("flag"), (None, "updated", "warning"))
+            for section in snapshot["detail"]["sections"]:
+                self.assertIsInstance(section["heading"], str)
+                for item in section["items"]:
+                    self.assertIsInstance(item["text"], str)
+                    self.assertTrue(all(isinstance(v, str) for v in item["meta"].values()))
+            for action in snapshot["actions"]:
+                self.assertIn(action["applies_to"], ("widget", "item"))
+                self.assertTrue(action["id"] and action["label"])
 
 
 if __name__ == "__main__":

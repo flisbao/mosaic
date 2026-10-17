@@ -8,8 +8,10 @@ import http.client
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -60,6 +62,8 @@ NOBODY_LABEL = "ninguem"
 MISSING_PRIORITY = "-"
 UPDATED_FLAG = "updated"
 PERSONAL_WINDOW_DAYS = 7
+MANAGER_WINDOW_DAYS = 14
+BROWSE_URL = "https://{site}/browse/{key}"
 NO_MEDIAN = "—"
 SECONDS_PER_HOUR = 3600
 CYCLE_HOURS_DECIMALS = 1
@@ -489,7 +493,7 @@ def fetch_status_categories(client):
 
 
 def find_work_start(client, issue_key, categories):
-    if not ISSUE_KEY_PATTERN.match(issue_key):
+    if not ISSUE_KEY_PATTERN.fullmatch(issue_key):
         return None
     payload = client.get_json(
         ISSUE_PATH.format(key=issue_key), {"expand": "changelog", "fields": "status"}
@@ -514,13 +518,16 @@ def update_history(history, issues, client, categories, now):
     for issue in issues:
         previous = merged.get(issue.key) or {}
         started = previous.get("started")
-        needs_changelog = issue.status_category == "done" and (
-            previous.get("updated") != issue.updated.isoformat() or not started
-        )
-        if needs_changelog:
+        if needs_changelog(previous, issue):
             started = _read_work_start(client, issue, categories) or started
         merged[issue.key] = _history_record(issue, started)
     return merged
+
+
+def needs_changelog(previous, issue):
+    return issue.status_category == "done" and (
+        previous.get("updated") != issue.updated.isoformat() or not previous.get("started")
+    )
 
 
 def _read_work_start(client, issue, categories):
@@ -774,5 +781,143 @@ def build_personal_snapshot(issues, history, config, last_seen, now, offline_at=
     }
 
 
+class _OfflineClient:
+    def get_json(self, path, params=None):
+        raise NetworkError("sem conexão")
+
+
+def open_in_browser(url):
+    subprocess.Popen(
+        ["xdg-open", url],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _window_days(config):
+    return MANAGER_WINDOW_DAYS if config.mode == "manager" else PERSONAL_WINDOW_DAYS
+
+
+def _build_snapshot(config, issues, history, team, last_seen_at, now, offline_at=None):
+    if config.mode == "manager":
+        return build_manager_snapshot(issues, config, team, last_seen_at, now, offline_at)
+    return build_personal_snapshot(issues, history, config, last_seen_at, now, offline_at)
+
+
+def _run_online(config, store, client, now, clock):
+    state = store.load_state()
+    last_seen_at = last_seen(state, config.mode, now)
+    issues = fetch_scope(
+        client, config, _window_days(config), now, clock, assignee_only=config.mode == "personal"
+    )
+    history = store.load_history()
+    categories = {}
+    if any(needs_changelog(history.get(issue.key) or {}, issue) for issue in issues):
+        try:
+            categories = fetch_status_categories(client)
+        except JiraError:
+            categories = {}
+    history = update_history(history, issues, client, categories, now)
+    store.save_history(history)
+    team = TeamResolution({}, [])
+    if config.mode == "manager":
+        team, accounts = resolve_team(config.team, issues, client, state.get("accounts") or {})
+        if accounts != (state.get("accounts") or {}):
+            state["accounts"] = accounts
+            store.save_state(state)
+    store.save_snapshot(config.mode, issues, now)
+    return _build_snapshot(config, issues, history, team, last_seen_at, now)
+
+
+def _run_offline(config, store, now):
+    cached = store.load_snapshot(config.mode)
+    if cached is None:
+        return None
+    issues, saved_at = cached
+    state = store.load_state()
+    team = TeamResolution({}, [])
+    if config.mode == "manager":
+        team, _ = resolve_team(config.team, issues, _OfflineClient(), state.get("accounts") or {})
+        team.warnings = []
+    return _build_snapshot(
+        config, issues, store.load_history(), team, last_seen(state, config.mode, now), now, saved_at
+    )
+
+
+def _command_snapshot(config, store, http, now, clock, stdout, stderr):
+    client = JiraClient(config, http)
+    try:
+        snapshot = _run_online(config, store, client, now, clock)
+    except JiraError as error:
+        snapshot = _run_offline(config, store, now)
+        if snapshot is None:
+            stderr.write(f"erro: {error}\n")
+            return 1
+    stdout.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
+    return 0
+
+
+def _command_mark_seen(config, store, now, stdout, stderr):
+    state = store.load_state()
+    state[f"last_seen_{config.mode}"] = now.isoformat()
+    if not store.save_state(state):
+        stderr.write("erro: não foi possível gravar o estado local\n")
+        return 1
+    stdout.write("Marcado como visto\n")
+    return 0
+
+
+def _command_open(config, opener, stdin, stdout, stderr):
+    try:
+        item_id = json.loads(stdin.read() or "{}").get("item_id")
+    except (ValueError, AttributeError):
+        item_id = None
+    if not isinstance(item_id, str) or not ISSUE_KEY_PATTERN.fullmatch(item_id):
+        stderr.write("erro: identificador de ticket inválido\n")
+        return 1
+    try:
+        opener(BROWSE_URL.format(site=config.site, key=item_id))
+    except OSError:
+        stderr.write("erro: não foi possível abrir o navegador (xdg-open)\n")
+        return 1
+    stdout.write(f"Abrindo {item_id}\n")
+    return 0
+
+
+def main(
+    arguments,
+    environ=None,
+    http=urllib_http,
+    now=None,
+    clock=time.monotonic,
+    opener=open_in_browser,
+    stdin=None,
+    stdout=None,
+    stderr=None,
+):
+    environ = os.environ if environ is None else environ
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    stderr = sys.stderr if stderr is None else stderr
+    commands = (["snapshot"], ["action", "mark_seen"], ["action", "open"])
+    if arguments not in commands:
+        stderr.write("uso: jira.py snapshot | action mark_seen | action open\n")
+        return 2
+    try:
+        config = load_config(environ)
+    except ConfigError as error:
+        stderr.write(f"erro: {error}\n")
+        return 1
+    store = StateStore(config.state_dir / state_key(config))
+    moment = now or datetime.now(timezone.utc)
+    if arguments == ["snapshot"]:
+        return _command_snapshot(config, store, http, moment, clock, stdout, stderr)
+    if arguments == ["action", "mark_seen"]:
+        return _command_mark_seen(config, store, moment, stdout, stderr)
+    return _command_open(config, opener, stdin, stdout, stderr)
+
+
 if __name__ == "__main__":
-    sys.exit(0)
+    sys.exit(main(sys.argv[1:]))
