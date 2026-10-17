@@ -54,6 +54,11 @@ ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-[0-9]+$")
 STATUS_PATH = "/rest/api/3/status"
 ISSUE_PATH = "/rest/api/3/issue/{key}"
 USER_SEARCH_PATH = "/rest/api/3/user/search"
+SUMMARY_TEXT_LIMIT = 80
+OTHERS_LABEL = "Outros"
+NOBODY_LABEL = "ninguem"
+MISSING_PRIORITY = "-"
+UPDATED_FLAG = "updated"
 SECONDS_PER_HOUR = 3600
 CYCLE_HOURS_DECIMALS = 1
 
@@ -598,6 +603,119 @@ def _lookup_email(email, client, cache):
     name = users[0].get("displayName") or email
     cache[email] = {"id": account_id, "name": name}
     return account_id, name
+
+
+def snapshot_title(config):
+    scope = config.project or f"quadro {config.board}"
+    role = "time" if config.mode == "manager" else "meus"
+    return f"Jira {config.site.split('.')[0]} {scope} · {role}"
+
+
+def _line(text, flagged=False):
+    line = {"text": text}
+    if flagged:
+        line["flag"] = UPDATED_FLAG
+    return line
+
+
+def _item(issue, config, now, last_seen, prefix=None):
+    summary = flatten_text(issue.summary, SUMMARY_TEXT_LIMIT)
+    text = f"{prefix} — {issue.key} {summary}" if prefix else f"{issue.key} {summary}"
+    item = {
+        "id": issue.key,
+        "text": text.strip(),
+        "meta": {
+            "status": issue.status,
+            "prioridade": issue.priority or MISSING_PRIORITY,
+            "responsavel": issue.assignee_name or NOBODY_LABEL,
+            "criado_ha": format_duration(now - issue.created),
+            "parado_ha": format_duration(now - issue.updated),
+            "site": config.site,
+        },
+    }
+    if issue.updated > last_seen:
+        item["flag"] = UPDATED_FLAG
+    return item
+
+
+def _actions(config):
+    return [
+        {
+            "id": "mark_seen",
+            "label": "Marcar como visto",
+            "description": f"Marcar tudo como visto em {config.site}",
+            "applies_to": "widget",
+        },
+        {
+            "id": "open",
+            "label": "Abrir no navegador",
+            "description": "Abrir o ticket selecionado no navegador",
+            "applies_to": "item",
+        },
+    ]
+
+
+def _offline_lines(offline_at):
+    if offline_at is None:
+        return []
+    return [_line(f"dados de {offline_at.astimezone().strftime('%H:%M')} (offline)")]
+
+
+def _person_label(issue, team):
+    if issue.assignee_id is None:
+        return NOBODY_LABEL
+    return team.members.get(issue.assignee_id, OTHERS_LABEL)
+
+
+def build_manager_snapshot(issues, config, team, last_seen, now, offline_at=None):
+    threshold = timedelta(hours=config.unassigned_hours)
+    unassigned = sorted(
+        (
+            issue for issue in issues
+            if issue.assignee_id is None
+            and issue.status_category == "new"
+            and now - issue.created >= threshold
+        ),
+        key=lambda issue: (issue.created, issue.key),
+    )
+    in_progress = sorted(
+        (issue for issue in issues if issue.status_category == "indeterminate"),
+        key=lambda issue: (_person_label(issue, team) == OTHERS_LABEL, _person_label(issue, team), issue.key),
+    )
+    updated = sorted(
+        (issue for issue in issues if issue.updated > last_seen),
+        key=lambda issue: issue.updated,
+        reverse=True,
+    )
+    summary_lines = _offline_lines(offline_at) + [
+        _line(f"sem dono: {len(unassigned)}"),
+        _line(f"em andamento: {len(in_progress)}"),
+        _line(f"atualizados: {len(updated)}", flagged=bool(updated)),
+    ]
+    summary_lines += [_line(warning) for warning in team.warnings]
+    return {
+        "summary": {"title": snapshot_title(config), "lines": summary_lines},
+        "detail": {
+            "sections": [
+                {
+                    "heading": "Sem dono",
+                    "items": [_item(issue, config, now, last_seen) for issue in unassigned],
+                },
+                {
+                    "heading": "Em andamento",
+                    "items": [
+                        _item(issue, config, now, last_seen, prefix=_person_label(issue, team))
+                        for issue in in_progress
+                    ],
+                },
+                {
+                    "heading": "Atualizados",
+                    "items": [_item(issue, config, now, last_seen) for issue in updated],
+                },
+            ]
+        },
+        "actions": _actions(config),
+    }
 
 
 if __name__ == "__main__":

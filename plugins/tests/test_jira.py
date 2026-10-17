@@ -746,5 +746,168 @@ class TeamTests(unittest.TestCase):
         self.assertNotIn("carla@x.com", cache)
 
 
+def issue_of(key, category="new", assignee=("acc-1", "Ana"), created="2026-10-17T08:00:00.000+0000",
+             updated="2026-10-17T09:30:00.000+0000", summary="Corrigir login", resolved=None,
+             priority="High"):
+    status_names = {"new": "To Do", "indeterminate": "In Progress", "done": "Done"}
+    return jira.parse_issue(
+        raw_issue(
+            key=key,
+            summary=summary,
+            status={"name": status_names[category], "statusCategory": {"key": category}},
+            assignee=None if assignee is None else {"accountId": assignee[0], "displayName": assignee[1]},
+            created=created,
+            updated=updated,
+            resolutiondate=resolved,
+            priority=None if priority is None else {"name": priority},
+        )
+    )
+
+
+LAST_SEEN = datetime(2026, 10, 17, 9, 0, tzinfo=timezone.utc)
+
+
+def manager_config(**overrides):
+    return jira.load_config(base_environment(**overrides))
+
+
+def everyone(issues):
+    return jira.TeamResolution({i.assignee_id: i.assignee_name for i in issues if i.assignee_id}, [])
+
+
+def sections_by_name(snapshot):
+    return {section["heading"]: section["items"] for section in snapshot["detail"]["sections"]}
+
+
+def summary_texts(snapshot):
+    return [line["text"] for line in snapshot["summary"]["lines"]]
+
+
+class ManagerSnapshotTests(unittest.TestCase):
+    def build(self, issues, team=None, last_seen=LAST_SEEN, offline_at=None, **overrides):
+        return jira.build_manager_snapshot(
+            issues, manager_config(**overrides), team or everyone(issues), last_seen, NOW, offline_at
+        )
+
+    def test_summary_counts_and_updated_flag(self):
+        issues = [
+            issue_of("VHPJ-1", assignee=None, updated="2026-10-17T08:00:00.000+0000"),
+            issue_of("VHPJ-2", "indeterminate", updated="2026-10-17T10:00:00.000+0000"),
+            issue_of("VHPJ-3", "indeterminate", assignee=("acc-2", "Bruno"), updated="2026-10-17T08:30:00.000+0000"),
+        ]
+        snapshot = self.build(issues)
+        self.assertEqual(summary_texts(snapshot), ["sem dono: 1", "em andamento: 2", "atualizados: 1"])
+        flagged = [line for line in snapshot["summary"]["lines"] if line.get("flag")]
+        self.assertEqual([line["text"] for line in flagged], ["atualizados: 1"])
+        self.assertEqual(flagged[0]["flag"], "updated")
+        self.assertIn("Jira", snapshot["summary"]["title"])
+
+    def test_no_updates_means_no_flag_on_the_summary(self):
+        snapshot = self.build([issue_of("VHPJ-1", "indeterminate", updated="2026-10-17T08:00:00.000+0000")])
+        self.assertTrue(all("flag" not in line for line in snapshot["summary"]["lines"]))
+
+    def test_unassigned_requires_new_category_no_assignee_and_older_than_threshold(self):
+        issues = [
+            issue_of("VHPJ-1", assignee=None),
+            issue_of("VHPJ-2", "indeterminate", assignee=None),
+            issue_of("VHPJ-3", assignee=("acc-1", "Ana")),
+            issue_of("VHPJ-4", "done", assignee=None, resolved="2026-10-17T10:00:00.000+0000"),
+        ]
+        items = sections_by_name(self.build(issues))["Sem dono"]
+        self.assertEqual([item["id"] for item in items], ["VHPJ-1"])
+
+    def test_unassigned_below_threshold_is_excluded(self):
+        recent = issue_of("VHPJ-1", assignee=None, created="2026-10-17T11:30:00.000+0000")
+        borderline = issue_of("VHPJ-2", assignee=None, created="2026-10-17T10:00:00.000+0000")
+        items = sections_by_name(self.build([recent, borderline]))["Sem dono"]
+        self.assertEqual([item["id"] for item in items], ["VHPJ-2"])
+
+    def test_unassigned_threshold_is_configurable(self):
+        recent = issue_of("VHPJ-1", assignee=None, created="2026-10-17T11:30:00.000+0000")
+        items = sections_by_name(self.build([recent], JIRA_UNASSIGNED_HOURS="1"))["Sem dono"]
+        self.assertEqual(items, [])
+
+    def test_in_progress_is_sorted_by_person_then_key_with_name_prefix(self):
+        issues = [
+            issue_of("VHPJ-9", "indeterminate", assignee=("acc-2", "Bruno")),
+            issue_of("VHPJ-12", "indeterminate", assignee=("acc-1", "Ana"), summary="Título A"),
+            issue_of("VHPJ-3", "indeterminate", assignee=("acc-1", "Ana")),
+        ]
+        items = sections_by_name(self.build(issues))["Em andamento"]
+        self.assertEqual([item["id"] for item in items], ["VHPJ-12", "VHPJ-3", "VHPJ-9"])
+        self.assertEqual(items[0]["text"], "Ana — VHPJ-12 Título A")
+
+    def test_people_outside_the_team_go_to_others(self):
+        issues = [
+            issue_of("VHPJ-1", "indeterminate", assignee=("acc-1", "Ana")),
+            issue_of("VHPJ-2", "indeterminate", assignee=("acc-9", "Estranho")),
+        ]
+        team = jira.TeamResolution({"acc-1": "Ana"}, [])
+        items = sections_by_name(self.build(issues, team))["Em andamento"]
+        self.assertEqual([item["text"].split(" — ")[0] for item in items], ["Ana", "Outros"])
+
+    def test_updated_section_repeats_tickets_changed_after_last_seen(self):
+        issues = [
+            issue_of("VHPJ-1", "indeterminate", updated="2026-10-17T10:00:00.000+0000"),
+            issue_of("VHPJ-2", "indeterminate", updated="2026-10-17T11:00:00.000+0000"),
+            issue_of("VHPJ-3", "indeterminate", updated="2026-10-17T08:00:00.000+0000"),
+        ]
+        sections = sections_by_name(self.build(issues))
+        self.assertEqual([item["id"] for item in sections["Atualizados"]], ["VHPJ-2", "VHPJ-1"])
+        in_progress = {item["id"]: item for item in sections["Em andamento"]}
+        self.assertEqual(in_progress["VHPJ-1"]["flag"], "updated")
+        self.assertNotIn("flag", in_progress["VHPJ-3"])
+
+    def test_items_have_meta_with_all_keys(self):
+        item = sections_by_name(self.build([issue_of("VHPJ-1", "indeterminate")]))["Em andamento"][0]
+        self.assertEqual(
+            item["meta"],
+            {
+                "status": "In Progress",
+                "prioridade": "High",
+                "responsavel": "Ana",
+                "criado_ha": "4h",
+                "parado_ha": "2h",
+                "site": "empresa.atlassian.net",
+            },
+        )
+
+    def test_unassigned_meta_says_ninguem_and_missing_priority_has_a_placeholder(self):
+        item = sections_by_name(self.build([issue_of("VHPJ-1", assignee=None, priority=None)]))["Sem dono"][0]
+        self.assertEqual(item["meta"]["responsavel"], "ninguem")
+        self.assertEqual(item["meta"]["prioridade"], "-")
+
+    def test_long_multiline_summary_is_one_line_and_truncated(self):
+        issue = issue_of("VHPJ-1", "indeterminate", summary="linha1\nlinha2 " + "x" * 500)
+        text = sections_by_name(self.build([issue]))["Em andamento"][0]["text"]
+        self.assertNotIn("\n", text)
+        self.assertLessEqual(len(text), len("Ana — VHPJ-1 ") + 80)
+        self.assertTrue(text.endswith("…"))
+
+    def test_offline_adds_first_summary_line(self):
+        saved_at = datetime(2026, 10, 17, 11, 5, tzinfo=timezone.utc)
+        snapshot = self.build([], offline_at=saved_at)
+        local_time = saved_at.astimezone().strftime("%H:%M")
+        self.assertEqual(summary_texts(snapshot)[0], f"dados de {local_time} (offline)")
+
+    def test_team_warnings_appear_in_summary(self):
+        team = jira.TeamResolution({}, ['não encontrei "x" no Jira'])
+        self.assertIn('não encontrei "x" no Jira', summary_texts(self.build([], team)))
+
+    def test_actions_are_declared_with_scopes(self):
+        actions = {action["id"]: action for action in self.build([])["actions"]}
+        self.assertEqual(actions["mark_seen"]["applies_to"], "widget")
+        self.assertEqual(actions["open"]["applies_to"], "item")
+        self.assertIn("empresa.atlassian.net", actions["mark_seen"]["description"])
+
+    def test_empty_scope_still_returns_valid_sections(self):
+        snapshot = self.build([])
+        self.assertEqual(
+            [section["heading"] for section in snapshot["detail"]["sections"]],
+            ["Sem dono", "Em andamento", "Atualizados"],
+        )
+        self.assertEqual(summary_texts(snapshot), ["sem dono: 0", "em andamento: 0", "atualizados: 0"])
+
+
 if __name__ == "__main__":
     unittest.main()
