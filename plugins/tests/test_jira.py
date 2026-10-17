@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -320,6 +321,138 @@ class IssueTests(unittest.TestCase):
         issue = jira.parse_issue(raw_issue(resolutiondate="2026-10-17T12:00:00.000+0000"))
         self.assertEqual(jira.Issue.from_raw(issue.to_raw()), issue)
         self.assertEqual(json.loads(json.dumps(issue.to_raw())), issue.to_raw())
+
+
+NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+
+
+def many_issues(start, count):
+    return [raw_issue(key=f"VHPJ-{number}") for number in range(start, start + count)]
+
+
+class ScriptedHttp:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def __call__(self, url, method, headers, timeout):
+        parsed = urllib.parse.urlparse(url)
+        self.calls.append((parsed.path, dict(urllib.parse.parse_qsl(parsed.query))))
+        status, body = self.responses.pop(0) if self.responses else (200, {})
+        return status, json.dumps(body).encode("utf-8")
+
+
+def fetch(http, assignee_only=False, clock=None, window_days=14, **overrides):
+    config = jira.load_config(base_environment(**overrides))
+    client = jira.JiraClient(config, http)
+    return jira.fetch_scope(
+        client, config, window_days, NOW, clock or (lambda: 0.0), assignee_only=assignee_only
+    )
+
+
+class FetchScopeTests(unittest.TestCase):
+    def test_project_scope_uses_search_jql_and_paginates_with_next_page_token(self):
+        http = ScriptedHttp(
+            [
+                (200, {"issues": many_issues(1, 2), "nextPageToken": "t2"}),
+                (200, {"issues": many_issues(3, 1)}),
+            ]
+        )
+        issues = fetch(http)
+        self.assertEqual([issue.key for issue in issues], ["VHPJ-1", "VHPJ-2", "VHPJ-3"])
+        path, params = http.calls[0]
+        self.assertEqual(path, "/rest/api/3/search/jql")
+        self.assertIn("project = VHPJ", params["jql"])
+        self.assertIn("statusCategory != Done", params["jql"])
+        self.assertIn("resolutiondate >= -14d", params["jql"])
+        self.assertEqual(params["maxResults"], "100")
+        self.assertNotIn("nextPageToken", params)
+        self.assertEqual(http.calls[1][1]["nextPageToken"], "t2")
+
+    def test_board_scope_uses_agile_endpoint_and_start_at(self):
+        http = ScriptedHttp(
+            [(200, {"issues": many_issues(1, 100)}), (200, {"issues": many_issues(101, 3)})]
+        )
+        issues = fetch(http, JIRA_PROJECT=None, JIRA_BOARD="7")
+        self.assertEqual(len(issues), 103)
+        self.assertEqual(http.calls[0][0], "/rest/agile/1.0/board/7/issue")
+        self.assertEqual(http.calls[0][1]["startAt"], "0")
+        self.assertEqual(http.calls[1][1]["startAt"], "100")
+        self.assertEqual(len(http.calls), 2)
+
+    def test_board_and_project_apply_the_project_filter_on_the_board(self):
+        http = ScriptedHttp([(200, {"issues": []})])
+        fetch(http, JIRA_BOARD="7")
+        path, params = http.calls[0]
+        self.assertEqual(path, "/rest/agile/1.0/board/7/issue")
+        self.assertIn("project = VHPJ", params["jql"])
+
+    def test_personal_adds_assignee_current_user(self):
+        http = ScriptedHttp([(200, {"issues": []})])
+        fetch(http, assignee_only=True, window_days=7)
+        jql = http.calls[0][1]["jql"]
+        self.assertIn("assignee = currentUser()", jql)
+        self.assertIn("resolutiondate >= -7d", jql)
+
+    def test_stops_at_ten_pages(self):
+        responses = [
+            (200, {"issues": many_issues(page * 10, 10), "nextPageToken": f"t{page}"})
+            for page in range(30)
+        ]
+        http = ScriptedHttp(responses)
+        fetch(http)
+        self.assertEqual(len(http.calls), jira.MAXIMUM_PAGES)
+
+    def test_stops_at_five_hundred_issues(self):
+        responses = [
+            (200, {"issues": many_issues(page * 100, 100), "nextPageToken": f"t{page}"})
+            for page in range(8)
+        ]
+        http = ScriptedHttp(responses)
+        issues = fetch(http)
+        self.assertEqual(len(issues), jira.MAXIMUM_ISSUES)
+        self.assertEqual(len(http.calls), 5)
+
+    def test_repeated_next_page_token_stops_the_loop(self):
+        http = ScriptedHttp([(200, {"issues": many_issues(1, 2), "nextPageToken": "same"})] * 20)
+        fetch(http)
+        self.assertLessEqual(len(http.calls), 2)
+
+    def test_server_that_ignores_start_at_stops_the_loop(self):
+        page = {"startAt": 0, "issues": many_issues(1, 100)}
+        http = ScriptedHttp([(200, page)] * 20)
+        issues = fetch(http, JIRA_PROJECT=None, JIRA_BOARD="7")
+        self.assertLessEqual(len(http.calls), 2)
+        self.assertEqual(len(issues), 100)
+
+    def test_time_budget_exhaustion_returns_partial_results(self):
+        ticks = iter([0.0, 0.0, 100.0, 200.0, 300.0])
+        http = ScriptedHttp(
+            [(200, {"issues": many_issues(page * 10, 10), "nextPageToken": f"t{page}"}) for page in range(5)]
+        )
+        issues = fetch(http, clock=lambda: next(ticks))
+        self.assertEqual(len(http.calls), 1)
+        self.assertEqual(len(issues), 10)
+
+    def test_response_without_issues_is_empty(self):
+        self.assertEqual(fetch(ScriptedHttp([(200, {})])), [])
+        self.assertEqual(fetch(ScriptedHttp([(200, {"issues": None})])), [])
+
+    def test_invalid_issues_are_skipped(self):
+        payload = {"issues": [raw_issue(key="VHPJ-1"), {"key": "VHPJ-2"}, "lixo", None]}
+        self.assertEqual([i.key for i in fetch(ScriptedHttp([(200, payload)]))], ["VHPJ-1"])
+
+    def test_requests_only_the_needed_fields(self):
+        http = ScriptedHttp([(200, {"issues": []})])
+        fetch(http)
+        self.assertEqual(
+            http.calls[0][1]["fields"],
+            "summary,status,assignee,creator,created,updated,resolutiondate,priority",
+        )
+
+    def test_auth_error_propagates(self):
+        with self.assertRaises(jira.AuthError):
+            fetch(ScriptedHttp([(401, {})]))
 
 
 if __name__ == "__main__":

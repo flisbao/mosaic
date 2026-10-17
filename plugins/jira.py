@@ -35,6 +35,12 @@ MINUTES_PER_HOUR = 60
 HOURS_PER_DAY = 24
 HOURS_SHOWN_BEFORE_DAYS = 48
 ELLIPSIS = "…"
+MAXIMUM_PAGES = 10
+MAXIMUM_ISSUES = 500
+PAGE_SIZE = 100
+ISSUE_FIELDS = "summary,status,assignee,creator,created,updated,resolutiondate,priority"
+SEARCH_PATH = "/rest/api/3/search/jql"
+BOARD_ISSUES_PATH = "/rest/agile/1.0/board/{board}/issue"
 
 
 class ConfigError(Exception):
@@ -299,6 +305,77 @@ def flatten_text(text, limit):
     if limit <= 0:
         return ""
     return flattened[: limit - 1] + ELLIPSIS
+
+
+def build_scope_jql(config, window_days, assignee_only):
+    clauses = []
+    if config.project:
+        clauses.append(f"project = {config.project}")
+    if assignee_only:
+        clauses.append("assignee = currentUser()")
+    clauses.append(f"(statusCategory != Done OR resolutiondate >= -{window_days}d)")
+    return " AND ".join(clauses)
+
+
+def fetch_scope(client, config, window_days, now, clock, assignee_only=False):
+    jql = build_scope_jql(config, window_days, assignee_only)
+    deadline = clock() + config.budget_seconds
+    collected = {}
+    if config.board is not None:
+        _read_board_pages(client, config, jql, clock, deadline, collected)
+    else:
+        _read_search_pages(client, jql, clock, deadline, collected)
+    return list(collected.values())[:MAXIMUM_ISSUES]
+
+
+def _absorb(page_issues, collected):
+    added = 0
+    for payload in page_issues or []:
+        issue = parse_issue(payload)
+        if issue is not None and issue.key not in collected:
+            collected[issue.key] = issue
+            added += 1
+    return added
+
+
+def _read_search_pages(client, jql, clock, deadline, collected):
+    token = None
+    seen_tokens = set()
+    for _ in range(MAXIMUM_PAGES):
+        if clock() > deadline:
+            return
+        params = {"jql": jql, "fields": ISSUE_FIELDS, "maxResults": PAGE_SIZE}
+        if token:
+            params["nextPageToken"] = token
+        page = client.get_json(SEARCH_PATH, params)
+        page = page if isinstance(page, dict) else {}
+        added = _absorb(page.get("issues"), collected)
+        token = page.get("nextPageToken")
+        if not token or page.get("isLast") or token in seen_tokens or added == 0:
+            return
+        if len(collected) >= MAXIMUM_ISSUES:
+            return
+        seen_tokens.add(token)
+
+
+def _read_board_pages(client, config, jql, clock, deadline, collected):
+    path = BOARD_ISSUES_PATH.format(board=config.board)
+    start_at = 0
+    for _ in range(MAXIMUM_PAGES):
+        if clock() > deadline:
+            return
+        params = {"jql": jql, "fields": ISSUE_FIELDS, "startAt": start_at, "maxResults": PAGE_SIZE}
+        page = client.get_json(path, params)
+        page = page if isinstance(page, dict) else {}
+        page_issues = page.get("issues") or []
+        added = _absorb(page_issues, collected)
+        reported_start = page.get("startAt")
+        ignored_paging = reported_start is not None and reported_start != start_at
+        if len(page_issues) < PAGE_SIZE or added == 0 or ignored_paging:
+            return
+        if len(collected) >= MAXIMUM_ISSUES:
+            return
+        start_at += len(page_issues)
 
 
 if __name__ == "__main__":
