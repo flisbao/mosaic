@@ -1,8 +1,10 @@
 pub mod config;
 pub mod default_files;
 pub mod llm_cli;
+pub mod notifiers;
 pub mod plugin_protocol;
 pub mod plugin_runner;
 pub mod process;
+pub mod recommendation_file;
 pub mod system_clock;
 pub mod terminal_capabilities;
