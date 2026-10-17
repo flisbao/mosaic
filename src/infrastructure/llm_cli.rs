@@ -10,7 +10,7 @@ pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
 const ARGUMENT_SEPARATOR: &str = "--";
 const OPENCODE_CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
-const OPENCODE_RESTRICTED_CONFIG: &str = r#"{"permission":{"bash":"deny","edit":"deny","webfetch":"deny"},"tools":{"write":false,"edit":false,"bash":false,"webfetch":false,"read":false,"grep":false,"glob":false,"list":false}}"#;
+const OPENCODE_RESTRICTED_CONFIG: &str = r#"{"permission":{"*":"deny","bash":"deny","edit":"deny","webfetch":"deny","read":"deny","external_directory":"deny"},"tools":{"*":false},"mcp":{}}"#;
 
 pub struct ClaudeCli {
     program: String,
@@ -279,12 +279,18 @@ mod tests {
         let (name, content) = &environment[0];
         assert_eq!(name, "OPENCODE_CONFIG_CONTENT");
         let config: serde_json::Value = serde_json::from_str(content).unwrap();
-        for permission in ["bash", "edit", "webfetch"] {
+        for permission in [
+            "*",
+            "bash",
+            "edit",
+            "webfetch",
+            "read",
+            "external_directory",
+        ] {
             assert_eq!(config["permission"][permission], "deny", "{permission}");
         }
-        for tool in ["write", "edit", "bash", "webfetch"] {
-            assert_eq!(config["tools"][tool], false, "{tool}");
-        }
+        assert_eq!(config["tools"]["*"], false);
+        assert_eq!(config["mcp"], serde_json::json!({}));
     }
 
     #[test]
