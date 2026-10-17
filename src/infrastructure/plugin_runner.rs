@@ -196,6 +196,9 @@ mod tests {
             timeout_seconds,
             span: 1,
             tab: false,
+            llm_sections: vec![],
+            llm_max_items: 20,
+            llm_max_characters_per_item: 120,
         };
         PluginRunner::new(settings, directory.to_path_buf())
     }

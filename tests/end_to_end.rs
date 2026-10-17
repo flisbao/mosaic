@@ -23,6 +23,9 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         timeout_seconds: 10,
         span: 1,
         tab: true,
+        llm_sections: vec![],
+        llm_max_items: 20,
+        llm_max_characters_per_item: 120,
     };
     PluginRunner::new(settings, root.to_path_buf())
 }
