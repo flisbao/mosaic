@@ -9,10 +9,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
-use crate::domain::widget::{Flag, WidgetState};
+use crate::domain::widget::WidgetState;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
+use crate::presentation::card_view::{flagged, truncate_to_width};
 
-const ELLIPSIS: char = '…';
 const HOME_TAB_NAME: &str = "Home";
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
 const LOADING_TEXT: &str = "carregando…";
@@ -348,13 +348,6 @@ fn entry_title(entry: &WidgetEntry) -> String {
     }
 }
 
-fn flagged(flag: Option<Flag>, text: &str) -> String {
-    match flag {
-        Some(flag) => format!("{} {text}", flag.symbol()),
-        None => text.to_string(),
-    }
-}
-
 fn to_rect(origin: Rect, cell: CellRect) -> Rect {
     Rect::new(
         origin.x + cell.x,
@@ -382,27 +375,6 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
     }
     lines.push(current);
     lines
-}
-
-fn truncate_to_width(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_string();
-    }
-    let budget = width.saturating_sub(ELLIPSIS.width().unwrap_or(1));
-    let mut truncated = String::new();
-    let mut used = 0;
-    for character in text.chars() {
-        let character_width = character.width().unwrap_or(0);
-        if used + character_width > budget {
-            break;
-        }
-        truncated.push(character);
-        used += character_width;
-    }
-    if width > 0 {
-        truncated.push(ELLIPSIS);
-    }
-    truncated
 }
 
 #[cfg(test)]
