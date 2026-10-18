@@ -81,7 +81,7 @@ impl AppState {
     }
 
     fn go_to_tab(&mut self, index: usize) {
-        if index >= self.tabs().len() {
+        if index >= self.tabs().len() || index == self.active_tab {
             return;
         }
         self.active_tab = index;

@@ -89,11 +89,15 @@ impl AppState {
     }
 
     pub fn replace_tabs(&mut self, entries: Vec<WidgetEntry>, tabs: Vec<TabView>) {
+        let previous_focus = self.focused_entry();
         self.entries = entries;
         self.tabs = tabs;
         self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
         let last_focus = self.active_entry_indexes().len().saturating_sub(1);
         self.focus = self.focus.min(last_focus);
+        if self.focused_entry() != previous_focus {
+            self.selected_item = 0;
+        }
         if self.focused_entry().is_none() {
             self.expanded = false;
         }
@@ -154,7 +158,10 @@ impl AppState {
     }
 
     pub fn focused_entry(&self) -> Option<usize> {
-        self.active_entry_indexes().get(self.focus).copied()
+        self.active_entry_indexes()
+            .get(self.focus)
+            .copied()
+            .filter(|&index| index < self.entries.len())
     }
 
     pub fn shortcut_of(&self, entry_index: usize) -> Option<char> {
@@ -798,24 +805,145 @@ mod tests {
         assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
     }
 
+    fn assert_nothing_focused(app: &AppState, expected_tab: usize) {
+        assert_eq!(app.focused_entry(), None);
+        assert!(!app.is_expanded());
+        assert_eq!(app.active_tab(), expected_tab);
+    }
+
     #[test]
     fn empty_tab_does_not_panic_on_any_key() {
         for key in every_key() {
             let mut grid = AppState::new(plain_entries(2), vec![tab("Vazia", &[])]);
             grid.handle_key(key);
-
-            let mut focused = app_with_one_tab(vec![entry("kanban", kanban_record())]);
-            focused.handle_key(KeyInput::Enter);
-            focused.replace_tabs(
-                vec![entry("kanban", kanban_record())],
-                vec![tab("Vazia", &[])],
-            );
+            assert_nothing_focused(&grid, 0);
+        }
+        let mut focused = app_with_one_tab(vec![entry("kanban", kanban_record())]);
+        press(&mut focused, &[KeyInput::Enter]);
+        focused.replace_tabs(
+            vec![entry("kanban", kanban_record())],
+            vec![tab("Vazia", &[])],
+        );
+        for key in every_key() {
             focused.handle_key(key);
+            assert_nothing_focused(&focused, 0);
         }
         let mut without_tabs = AppState::new(vec![], vec![]);
         for key in every_key() {
             without_tabs.handle_key(key);
+            assert_eq!(without_tabs.focused_entry(), None);
+            assert!(!without_tabs.is_expanded());
         }
+    }
+
+    #[test]
+    fn entry_index_outside_entries_never_gets_focus_or_expansion() {
+        for key in every_key() {
+            let mut app = AppState::new(plain_entries(1), vec![tab("X", &[99])]);
+            app.handle_key(key);
+            assert_nothing_focused(&app, 0);
+        }
+        let mut app = AppState::new(plain_entries(1), vec![tab("X", &[99])]);
+        for key in every_key() {
+            app.handle_key(key);
+            assert_nothing_focused(&app, 0);
+        }
+    }
+
+    #[test]
+    fn replace_tabs_clamps_active_tab_and_focus_and_collapses_when_tab_is_empty() {
+        let mut switched =
+            AppState::new(plain_entries(4), vec![tab("A", &[0, 1, 2]), tab("B", &[3])]);
+        press(&mut switched, &[KeyInput::Tab]);
+        assert_eq!(switched.active_tab(), 1);
+        switched.replace_tabs(plain_entries(2), vec![tab("Só", &[0, 1])]);
+        assert_eq!(switched.active_tab(), 0);
+        assert_eq!(switched.focused_entry(), Some(0));
+
+        let mut shorter = app_with_one_tab(plain_entries(3));
+        press(&mut shorter, &[KeyInput::Down, KeyInput::Down]);
+        assert_eq!(shorter.focused_entry(), Some(2));
+        shorter.replace_tabs(plain_entries(3), vec![tab("Curta", &[0])]);
+        assert_eq!(shorter.focused_entry(), Some(0));
+
+        let mut expanded = app();
+        press(&mut expanded, &[KeyInput::Enter]);
+        assert!(expanded.is_expanded());
+        expanded.replace_tabs(
+            vec![entry("kanban", kanban_record())],
+            vec![tab("Vazia", &[])],
+        );
+        assert_eq!(expanded.focused_entry(), None);
+        assert!(!expanded.is_expanded());
+    }
+
+    #[test]
+    fn replace_tabs_resets_selected_item_when_focus_moves_to_another_widget() {
+        let mut app = AppState::new(
+            vec![
+                entry("kanban", kanban_record()),
+                entry("outro", kanban_record()),
+            ],
+            vec![tab("A", &[0, 1])],
+        );
+        press(&mut app, &[KeyInput::Enter, KeyInput::Down]);
+        assert_eq!(app.selected_item(), 1);
+        app.replace_tabs(
+            vec![
+                entry("kanban", kanban_record()),
+                entry("outro", kanban_record()),
+            ],
+            vec![tab("A", &[1, 0])],
+        );
+        assert_eq!(app.focused_entry(), Some(1));
+        assert_eq!(app.selected_item(), 0);
+    }
+
+    #[test]
+    fn switching_tabs_resets_focus_and_selected_item() {
+        let mut app = AppState::new(
+            vec![
+                entry("kanban", kanban_record()),
+                entry("plain", WidgetRecord::loading()),
+                entry("outra", WidgetRecord::loading()),
+                entry("de_b", WidgetRecord::loading()),
+            ],
+            vec![tab("A", &[0, 1, 2]), tab("B", &[3])],
+        );
+        press(&mut app, &[KeyInput::Down, KeyInput::Down]);
+        assert_eq!(app.focused_entry(), Some(2));
+        press(&mut app, &[KeyInput::Tab]);
+        assert_eq!(app.focused_entry(), Some(3));
+        assert_eq!(app.selected_item(), 0);
+        press(&mut app, &[KeyInput::BackTab]);
+        assert_eq!(app.active_tab(), 0);
+        assert_eq!(app.focused_entry(), Some(0));
+        assert_eq!(app.selected_item(), 0);
+    }
+
+    #[test]
+    fn r_uppercase_with_twenty_widgets_keeps_focus() {
+        let mut app = app_with_one_tab(plain_entries(20));
+        press(&mut app, &[KeyInput::Down; 5]);
+        assert_eq!(app.handle_key(character('R')), Some(Command::ReloadConfig));
+        assert_eq!(app.focused_entry(), Some(5));
+    }
+
+    #[test]
+    fn tab_and_digits_do_not_switch_tabs_while_expanded() {
+        let mut app = app();
+        press(&mut app, &[KeyInput::Enter, KeyInput::Tab, character('2')]);
+        assert_eq!(app.active_tab(), 0);
+        assert!(app.is_expanded());
+        assert_eq!(app.focused_entry(), Some(0));
+    }
+
+    #[test]
+    fn digit_of_active_tab_keeps_focus() {
+        let mut app = app();
+        press(&mut app, &[KeyInput::Down, character('1')]);
+        assert_eq!(app.active_tab(), 0);
+        assert_eq!(app.focused_entry(), Some(1));
     }
 
     #[test]
