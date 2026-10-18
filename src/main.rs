@@ -32,7 +32,7 @@ use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, parse_config, AppConfig, ConfigError, Harness, LlmConfig,
-    WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+    TabSettings, WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
     DEFAULT_LLM_MAX_ITEMS, DEFAULT_SPAN,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
@@ -45,7 +45,7 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
-use mosaic::presentation::app_state::{AppState, Command, WidgetEntry};
+use mosaic::presentation::app_state::{AppState, Command, TabView, WidgetEntry};
 use mosaic::presentation::key_input::from_crossterm;
 use mosaic::presentation::render::render;
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
@@ -55,6 +55,7 @@ const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
+const IA_TAB_NAME: &str = "IA";
 const APP_DIRECTORY_NAME: &str = "mosaic";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const FALLBACK_STORE_FILE_NAME: &str = "mosaic-recommendation.json";
@@ -201,18 +202,25 @@ fn run() -> Result<(), AppError> {
         .map(|widget| WidgetEntry {
             id: widget.id.clone(),
             record: WidgetRecord::loading(),
-            has_tab: true,
         })
         .collect();
+    let mut ia_entry_index = None;
     if let Some(llm) = &services.llm {
         spans.push(IA_WIDGET_SPAN);
         entries.push(WidgetEntry {
             id: WidgetId::new(IA_WIDGET_ID),
             record: stored_ia_record(llm.store.as_ref(), clock.now()),
-            has_tab: true,
+        });
+        ia_entry_index = Some(entries.len() - 1);
+    }
+    let mut tabs = build_tab_views(&config.tabs, &entries);
+    if let Some(index) = ia_entry_index {
+        tabs.push(TabView {
+            name: IA_TAB_NAME.to_string(),
+            entry_indexes: vec![index],
         });
     }
-    let mut state = AppState::new(entries);
+    let mut state = AppState::new(entries, tabs);
     if config.pomodoro.enabled {
         state = state.with_pomodoro(PomodoroTimer::new(config.pomodoro.settings()));
     }
@@ -229,6 +237,20 @@ fn run() -> Result<(), AppError> {
     );
     ratatui::restore();
     result
+}
+
+fn build_tab_views(tabs: &[TabSettings], entries: &[WidgetEntry]) -> Vec<TabView> {
+    tabs.iter()
+        .map(|tab| TabView {
+            name: tab.name.clone(),
+            entry_indexes: entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| tab.widget_ids.contains(&entry.id))
+                .map(|(index, _)| index)
+                .collect(),
+        })
+        .collect()
 }
 
 fn build_services(config: &AppConfig, directory: &Path, sender: &Sender<AppEvent>) -> Services {
@@ -384,6 +406,7 @@ fn event_loop(
         match state.handle_key(input) {
             Some(Command::Quit) => return Ok(()),
             Some(Command::RefreshAll) => trigger_refresh(&services.runtime),
+            Some(Command::ReloadConfig) => {}
             Some(Command::Execute(action)) => spawn_action(action, &services.runtime, sender),
             Some(Command::RequestRecommendation) => {
                 request_recommendation(state, services, clock, sender)

@@ -13,7 +13,7 @@ use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_view::render_blocks;
 
-const HOME_TAB_NAME: &str = "Home";
+const FALLBACK_SPAN: u16 = 1;
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
 const LOADING_TEXT: &str = "carregando…";
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
@@ -31,10 +31,10 @@ pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDate
         return;
     }
     render_top_bar(frame, state, now, area);
-    if state.active_tab() == 0 {
-        render_home(frame, state, spans, area);
-    } else {
+    if state.is_expanded() {
         render_detail(frame, state, area);
+    } else {
+        render_home(frame, state, spans, area);
     }
     render_notice(frame, state, area);
     render_modal(frame, state, area);
@@ -47,14 +47,8 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
         format!(" {}  {} ", now.format("%H:%M"), now.format("%d/%m/%Y")),
         Style::default().fg(Color::Cyan),
     )];
-    let mut names = vec![HOME_TAB_NAME.to_string()];
-    names.extend(
-        state
-            .tab_entry_indexes()
-            .iter()
-            .map(|&index| entry_title(&state.entries()[index])),
-    );
-    for (position, name) in names.iter().enumerate() {
+    for (position, tab) in state.tabs().iter().enumerate() {
+        let name = tab.name.as_str();
         let style = if position == state.active_tab() {
             Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
         } else {
@@ -99,16 +93,28 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], area: Rect) {
         width: area.width,
         height: area.height,
     };
-    match arrange(spans, size) {
+    let entry_indexes = state.active_entry_indexes();
+    let tab_spans: Vec<u16> = entry_indexes
+        .iter()
+        .map(|&index| spans.get(index).copied().unwrap_or(FALLBACK_SPAN))
+        .collect();
+    match arrange(&tab_spans, size) {
         GridLayout::Grid(placements) => {
             for placement in placements {
-                let selected = placement.widget_index == state.selected_item();
-                let entry = &state.entries()[placement.widget_index];
-                render_box(frame, entry, to_rect(area, placement.area), selected, None);
+                let Some(&entry_index) = entry_indexes.get(placement.widget_index) else {
+                    continue;
+                };
+                let selected = Some(entry_index) == state.focused_entry();
+                if let Some(entry) = state.entries().get(entry_index) {
+                    render_box(frame, entry, to_rect(area, placement.area), selected, None);
+                }
             }
         }
         GridLayout::Compact(placement) => {
-            if let Some(entry) = state.entries().first() {
+            let first = entry_indexes
+                .first()
+                .and_then(|&index| state.entries().get(index));
+            if let Some(entry) = first {
                 let warning = Some(ENLARGE_WARNING);
                 render_box(frame, entry, to_rect(area, placement.area), true, warning);
             }
@@ -189,10 +195,12 @@ fn render_detail(frame: &mut Frame, state: &AppState, area: Rect) {
     if content.width < MINIMUM_DRAWABLE_SIDE || content.height < MINIMUM_DRAWABLE_SIDE {
         return;
     }
-    let Some(&entry_index) = state.tab_entry_indexes().get(state.active_tab() - 1) else {
+    let Some(entry) = state
+        .focused_entry()
+        .and_then(|index| state.entries().get(index))
+    else {
         return;
     };
-    let entry = &state.entries()[entry_index];
     let block = Block::bordered().title(truncate_to_width(
         &entry_title(entry),
         content.width as usize - 2,
@@ -391,7 +399,7 @@ mod tests {
         ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetId,
         WidgetRecord, WidgetSnapshot,
     };
-    use crate::presentation::app_state::{AppState, WidgetEntry};
+    use crate::presentation::app_state::{AppState, TabView, WidgetEntry};
     use crate::presentation::key_input::KeyInput;
     use chrono::NaiveDate;
     use ratatui::backend::TestBackend;
@@ -437,12 +445,22 @@ mod tests {
         record
     }
 
-    fn entry(id: &str, record: WidgetRecord, has_tab: bool) -> WidgetEntry {
+    fn entry(id: &str, record: WidgetRecord) -> WidgetEntry {
         WidgetEntry {
             id: WidgetId::new(id),
             record,
-            has_tab,
         }
+    }
+
+    fn state_with(entries: Vec<WidgetEntry>) -> AppState {
+        let entry_indexes = (0..entries.len()).collect();
+        AppState::new(
+            entries,
+            vec![TabView {
+                name: "Principal".to_string(),
+                entry_indexes,
+            }],
+        )
     }
 
     fn kanban_snapshot() -> WidgetSnapshot {
@@ -476,7 +494,7 @@ mod tests {
     }
 
     fn kanban_entry() -> WidgetEntry {
-        entry("kanban", ready(kanban_snapshot()), true)
+        entry("kanban", ready(kanban_snapshot()))
     }
 
     fn draw(state: &AppState, width: u16, height: u16) -> Vec<String> {
@@ -507,7 +525,7 @@ mod tests {
 
     #[test]
     fn top_bar_shows_clock_and_date() {
-        let state = AppState::new(vec![kanban_entry()]);
+        let state = state_with(vec![kanban_entry()]);
         let first_row = draw(&state, 100, 30).remove(0);
         assert!(first_row.contains("09:41"), "{first_row}");
         assert!(first_row.contains("17/10/2026"), "{first_row}");
@@ -515,10 +533,10 @@ mod tests {
 
     #[test]
     fn home_draws_one_box_per_widget_title() {
-        let state = AppState::new(vec![
+        let state = state_with(vec![
             kanban_entry(),
-            entry("agenda", ready(snapshot("Agenda", vec![])), false),
-            entry("time", ready(snapshot("Time", vec![])), false),
+            entry("agenda", ready(snapshot("Agenda", vec![]))),
+            entry("time", ready(snapshot("Time", vec![]))),
         ]);
         let text = screen(&state, 100, 31);
         for title in ["Kanban", "Agenda", "Time"] {
@@ -530,7 +548,7 @@ mod tests {
     fn failure_after_success_shows_error_line_above_old_snapshot() {
         let mut record = ready(snapshot("Kanban", vec![plain_line("inbox 3")]));
         record.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
-        let state = AppState::new(vec![entry("kanban", record, false)]);
+        let state = state_with(vec![entry("kanban", record)]);
         let rows = draw(&state, 100, 30);
         let failure = rows
             .iter()
@@ -548,13 +566,13 @@ mod tests {
             Err::<WidgetSnapshot, _>("modelo indisponível".to_string()),
             now(),
         );
-        let state = AppState::new(vec![entry("ia", record, true)]);
+        let state = state_with(vec![entry("ia", record)]);
         assert!(screen(&state, 100, 30).contains("falha: modelo indisponível"));
     }
 
     #[test]
     fn failed_widget_shows_error_inside_its_box() {
-        let state = AppState::new(vec![entry("kanban", failed("plugin quebrou"), false)]);
+        let state = state_with(vec![entry("kanban", failed("plugin quebrou"))]);
         assert!(screen(&state, 100, 30).contains("plugin quebrou"));
     }
 
@@ -564,21 +582,17 @@ mod tests {
             text: "inbox 3".to_string(),
             flag: Some(Flag::Updated),
         };
-        let state = AppState::new(vec![entry(
-            "kanban",
-            ready(snapshot("Kanban", vec![line])),
-            false,
-        )]);
+        let state = state_with(vec![entry("kanban", ready(snapshot("Kanban", vec![line])))]);
         assert!(screen(&state, 100, 30).contains("● inbox 3"));
     }
 
     #[test]
     fn confirmation_dialog_shows_description_and_keys() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         press(
             &mut state,
             &[
-                KeyInput::Tab,
+                KeyInput::Enter,
                 KeyInput::Down,
                 KeyInput::Character('a'),
                 KeyInput::Enter,
@@ -596,20 +610,20 @@ mod tests {
 
     #[test]
     fn action_menu_lists_action_labels() {
-        let mut state = AppState::new(vec![kanban_entry()]);
-        press(&mut state, &[KeyInput::Tab, KeyInput::Character('a')]);
+        let mut state = state_with(vec![kanban_entry()]);
+        press(&mut state, &[KeyInput::Enter, KeyInput::Character('a')]);
         assert!(screen(&state, 100, 30).contains("Mover para done"));
     }
 
     #[test]
     fn compact_mode_shows_enlarge_warning() {
-        let state = AppState::new(vec![kanban_entry()]);
+        let state = state_with(vec![kanban_entry()]);
         assert!(screen(&state, 50, 15).contains("Amplie"));
     }
 
     #[test]
     fn zero_sized_area_does_not_panic() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         for width in 0..=14u16 {
             for height in 0..=14u16 {
                 draw(&state, width, height);
@@ -617,7 +631,7 @@ mod tests {
         }
         press(
             &mut state,
-            &[KeyInput::Tab, KeyInput::Character('a'), KeyInput::Enter],
+            &[KeyInput::Enter, KeyInput::Character('a'), KeyInput::Enter],
         );
         for (width, height) in [(0, 0), (1, 1), (3, 3), (10, 4), (60, 20)] {
             draw(&state, width, height);
@@ -626,10 +640,9 @@ mod tests {
 
     #[test]
     fn wide_characters_are_truncated_with_ellipsis_inside_box() {
-        let state = AppState::new(vec![entry(
+        let state = state_with(vec![entry(
             "kanban",
             ready(snapshot("Kanban", vec![plain_line(&"日本語".repeat(15))])),
-            false,
         )]);
         let rows = draw(&state, 60, 20);
         let row = rows
@@ -641,8 +654,8 @@ mod tests {
 
     #[test]
     fn detail_tab_lists_sections_and_items() {
-        let mut state = AppState::new(vec![kanban_entry()]);
-        press(&mut state, &[KeyInput::Tab, KeyInput::Down]);
+        let mut state = state_with(vec![kanban_entry()]);
+        press(&mut state, &[KeyInput::Enter, KeyInput::Down]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("inbox"));
         assert!(text.contains("  ⚠ Tarefa A"), "{text}");
@@ -651,7 +664,7 @@ mod tests {
 
     #[test]
     fn notice_is_rendered_on_the_last_row() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         state.show_notice("Cartão movido".to_string());
         let rows = draw(&state, 100, 30);
         assert!(rows[29].contains("Cartão movido"));
@@ -667,7 +680,7 @@ mod tests {
     }
 
     fn app_with_pomodoro() -> AppState {
-        AppState::new(vec![kanban_entry()]).with_pomodoro(pomodoro_timer())
+        state_with(vec![kanban_entry()]).with_pomodoro(pomodoro_timer())
     }
 
     #[test]
@@ -699,7 +712,7 @@ mod tests {
 
     #[test]
     fn top_bar_without_pomodoro_has_no_timer_text() {
-        let state = AppState::new(vec![kanban_entry()]);
+        let state = state_with(vec![kanban_entry()]);
         let first_row = draw(&state, 100, 30).remove(0);
         assert!(!first_row.contains("foco") && !first_row.contains("parado"));
     }
@@ -718,7 +731,7 @@ mod tests {
 
     #[test]
     fn send_confirmation_modal_shows_text_and_keys() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         state.ask_send_confirmation(
             "Enviar 3 itens (~40 tokens, estimativa) para claude?".to_string(),
             crate::application::recommendation::RecommendationPlan {
@@ -758,7 +771,7 @@ mod tests {
     #[test]
     fn long_detail_item_is_wrapped_not_truncated() {
         let sentence = format!("{} FIM-DA-FRASE", "palavra ".repeat(30));
-        let mut state = AppState::new(vec![entry(
+        let mut state = state_with(vec![entry(
             "ia",
             ready(WidgetSnapshot {
                 mini: None,
@@ -780,9 +793,8 @@ mod tests {
                 }]),
                 actions: vec![],
             }),
-            true,
         )]);
-        press(&mut state, &[KeyInput::Tab]);
+        press(&mut state, &[KeyInput::Enter]);
         assert!(screen(&state, 100, 30).contains("FIM-DA-FRASE"));
     }
 
@@ -796,7 +808,7 @@ mod tests {
                 draw(&state, width, height);
             }
         }
-        let mut modal = AppState::new(vec![kanban_entry()]);
+        let mut modal = state_with(vec![kanban_entry()]);
         modal.ask_send_confirmation(
             "x".repeat(200),
             crate::application::recommendation::RecommendationPlan {
@@ -834,7 +846,7 @@ mod tests {
     fn entry_with_blocks(blocks: Vec<blocks::Block>) -> WidgetEntry {
         let mut widget_snapshot = snapshot("Agenda", vec![]);
         widget_snapshot.summary.blocks = blocks;
-        entry("agenda", ready(widget_snapshot), true)
+        entry("agenda", ready(widget_snapshot))
     }
 
     fn rows_and_stat_blocks() -> Vec<blocks::Block> {
@@ -863,7 +875,7 @@ mod tests {
 
     #[test]
     fn home_box_renders_rows_and_stat_blocks() {
-        let state = AppState::new(vec![entry_with_blocks(rows_and_stat_blocks())]);
+        let state = state_with(vec![entry_with_blocks(rows_and_stat_blocks())]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("▶ 09:00 Daily"), "{text}");
         assert!(text.contains("[agora]"), "{text}");
@@ -880,7 +892,7 @@ mod tests {
             }],
             rows: vec![vec![widget_cell("ana")]],
         };
-        let state = AppState::new(vec![entry_with_blocks(vec![table])]);
+        let state = state_with(vec![entry_with_blocks(vec![table])]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("Nome"), "{text}");
         assert!(text.contains("ana"), "{text}");
@@ -888,7 +900,7 @@ mod tests {
 
     #[test]
     fn legacy_lines_still_render_exactly_as_before() {
-        let state = AppState::new(vec![entry(
+        let state = state_with(vec![entry(
             "kanban",
             ready(snapshot(
                 "Kanban",
@@ -900,7 +912,6 @@ mod tests {
                     },
                 ],
             )),
-            false,
         )]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("inbox 3"), "{text}");
@@ -912,8 +923,8 @@ mod tests {
         let mut snapshot = kanban_snapshot();
         let sections = snapshot.detail.as_mut().unwrap();
         sections[0].blocks = vec![blocks::Block::Lines(vec![widget_line("RESUMO DA SEÇÃO")])];
-        let mut state = AppState::new(vec![entry("kanban", ready(snapshot), true)]);
-        press(&mut state, &[KeyInput::Tab]);
+        let mut state = state_with(vec![entry("kanban", ready(snapshot))]);
+        press(&mut state, &[KeyInput::Enter]);
         let rows = draw(&state, 100, 30);
         let position = |needle: &str| rows.iter().position(|row| row.contains(needle)).unwrap();
         assert!(position("inbox") < position("RESUMO DA SEÇÃO"));
@@ -927,8 +938,8 @@ mod tests {
             widget_line("a"),
             widget_line("b"),
         ])];
-        let mut state = AppState::new(vec![entry("kanban", ready(snapshot), true)]);
-        press(&mut state, &[KeyInput::Tab, KeyInput::Down]);
+        let mut state = state_with(vec![entry("kanban", ready(snapshot))]);
+        press(&mut state, &[KeyInput::Enter, KeyInput::Down]);
         assert_eq!(state.selected_item(), 1);
         press(&mut state, &[KeyInput::Down]);
         assert_eq!(state.selected_item(), 1);
@@ -949,11 +960,11 @@ mod tests {
         let mut blocks = rows_and_stat_blocks();
         blocks.push(blocks::Block::Table { columns, rows });
         blocks.push(blocks::Block::Lines(vec![widget_line(&wide); 200]));
-        let mut state = AppState::new(vec![entry_with_blocks(blocks)]);
+        let mut state = state_with(vec![entry_with_blocks(blocks)]);
         for size in 0..=14 {
             draw(&state, size, size);
         }
-        press(&mut state, &[KeyInput::Tab]);
+        press(&mut state, &[KeyInput::Enter]);
         for size in 0..=14 {
             draw(&state, size, size);
         }

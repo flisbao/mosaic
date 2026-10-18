@@ -8,7 +8,7 @@ use mosaic::application::refresh::refresh_widget;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::config::WidgetSettings;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
-use mosaic::presentation::app_state::{AppState, Command, Mode, WidgetEntry};
+use mosaic::presentation::app_state::{AppState, Command, Mode, TabView, WidgetEntry};
 use mosaic::presentation::key_input::KeyInput;
 
 fn kanban_plugin_path() -> PathBuf {
@@ -44,11 +44,16 @@ fn kanban_with_one_item() -> (tempfile::TempDir, PathBuf) {
 fn app_for(runner: &PluginRunner) -> AppState {
     let mut record = WidgetRecord::loading();
     record.apply(refresh_widget(runner), now());
-    AppState::new(vec![WidgetEntry {
-        id: WidgetId::new("kanban"),
-        record,
-        has_tab: true,
-    }])
+    AppState::new(
+        vec![WidgetEntry {
+            id: WidgetId::new("kanban"),
+            record,
+        }],
+        vec![TabView {
+            name: "Principal".to_string(),
+            entry_indexes: vec![0],
+        }],
+    )
 }
 
 fn now() -> NaiveDateTime {
@@ -66,7 +71,7 @@ fn press(app: &mut AppState, keys: &[KeyInput]) -> Option<Command> {
 }
 
 fn choose_move_to_done(app: &mut AppState) {
-    let mut keys = vec![KeyInput::Tab, KeyInput::Character('a')];
+    let mut keys = vec![KeyInput::Enter, KeyInput::Character('a')];
     keys.extend([KeyInput::Down; 4]);
     keys.push(KeyInput::Enter);
     press(app, &keys);
