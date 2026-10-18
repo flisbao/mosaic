@@ -412,6 +412,7 @@ mod tests {
             meta: vec![],
         };
         WidgetState::Ready(WidgetSnapshot {
+            mini: None,
             alerts: vec![],
             summary: Summary {
                 blocks: vec![],

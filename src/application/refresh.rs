@@ -42,6 +42,7 @@ pub(crate) mod fakes {
 
     pub fn snapshot_titled(title: &str) -> WidgetSnapshot {
         WidgetSnapshot {
+            mini: None,
             alerts: vec![],
             summary: Summary {
                 blocks: vec![],

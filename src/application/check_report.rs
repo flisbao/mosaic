@@ -1,6 +1,6 @@
 use crate::application::ports::SourceError;
 use crate::domain::snapshot_report::{ParsedSnapshot, Problem, Severity};
-use crate::domain::widget::WidgetSnapshot;
+use crate::domain::widget::{Mini, WidgetSnapshot};
 
 const EXIT_CODE_OK: i32 = 0;
 const EXIT_CODE_INVALID: i32 = 1;
@@ -43,6 +43,7 @@ fn report_parsed(
         lines.push(String::new());
     }
     lines.push(parsed.snapshot.summary.title.clone());
+    lines.extend(parsed.snapshot.mini.as_ref().map(mini_line));
     lines.extend(preview(&parsed.snapshot));
     CheckOutcome {
         text: lines.join("\n"),
@@ -52,6 +53,10 @@ fn report_parsed(
             EXIT_CODE_OK
         },
     }
+}
+
+fn mini_line(mini: &Mini) -> String {
+    format!("mini: {} {}", mini.value, mini.text)
 }
 
 fn problem_line(problem: &Problem) -> String {
@@ -66,10 +71,12 @@ fn problem_line(problem: &Problem) -> String {
 mod tests {
     use super::*;
     use crate::domain::snapshot_report::{Problem, Severity};
-    use crate::domain::widget::{Summary, WidgetSnapshot};
+    use crate::domain::widget::{Mini, Summary, WidgetSnapshot};
+    use crate::domain::widget_content::Tone;
 
     fn snapshot() -> WidgetSnapshot {
         WidgetSnapshot {
+            mini: None,
             summary: Summary {
                 title: "Agenda".to_string(),
                 lines: vec![],
@@ -149,6 +156,26 @@ mod tests {
         let outcome = build_check_report(Ok("{".to_string()), &parse, &preview);
         assert_eq!(outcome.exit_code, 1);
         assert_eq!(outcome.text, "ERRO JSON ruim");
+    }
+
+    #[test]
+    fn mini_is_shown_between_the_title_and_the_preview() {
+        let parse = |_: &str| -> Result<ParsedSnapshot, String> {
+            Ok(ParsedSnapshot {
+                snapshot: WidgetSnapshot {
+                    mini: Some(Mini {
+                        value: "12".to_string(),
+                        text: "tarefas".to_string(),
+                        tone: Tone::Warn,
+                    }),
+                    ..snapshot()
+                },
+                problems: vec![],
+            })
+        };
+        let preview = |_: &WidgetSnapshot| vec!["linha da prévia".to_string()];
+        let outcome = build_check_report(Ok("{}".to_string()), &parse, &preview);
+        assert_eq!(outcome.text, "Agenda\nmini: 12 tarefas\nlinha da prévia");
     }
 
     #[test]

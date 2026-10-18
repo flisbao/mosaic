@@ -396,6 +396,7 @@ mod tests {
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
         WidgetSnapshot {
+            mini: None,
             alerts: vec![],
             summary: Summary {
                 blocks: vec![],
@@ -716,6 +717,7 @@ mod tests {
         let mut state = AppState::new(vec![entry(
             "ia",
             WidgetState::Ready(WidgetSnapshot {
+                mini: None,
                 alerts: vec![],
                 summary: Summary {
                     blocks: vec![],

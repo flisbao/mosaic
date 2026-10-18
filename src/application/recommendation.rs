@@ -164,6 +164,7 @@ mod tests {
 
     fn state(sections: Vec<(&str, Vec<DetailItem>)>) -> WidgetState {
         WidgetState::Ready(WidgetSnapshot {
+            mini: None,
             alerts: vec![],
             summary: Summary {
                 blocks: vec![],

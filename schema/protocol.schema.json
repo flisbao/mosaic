@@ -10,7 +10,8 @@
     "summary": { "$ref": "#/$defs/summary" },
     "detail": { "$ref": "#/$defs/detail" },
     "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
-    "alerts": { "type": "array", "items": { "$ref": "#/$defs/alert" } }
+    "alerts": { "type": "array", "items": { "$ref": "#/$defs/alert" } },
+    "mini": { "$ref": "#/$defs/mini" }
   },
   "$defs": {
     "tone": {
@@ -18,6 +19,15 @@
       "default": "normal"
     },
     "flag": { "enum": ["updated", "warning"] },
+    "mini": {
+      "type": "object",
+      "required": ["value", "text"],
+      "properties": {
+        "value": { "type": "string", "maxLength": 8 },
+        "text": { "type": "string", "maxLength": 24 },
+        "tone": { "$ref": "#/$defs/tone" }
+      }
+    },
     "text": { "type": "string", "maxLength": 500 },
     "widgetLine": {
       "type": "object",

@@ -2,6 +2,8 @@ use crate::domain::blocks::{lines::WidgetLine, Block};
 use crate::domain::widget_content::{Alert, Tone};
 
 pub const FLAG_NAMES: [&str; 2] = ["updated", "warning"];
+pub const MAXIMUM_MINI_VALUE_CHARACTERS: usize = 8;
+pub const MAXIMUM_MINI_TEXT_CHARACTERS: usize = 24;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WidgetId(String);
@@ -111,11 +113,19 @@ pub struct ActionSpec {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Mini {
+    pub value: String,
+    pub text: String,
+    pub tone: Tone,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct WidgetSnapshot {
     pub summary: Summary,
     pub detail: Option<Vec<DetailSection>>,
     pub actions: Vec<ActionSpec>,
     pub alerts: Vec<Alert>,
+    pub mini: Option<Mini>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

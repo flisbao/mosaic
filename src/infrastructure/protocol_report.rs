@@ -2,7 +2,8 @@ use serde_json::{Map, Value};
 
 use crate::domain::blocks::Block;
 use crate::domain::widget::{
-    ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetSnapshot,
+    ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, SummaryLine,
+    WidgetSnapshot, MAXIMUM_MINI_TEXT_CHARACTERS, MAXIMUM_MINI_VALUE_CHARACTERS,
 };
 use crate::domain::widget_content::{clean_text, clean_text_limited, Alert, AlertLevel, Tone};
 use crate::infrastructure::plugin_protocol::ProtocolError;
@@ -23,12 +24,13 @@ pub const MAXIMUM_KEY_CHARACTERS: usize = 100;
 
 const EMPTY_PARAMS_JSON: &str = "{}";
 const UNKNOWN_FIELD_MESSAGE: &str = "campo desconhecido";
-const ROOT_KEYS: [&str; 5] = ["protocol", "summary", "detail", "actions", "alerts"];
+const ROOT_KEYS: [&str; 6] = ["protocol", "summary", "detail", "actions", "alerts", "mini"];
 const SUMMARY_KEYS: [&str; 3] = ["title", "lines", "blocks"];
 const DETAIL_KEYS: [&str; 1] = ["sections"];
 const SECTION_KEYS: [&str; 3] = ["heading", "items", "blocks"];
 const ITEM_KEYS: [&str; 4] = ["id", "text", "flag", "meta"];
 const ACTION_KEYS: [&str; 5] = ["id", "label", "description", "applies_to", "params"];
+const MINI_KEYS: [&str; 3] = ["value", "text", "tone"];
 
 pub fn unsupported_protocol_text(version: u64) -> String {
     format!("este widget exige o protocolo {version}; atualize o mosaic")
@@ -67,6 +69,7 @@ pub fn parse_snapshot_report(json: &str) -> Result<ParsedSnapshot, ProtocolError
         detail: reader.detail(&root),
         actions: reader.actions(&root),
         alerts: reader.alerts(&root),
+        mini: reader.mini(&root),
     };
     Ok(ParsedSnapshot {
         snapshot,
@@ -119,15 +122,16 @@ impl Reader {
     }
 
     pub(super) fn limited(&mut self, text: &str, path: &str) -> String {
+        self.limited_to(text, MAXIMUM_TEXT_CHARACTERS, path)
+    }
+
+    fn limited_to(&mut self, text: &str, limit: usize, path: &str) -> String {
         let cleaned = clean_text(text);
-        if cleaned.chars().count() <= MAXIMUM_TEXT_CHARACTERS {
+        if cleaned.chars().count() <= limit {
             return cleaned;
         }
-        self.warning(
-            path,
-            &format!("texto cortado em {MAXIMUM_TEXT_CHARACTERS} caracteres"),
-        );
-        clean_text_limited(&cleaned, MAXIMUM_TEXT_CHARACTERS)
+        self.warning(path, &format!("texto cortado em {limit} caracteres"));
+        clean_text_limited(&cleaned, limit)
     }
 
     pub(super) fn required_text(
@@ -136,9 +140,19 @@ impl Reader {
         key: &str,
         path: &str,
     ) -> Option<String> {
+        self.required_text_within(object, key, path, MAXIMUM_TEXT_CHARACTERS)
+    }
+
+    fn required_text_within(
+        &mut self,
+        object: &Map<String, Value>,
+        key: &str,
+        path: &str,
+        limit: usize,
+    ) -> Option<String> {
         let field_path = child_path(path, key);
         match object.get(key) {
-            Some(Value::String(text)) => Some(self.limited(text, &field_path)),
+            Some(Value::String(text)) => Some(self.limited_to(text, limit, &field_path)),
             Some(_) => {
                 self.error(&field_path, "precisa ser texto");
                 None
@@ -207,6 +221,7 @@ impl Reader {
         };
         ParsedSnapshot {
             snapshot: WidgetSnapshot {
+                mini: None,
                 summary: Summary {
                     title,
                     lines: vec![notice],
@@ -337,6 +352,23 @@ impl Reader {
         let errors_before = self.error_count();
         let block = parser.parse(self, object, path);
         (self.error_count() == errors_before).then_some(block)
+    }
+
+    fn mini(&mut self, root: &Map<String, Value>) -> Option<Mini> {
+        let object = match root.get("mini") {
+            Some(Value::Null) | None => return None,
+            Some(value) => self.object_entry(value, "mini")?,
+        };
+        self.unknown_fields(object, &MINI_KEYS, "mini");
+        let value =
+            self.required_text_within(object, "value", "mini", MAXIMUM_MINI_VALUE_CHARACTERS);
+        let text = self.required_text_within(object, "text", "mini", MAXIMUM_MINI_TEXT_CHARACTERS);
+        let tone = self.tone(object, "mini");
+        Some(Mini {
+            value: value?,
+            text: text?,
+            tone,
+        })
     }
 
     fn legacy_lines(&mut self, summary: &Map<String, Value>) -> Vec<SummaryLine> {
@@ -569,7 +601,9 @@ mod tests {
         table::{Cell, Column},
         Block,
     };
-    use crate::domain::widget::Flag;
+    use crate::domain::widget::{
+        Flag, Mini, MAXIMUM_MINI_TEXT_CHARACTERS, MAXIMUM_MINI_VALUE_CHARACTERS,
+    };
     use crate::domain::widget_content::{AlertLevel, Align, Tone};
 
     fn report(json: &str) -> ParsedSnapshot {
@@ -742,6 +776,79 @@ mod tests {
             ]
         );
         assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+    }
+
+    fn mini_report(mini_json: &str) -> ParsedSnapshot {
+        report(&format!(
+            r#"{{"summary":{{"title":"K"}},"mini":{mini_json}}}"#
+        ))
+    }
+
+    #[test]
+    fn mini_with_all_fields_is_parsed_without_problems() {
+        let parsed = mini_report(r#"{"value":"12","text":"tarefas","tone":"warn"}"#);
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let expected = Mini {
+            value: "12".to_string(),
+            text: "tarefas".to_string(),
+            tone: Tone::Warn,
+        };
+        assert_eq!(parsed.snapshot.mini, Some(expected));
+    }
+
+    #[test]
+    fn mini_tone_defaults_to_normal() {
+        let parsed = mini_report(r#"{"value":"3","text":"livres"}"#);
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        assert_eq!(
+            parsed.snapshot.mini.map(|mini| mini.tone),
+            Some(Tone::Normal)
+        );
+    }
+
+    #[test]
+    fn widget_without_mini_has_no_mini() {
+        let parsed = report(r#"{"summary":{"title":"K"}}"#);
+        assert_eq!(parsed.snapshot.mini, None);
+    }
+
+    #[test]
+    fn mini_without_value_is_an_error_and_is_dropped_but_summary_survives() {
+        let parsed =
+            report(r#"{"summary":{"title":"K","lines":[{"text":"x"}]},"mini":{"text":"tarefas"}}"#);
+        assert_eq!(parsed.snapshot.mini, None);
+        assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+        assert_eq!(paths(&parsed, Severity::Error), vec!["mini.value"]);
+    }
+
+    #[test]
+    fn mini_with_wrong_text_type_or_not_an_object_is_an_error_with_path() {
+        let wrong_text = mini_report(r#"{"value":"1","text":7}"#);
+        assert_eq!(wrong_text.snapshot.mini, None);
+        assert_eq!(paths(&wrong_text, Severity::Error), vec!["mini.text"]);
+        let not_object = mini_report(r#""12""#);
+        assert_eq!(not_object.snapshot.mini, None);
+        assert_eq!(paths(&not_object, Severity::Error), vec!["mini"]);
+    }
+
+    #[test]
+    fn mini_value_longer_than_limit_is_truncated_with_warning() {
+        let value = "1".repeat(MAXIMUM_MINI_VALUE_CHARACTERS + 1);
+        let parsed = mini_report(&format!(r#"{{"value":"{value}","text":"t"}}"#));
+        let mini = parsed.snapshot.mini.as_ref().unwrap();
+        assert_eq!(mini.value.chars().count(), MAXIMUM_MINI_VALUE_CHARACTERS);
+        assert!(mini.value.ends_with('…'));
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["mini.value"]);
+        assert!(paths(&parsed, Severity::Error).is_empty());
+    }
+
+    #[test]
+    fn mini_text_is_truncated_by_characters_not_bytes() {
+        let text = "á".repeat(MAXIMUM_MINI_TEXT_CHARACTERS + 1);
+        let parsed = mini_report(&format!(r#"{{"value":"1","text":"{text}"}}"#));
+        let mini = parsed.snapshot.mini.as_ref().unwrap();
+        assert_eq!(mini.text.chars().count(), MAXIMUM_MINI_TEXT_CHARACTERS);
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["mini.text"]);
     }
 
     fn summary_with_blocks(blocks: &str) -> ParsedSnapshot {

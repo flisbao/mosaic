@@ -22,6 +22,7 @@ mod tests {
 
     fn ready(blocks: Vec<Block>) -> WidgetState {
         WidgetState::Ready(WidgetSnapshot {
+            mini: None,
             summary: Summary {
                 title: "T".to_string(),
                 lines: vec![],

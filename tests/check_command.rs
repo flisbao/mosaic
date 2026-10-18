@@ -43,6 +43,22 @@ fn check_valid_widget_exits_zero_and_prints_the_preview() {
 }
 
 #[test]
+fn check_shows_the_mini_field() {
+    let directory = tempfile::tempdir().unwrap();
+    write_widget(
+        directory.path(),
+        r#"{"summary":{"title":"Tarefas"},"mini":{"value":"12","text":"tarefas"}}"#,
+    );
+    let output = run_check(directory.path(), &["sh", "widget.sh"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("mini: 12 tarefas"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn check_with_errors_exits_one_with_paths() {
     let directory = tempfile::tempdir().unwrap();
     write_widget(

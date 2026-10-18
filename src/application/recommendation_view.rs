@@ -38,6 +38,7 @@ fn snapshot(
     detail_lines: Vec<String>,
 ) -> WidgetSnapshot {
     WidgetSnapshot {
+        mini: None,
         alerts: vec![],
         summary: Summary {
             blocks: vec![],

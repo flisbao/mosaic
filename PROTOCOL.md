@@ -30,15 +30,17 @@ O processo recebe o ambiente do Mosaic mais `[widgets.env]` e roda no diretório
   "summary": { "title": "Agenda", "blocks": [ ... ] },
   "detail": { "sections": [ { "heading": "Hoje", "blocks": [ ... ], "items": [ ... ] } ] },
   "actions": [ { "id": "refresh", "label": "Atualizar" } ],
-  "alerts": [ { "id": "deploy-42", "title": "Deploy falhou", "level": "warn" } ]
+  "alerts": [ { "id": "deploy-42", "title": "Deploy falhou", "level": "warn" } ],
+  "mini": { "value": "12", "text": "tarefas", "tone": "warn" }
 }
 ```
 
 - **`protocol`** (opcional, padrão 1): número inteiro positivo. Se for maior que a versão suportada, o widget pede para atualizar o Mosaic; outro valor é erro.
 - **`summary.title`** (obrigatório) e **`summary.blocks`**: o conteúdo da caixa na Home (seção 3). Atalho: no lugar de `blocks` você pode usar `summary.lines`, uma lista de `{ "text", "flag"? }`.
-- **`detail`**: a aba do widget (exige `tab = true` na configuração). Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`.
+- **`detail`**: a aba do widget. A configuração decide a aba e o atalho para ela, com `[[tabs]]` e `tab = "Nome"`. Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`.
 - **`actions`**: `{ "id", "label", "description"?, "applies_to"?: "widget" | "item", "params"? }`.
 - **`alerts`**: seção 5.
+- **`mini`** (opcional): a coluna do modo foco, `{ "value", "text", "tone"? }`. `value` e `text` são obrigatórios; `tone` tem o padrão `normal`. Um `mini` inválido é descartado sem afetar o resto do widget. O `mosaic check` mostra a linha `mini: <value> <text>`.
 
 Campos desconhecidos são ignorados, então um widget novo continua funcionando em um Mosaic mais antigo.
 
@@ -76,6 +78,8 @@ Um bloco é um objeto com `type`, empilhado na ordem em que aparece.
 | indicadores de `stat` | 8 |
 | etiquetas por linha de `rows` | 3 |
 | caracteres por texto | 500 |
+| caracteres de `mini.value` | 8 |
+| caracteres de `mini.text` | 24 |
 | avisos novos por leitura | 5 |
 
 O excesso é cortado e o `mosaic check` avisa.
