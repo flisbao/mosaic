@@ -82,17 +82,32 @@ priority_prompt = "prompts/prioridade.md"
 # JIRA_TOKEN_ENV = "JIRA_TOKEN_CLIENTE"
 # JIRA_MODE = "personal"
 # JIRA_PROJECT = "CLI"
+
+# --- Galeria de blocos (descomente para ver todos os blocos; veja docs/protocol.md) ---
+# [[widgets]]
+# id = "gallery-python"
+# command = "python3"
+# args = ["plugins/gallery.py"]
+# span = 2
+#
+# [[widgets]]
+# id = "gallery-node"
+# command = "node"
+# args = ["plugins/gallery.js"]
+# span = 2
 "#;
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
 const PROMPTS_DIRECTORY_NAME: &str = "prompts";
 const PRIORITY_PROMPT_FILE_NAME: &str = "prioridade.md";
 
-const BUNDLED_PLUGINS: [(&str, &str); 4] = [
+const BUNDLED_PLUGINS: [(&str, &str); 6] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
     ("example.py", include_str!("../../plugins/example.py")),
     ("example.js", include_str!("../../plugins/example.js")),
     ("jira.py", include_str!("../../plugins/jira.py")),
+    ("gallery.py", include_str!("../../plugins/gallery.py")),
+    ("gallery.js", include_str!("../../plugins/gallery.js")),
 ];
 
 pub fn default_config_text() -> &'static str {
@@ -219,6 +234,28 @@ mod tests {
         assert!(text.contains("JIRA_SITE"));
         assert!(text.contains("JIRA_MODE = \"manager\""));
         assert!(text.contains("JIRA_MODE = \"personal\""));
+    }
+
+    #[test]
+    fn install_creates_the_gallery_plugins() {
+        let directory = tempfile::tempdir().unwrap();
+        install_defaults_if_missing(directory.path()).unwrap();
+        for name in ["plugins/gallery.py", "plugins/gallery.js"] {
+            let installed = std::fs::read_to_string(directory.path().join(name)).unwrap();
+            assert!(installed.contains("alerts"), "{name}");
+        }
+    }
+
+    #[test]
+    fn default_config_documents_the_gallery_examples() {
+        let text = default_config_text();
+        assert!(text.contains("# args = [\"plugins/gallery.py\"]"));
+        assert!(text.contains("# args = [\"plugins/gallery.js\"]"));
+        let config = parse_config(text).unwrap();
+        assert!(config
+            .widgets
+            .iter()
+            .all(|widget| !widget.id.as_str().starts_with("gallery")));
     }
 
     #[test]
