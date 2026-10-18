@@ -1,138 +1,34 @@
-use serde::Deserialize;
 use thiserror::Error;
 
-use crate::domain::widget::{
-    ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetSnapshot,
-};
-
-const EMPTY_PARAMS_JSON: &str = "{}";
+use crate::domain::card::Tone;
+use crate::domain::widget::{Flag, WidgetSnapshot};
+use crate::infrastructure::protocol_report::{parse_snapshot_report, Severity};
 
 #[derive(Debug, Error)]
 #[error("saída de plugin não é um JSON válido de snapshot: {0}")]
 pub struct ProtocolError(String);
 
-#[derive(Deserialize)]
-struct RawSnapshot {
-    summary: RawSummary,
-    detail: Option<RawDetail>,
-    #[serde(default)]
-    actions: Vec<RawAction>,
-}
-
-#[derive(Deserialize)]
-struct RawSummary {
-    title: String,
-    #[serde(default)]
-    lines: Vec<RawLine>,
-}
-
-#[derive(Deserialize)]
-struct RawLine {
-    text: String,
-    flag: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RawDetail {
-    #[serde(default)]
-    sections: Vec<RawSection>,
-}
-
-#[derive(Deserialize)]
-struct RawSection {
-    heading: String,
-    #[serde(default)]
-    items: Vec<RawItem>,
-}
-
-#[derive(Deserialize)]
-struct RawItem {
-    id: Option<String>,
-    text: String,
-    flag: Option<String>,
-    meta: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-#[derive(Deserialize)]
-struct RawAction {
-    id: String,
-    label: String,
-    description: Option<String>,
-    applies_to: Option<String>,
-    params: Option<serde_json::Value>,
+impl ProtocolError {
+    pub(crate) fn new(message: impl ToString) -> Self {
+        Self(message.to_string())
+    }
 }
 
 pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
-    let raw: RawSnapshot =
-        serde_json::from_str(json).map_err(|error| ProtocolError(error.to_string()))?;
-    Ok(WidgetSnapshot {
-        alerts: vec![],
-        summary: Summary {
-            blocks: vec![],
-            title: raw.summary.title,
-            lines: raw
-                .summary
-                .lines
-                .into_iter()
-                .map(|line| SummaryLine {
-                    text: line.text,
-                    flag: parse_flag(line.flag.as_deref()),
-                })
-                .collect(),
-        },
-        detail: raw.detail.map(|detail| {
-            detail
-                .sections
-                .into_iter()
-                .map(|section| DetailSection {
-                    blocks: vec![],
-                    heading: section.heading,
-                    items: section
-                        .items
-                        .into_iter()
-                        .map(|item| DetailItem {
-                            id: item.id,
-                            text: item.text,
-                            flag: parse_flag(item.flag.as_deref()),
-                            meta: text_meta(item.meta),
-                        })
-                        .collect(),
-                })
-                .collect()
-        }),
-        actions: raw.actions.into_iter().map(convert_action).collect(),
-    })
-}
-
-fn convert_action(raw: RawAction) -> ActionSpec {
-    ActionSpec {
-        id: raw.id,
-        label: raw.label,
-        description: raw.description,
-        scope: match raw.applies_to.as_deref() {
-            Some("item") => ActionScope::Item,
-            _ => ActionScope::Widget,
-        },
-        params_json: raw
-            .params
-            .map(|params| params.to_string())
-            .unwrap_or_else(|| EMPTY_PARAMS_JSON.to_string()),
+    let parsed = parse_snapshot_report(json)?;
+    let mut snapshot = parsed.snapshot;
+    let errors = parsed
+        .problems
+        .iter()
+        .filter(|problem| problem.severity == Severity::Error);
+    for problem in errors.rev() {
+        snapshot.summary.put_notice_first(
+            format!("bloco inválido: {}: {}", problem.path, problem.message),
+            Tone::Warn,
+            Some(Flag::Warning),
+        );
     }
-}
-
-fn text_meta(meta: Option<serde_json::Map<String, serde_json::Value>>) -> Vec<(String, String)> {
-    meta.into_iter()
-        .flatten()
-        .filter_map(|(key, value)| value.as_str().map(|text| (key, text.to_string())))
-        .collect()
-}
-
-fn parse_flag(flag: Option<&str>) -> Option<Flag> {
-    match flag {
-        Some("updated") => Some(Flag::Updated),
-        Some("warning") => Some(Flag::Warning),
-        _ => None,
-    }
+    Ok(snapshot)
 }
 
 #[cfg(test)]
@@ -245,5 +141,26 @@ mod tests {
     #[test]
     fn missing_summary_title_is_an_error() {
         assert!(parse_snapshot(r#"{"summary":{"lines":[]}}"#).is_err());
+    }
+
+    #[test]
+    fn errors_become_warning_lines_at_the_top_of_the_summary() {
+        let snapshot =
+            parse_snapshot(r#"{"protocol":"x","summary":{"title":"K","lines":[{"text":"ok"}]}}"#)
+                .unwrap();
+        let first = &snapshot.summary.lines[0];
+        assert_eq!(
+            first.text,
+            "bloco inválido: protocol: precisa ser um número inteiro positivo"
+        );
+        assert_eq!(first.flag, Some(Flag::Warning));
+        assert_eq!(snapshot.summary.lines[1].text, "ok");
+    }
+
+    #[test]
+    fn protocol_above_supported_shows_only_the_update_notice() {
+        let snapshot = parse_snapshot(r#"{"protocol":2,"summary":{"title":"K"}}"#).unwrap();
+        assert_eq!(snapshot.summary.lines.len(), 1);
+        assert!(snapshot.summary.lines[0].text.contains("protocolo 2"));
     }
 }

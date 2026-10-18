@@ -44,6 +44,15 @@ pub struct Summary {
 }
 
 impl Summary {
+    pub fn put_notice_first(&mut self, text: String, tone: Tone, flag: Option<Flag>) {
+        if self.blocks.is_empty() {
+            self.lines.insert(0, SummaryLine { text, flag });
+        } else {
+            let line = CardLine { text, tone, flag };
+            self.blocks.insert(0, Block::Lines(vec![line]));
+        }
+    }
+
     pub fn display_blocks(&self) -> Vec<Block> {
         if !self.blocks.is_empty() {
             return self.blocks.clone();
@@ -134,6 +143,27 @@ mod tests {
             lines,
             blocks,
         }
+    }
+
+    #[test]
+    fn notice_goes_to_lines_when_there_are_no_blocks() {
+        let mut target = summary(vec![], vec![]);
+        target.put_notice_first("aviso".to_string(), Tone::Muted, None);
+        assert_eq!(target.lines[0].text, "aviso");
+        assert!(target.blocks.is_empty());
+    }
+
+    #[test]
+    fn notice_becomes_the_first_block_when_blocks_exist() {
+        let mut target = summary(vec![], vec![Block::Lines(vec![card_line("x")])]);
+        target.put_notice_first("aviso".to_string(), Tone::Warn, Some(Flag::Warning));
+        let expected = Block::Lines(vec![CardLine {
+            text: "aviso".to_string(),
+            tone: Tone::Warn,
+            flag: Some(Flag::Warning),
+        }]);
+        assert_eq!(target.blocks[0], expected);
+        assert!(target.lines.is_empty());
     }
 
     #[test]
