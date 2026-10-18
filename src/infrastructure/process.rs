@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READ_CHUNK_BYTES: usize = 8192;
 const CANCEL_RELEASE_LIMIT: Duration = Duration::from_secs(2);
 
