@@ -11,7 +11,8 @@ use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
 use crate::domain::widget::WidgetState;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
-use crate::presentation::widget_view::{flagged, render_blocks, truncate_to_width};
+use crate::presentation::text_fit::{flagged, truncate_to_width};
+use crate::presentation::widget_view::render_blocks;
 
 const HOME_TAB_NAME: &str = "Home";
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
