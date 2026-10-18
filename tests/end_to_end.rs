@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{NaiveDate, NaiveDateTime};
+
 use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
 use mosaic::application::refresh::refresh_widget;
-use mosaic::domain::widget::{WidgetId, WidgetState};
+use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::config::WidgetSettings;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::presentation::app_state::{AppState, Command, Mode, WidgetEntry};
@@ -40,11 +42,19 @@ fn kanban_with_one_item() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn app_for(runner: &PluginRunner) -> AppState {
+    let mut record = WidgetRecord::loading();
+    record.apply(refresh_widget(runner), now());
     AppState::new(vec![WidgetEntry {
         id: WidgetId::new("kanban"),
-        state: refresh_widget(runner),
+        record,
         has_tab: true,
     }])
+}
+
+fn now() -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2026, 10, 18)
+        .and_then(|date| date.and_hms_opt(12, 0, 0))
+        .expect("data válida")
 }
 
 fn press(app: &mut AppState, keys: &[KeyInput]) -> Option<Command> {
@@ -78,8 +88,8 @@ fn confirmed_move_renames_the_item_and_refreshes_the_widget() {
     assert!(matches!(notice, ActionNotice::Succeeded(_)), "{notice:?}");
     assert!(root.join("done/a.md").is_file());
     assert!(!root.join("inbox/a.md").exists());
-    let WidgetState::Ready(snapshot) = state else {
-        panic!("esperava Ready");
+    let Ok(snapshot) = state else {
+        panic!("esperava snapshot");
     };
     let lines: Vec<String> = snapshot
         .summary

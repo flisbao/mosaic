@@ -1,7 +1,7 @@
 use chrono::NaiveDateTime;
 use thiserror::Error;
 
-use crate::domain::widget::{DetailItem, WidgetId, WidgetState};
+use crate::domain::widget::{DetailItem, WidgetId, WidgetRecord};
 
 pub const CHARACTERS_PER_TOKEN: usize = 4;
 pub const META_VALUE_MAXIMUM_CHARACTERS: usize = 40;
@@ -19,7 +19,7 @@ pub struct LlmSelection {
 pub struct WidgetContext<'a> {
     pub widget_id: &'a WidgetId,
     pub selection: &'a LlmSelection,
-    pub state: &'a WidgetState,
+    pub state: &'a WidgetRecord,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,7 +107,7 @@ pub fn build_plan(
 }
 
 fn selected_lines(context: &WidgetContext) -> Vec<String> {
-    let WidgetState::Ready(snapshot) = context.state else {
+    let Some(snapshot) = context.state.snapshot() else {
         return Vec::new();
     };
     let Some(sections) = &snapshot.detail else {
@@ -140,7 +140,7 @@ fn truncate_characters(text: &str, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::widget::{DetailSection, Summary, WidgetId, WidgetSnapshot, WidgetState};
+    use crate::domain::widget::{DetailSection, Summary, WidgetId, WidgetRecord, WidgetSnapshot};
     use chrono::NaiveDate;
 
     fn now() -> NaiveDateTime {
@@ -162,27 +162,32 @@ mod tests {
         }
     }
 
-    fn state(sections: Vec<(&str, Vec<DetailItem>)>) -> WidgetState {
-        WidgetState::Ready(WidgetSnapshot {
-            mini: None,
-            alerts: vec![],
-            summary: Summary {
-                blocks: vec![],
-                title: "Kanban".to_string(),
-                lines: vec![],
-            },
-            detail: Some(
-                sections
-                    .into_iter()
-                    .map(|(heading, items)| DetailSection {
-                        blocks: vec![],
-                        heading: heading.to_string(),
-                        items,
-                    })
-                    .collect(),
-            ),
-            actions: vec![],
-        })
+    fn state(sections: Vec<(&str, Vec<DetailItem>)>) -> WidgetRecord {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(
+            Ok(WidgetSnapshot {
+                mini: None,
+                alerts: vec![],
+                summary: Summary {
+                    blocks: vec![],
+                    title: "Kanban".to_string(),
+                    lines: vec![],
+                },
+                detail: Some(
+                    sections
+                        .into_iter()
+                        .map(|(heading, items)| DetailSection {
+                            blocks: vec![],
+                            heading: heading.to_string(),
+                            items,
+                        })
+                        .collect(),
+                ),
+                actions: vec![],
+            }),
+            now(),
+        );
+        record
     }
 
     fn selection(sections: &[&str], max_items: usize) -> LlmSelection {
@@ -196,7 +201,7 @@ mod tests {
     fn plan_for(
         widget: &str,
         selection: &LlmSelection,
-        state: &WidgetState,
+        state: &WidgetRecord,
     ) -> Result<RecommendationPlan, RecommendationError> {
         let id = WidgetId::new(widget);
         build_plan(
@@ -331,7 +336,9 @@ mod tests {
 
     #[test]
     fn loading_and_failed_widgets_are_skipped() {
-        for widget in [WidgetState::Loading, WidgetState::Failed("x".to_string())] {
+        let mut failing = WidgetRecord::loading();
+        failing.apply::<String>(Err("x".to_string()), now());
+        for widget in [WidgetRecord::loading(), failing] {
             let result = plan_for("kanban", &selection(&["inbox"], 20), &widget);
             assert_eq!(result.unwrap_err(), RecommendationError::NoItems);
         }

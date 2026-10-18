@@ -1,3 +1,7 @@
+use std::fmt::Display;
+
+use chrono::{NaiveDateTime, TimeDelta};
+
 use crate::domain::blocks::{lines::WidgetLine, Block};
 use crate::domain::widget_content::{Alert, Tone};
 
@@ -128,11 +132,72 @@ pub struct WidgetSnapshot {
     pub mini: Option<Mini>,
 }
 
+pub const STALE_AFTER_INTERVALS: u32 = 5;
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum WidgetState {
-    Loading,
-    Ready(WidgetSnapshot),
-    Failed(String),
+pub struct WidgetRecord {
+    snapshot: Option<WidgetSnapshot>,
+    last_success: Option<NaiveDateTime>,
+    last_error: Option<String>,
+    refreshing: bool,
+}
+
+impl WidgetRecord {
+    pub fn loading() -> Self {
+        Self {
+            snapshot: None,
+            last_success: None,
+            last_error: None,
+            refreshing: false,
+        }
+    }
+
+    pub fn apply<E: Display>(&mut self, result: Result<WidgetSnapshot, E>, now: NaiveDateTime) {
+        self.refreshing = false;
+        match result {
+            Ok(snapshot) => {
+                self.snapshot = Some(snapshot);
+                self.last_success = Some(now);
+                self.last_error = None;
+            }
+            Err(error) => self.last_error = Some(error.to_string()),
+        }
+    }
+
+    pub fn begin_refresh(&mut self) {
+        self.refreshing = true;
+    }
+
+    pub fn snapshot(&self) -> Option<&WidgetSnapshot> {
+        self.snapshot.as_ref()
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    pub fn is_failing(&self) -> bool {
+        self.last_error.is_some()
+    }
+
+    pub fn is_refreshing(&self) -> bool {
+        self.refreshing
+    }
+
+    pub fn age(&self, now: NaiveDateTime) -> Option<TimeDelta> {
+        self.last_success
+            .map(|at| (now - at).max(TimeDelta::zero()))
+    }
+
+    pub fn is_stale(&self, now: NaiveDateTime, interval: TimeDelta) -> bool {
+        let Some(age) = self.age(now) else {
+            return false;
+        };
+        let limit_milliseconds = interval
+            .num_milliseconds()
+            .saturating_mul(i64::from(STALE_AFTER_INTERVALS));
+        age.num_milliseconds() > limit_milliseconds
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +205,7 @@ mod tests {
     use super::*;
     use crate::domain::blocks::{lines::WidgetLine, Block};
     use crate::domain::widget_content::Tone;
+    use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 
     fn widget_line(text: &str) -> WidgetLine {
         WidgetLine {
@@ -217,6 +283,125 @@ mod tests {
     fn flag_symbols_match_spec() {
         assert_eq!(Flag::Updated.symbol(), '●');
         assert_eq!(Flag::Warning.symbol(), '⚠');
+    }
+
+    fn base_time() -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 10, 18)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .expect("data válida")
+    }
+
+    fn seconds_after(base: NaiveDateTime, seconds: i64) -> NaiveDateTime {
+        base + TimeDelta::seconds(seconds)
+    }
+
+    fn succeed(title: &str) -> Result<WidgetSnapshot, String> {
+        Ok(snapshot(title))
+    }
+
+    fn fail(message: &str) -> Result<WidgetSnapshot, String> {
+        Err(message.to_string())
+    }
+
+    fn snapshot(title: &str) -> WidgetSnapshot {
+        WidgetSnapshot {
+            summary: Summary {
+                title: title.to_string(),
+                lines: vec![],
+                blocks: vec![],
+            },
+            detail: None,
+            actions: vec![],
+            alerts: vec![],
+            mini: None,
+        }
+    }
+
+    #[test]
+    fn success_stores_snapshot_and_clears_error() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.apply(fail("falha"), now);
+        record.apply(succeed("Kanban"), seconds_after(now, 1));
+        assert_eq!(record.snapshot(), Some(&snapshot("Kanban")));
+        assert_eq!(record.last_error(), None);
+        assert!(!record.is_failing());
+    }
+
+    #[test]
+    fn failure_after_success_keeps_last_good_snapshot_and_records_error() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.apply(succeed("Kanban"), now);
+        record.apply(fail("fora do ar"), seconds_after(now, 1));
+        assert_eq!(record.snapshot(), Some(&snapshot("Kanban")));
+        assert_eq!(record.last_error(), Some("fora do ar"));
+        assert!(record.is_failing());
+    }
+
+    #[test]
+    fn first_load_failure_has_no_snapshot_and_has_error() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.apply(fail("fora do ar"), now);
+        assert_eq!(record.snapshot(), None);
+        assert_eq!(record.last_error(), Some("fora do ar"));
+        assert_eq!(record.age(seconds_after(now, 10)), None);
+    }
+
+    #[test]
+    fn age_is_none_before_first_success() {
+        let record = WidgetRecord::loading();
+        assert_eq!(record.age(base_time()), None);
+    }
+
+    #[test]
+    fn age_saturates_to_zero_when_clock_goes_backwards() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.apply(succeed("Kanban"), now);
+        assert_eq!(record.age(seconds_after(now, -10)), Some(TimeDelta::zero()));
+    }
+
+    #[test]
+    fn is_stale_only_after_five_intervals_even_without_failure() {
+        let now = base_time();
+        let interval = TimeDelta::seconds(30);
+        let mut record = WidgetRecord::loading();
+        record.apply(succeed("Kanban"), now);
+        assert!(!record.is_stale(seconds_after(now, 150), interval));
+        assert!(record.is_stale(seconds_after(now, 151), interval));
+        assert!(!record.is_failing());
+    }
+
+    #[test]
+    fn begin_refresh_sets_flag_and_apply_clears_it() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.begin_refresh();
+        assert!(record.is_refreshing());
+        record.apply(succeed("Kanban"), now);
+        assert!(!record.is_refreshing());
+    }
+
+    #[test]
+    fn persistent_failure_keeps_failing_until_a_success() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        for second in 0..3 {
+            record.apply(fail("falha"), seconds_after(now, second));
+        }
+        assert!(record.is_failing());
+        record.apply(succeed("Kanban"), seconds_after(now, 3));
+        assert!(!record.is_failing());
+    }
+
+    #[test]
+    fn huge_interval_does_not_overflow_the_staleness_limit() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.apply(succeed("Kanban"), now);
+        assert!(!record.is_stale(seconds_after(now, 3600), TimeDelta::MAX));
     }
 
     #[test]

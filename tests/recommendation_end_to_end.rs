@@ -12,7 +12,7 @@ use mosaic::application::llm::{
 use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContext};
 use mosaic::application::recommendation_view::recommendation_snapshot;
 use mosaic::application::refresh::refresh_widget;
-use mosaic::domain::widget::WidgetId;
+use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::config::WidgetSettings;
 use mosaic::infrastructure::llm_cli::ClaudeCli;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
@@ -75,7 +75,8 @@ fn run_plan(
 ) {
     let root = kanban_root(directory);
     let runner = kanban_runner(&root);
-    let state = refresh_widget(&runner);
+    let mut state = WidgetRecord::loading();
+    state.apply(refresh_widget(&runner), now());
     let selection = LlmSelection {
         sections: vec!["inbox".to_string()],
         max_items: 20,

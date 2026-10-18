@@ -1,12 +1,17 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use chrono::NaiveDateTime;
+
 use crate::application::pomodoro_notifications::{alert_for, AlertMessage};
+use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
 use crate::application::recommendation_view::IA_WIDGET_ID;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
-use crate::domain::widget::{ActionScope, ActionSpec, DetailItem, WidgetId, WidgetState};
+use crate::domain::widget::{
+    ActionScope, ActionSpec, DetailItem, WidgetId, WidgetRecord, WidgetSnapshot,
+};
 use crate::presentation::key_input::KeyInput;
 
 const HOME_TAB: usize = 0;
@@ -19,7 +24,7 @@ const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar"
 #[derive(Debug, Clone, PartialEq)]
 pub struct WidgetEntry {
     pub id: WidgetId,
-    pub state: WidgetState,
+    pub record: WidgetRecord,
     pub has_tab: bool,
 }
 
@@ -138,10 +143,26 @@ impl AppState {
         self.notice = Some(text);
     }
 
-    pub fn update_widget(&mut self, id: &WidgetId, state: WidgetState) {
+    pub fn update_widget(
+        &mut self,
+        id: &WidgetId,
+        result: Result<WidgetSnapshot, SourceError>,
+        now: NaiveDateTime,
+    ) {
         if let Some(entry) = self.entries.iter_mut().find(|entry| &entry.id == id) {
-            entry.state = state;
+            entry.record.apply(result, now);
         }
+        self.settle_after_widget_change();
+    }
+
+    pub fn begin_widget_refresh(&mut self, id: &WidgetId) {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| &entry.id == id) {
+            entry.record.begin_refresh();
+        }
+        self.settle_after_widget_change();
+    }
+
+    fn settle_after_widget_change(&mut self) {
         if matches!(self.mode, Mode::ChoosingAction { .. }) {
             self.mode = Mode::Browsing;
         }
@@ -152,22 +173,22 @@ impl AppState {
         let Some(index) = self.active_entry_index() else {
             return Vec::new();
         };
-        match &self.entries[index].state {
-            WidgetState::Ready(snapshot) => snapshot
-                .detail
-                .iter()
-                .flatten()
-                .flat_map(|section| section.items.iter())
-                .collect(),
-            _ => Vec::new(),
-        }
+        let Some(snapshot) = self.entries[index].record.snapshot() else {
+            return Vec::new();
+        };
+        snapshot
+            .detail
+            .iter()
+            .flatten()
+            .flat_map(|section| section.items.iter())
+            .collect()
     }
 
     pub fn available_actions(&self) -> Vec<ActionSpec> {
         let Some(index) = self.active_entry_index() else {
             return Vec::new();
         };
-        let WidgetState::Ready(snapshot) = &self.entries[index].state else {
+        let Some(snapshot) = self.entries[index].record.snapshot() else {
             return Vec::new();
         };
         let item_selected = self.selected_detail_item_id().is_some();
@@ -271,7 +292,7 @@ impl AppState {
     fn ia_is_loading(&self) -> bool {
         self.entries
             .iter()
-            .any(|entry| entry.id.as_str() == IA_WIDGET_ID && entry.state == WidgetState::Loading)
+            .any(|entry| entry.id.as_str() == IA_WIDGET_ID && entry.record.is_refreshing())
     }
 
     fn toggle_pomodoro(&mut self) {
@@ -343,13 +364,9 @@ impl AppState {
     }
 
     fn has_detail(&self) -> bool {
-        match self
-            .active_entry_index()
-            .map(|index| &self.entries[index].state)
-        {
-            Some(WidgetState::Ready(snapshot)) => snapshot.detail.is_some(),
-            _ => false,
-        }
+        self.active_entry_index()
+            .and_then(|index| self.entries[index].record.snapshot())
+            .is_some_and(|snapshot| snapshot.detail.is_some())
     }
 
     fn move_selection(&mut self, direction: i32) {
@@ -393,6 +410,7 @@ mod tests {
     use crate::domain::widget::{
         ActionScope, ActionSpec, DetailItem, DetailSection, Summary, WidgetSnapshot,
     };
+    use chrono::NaiveDate;
 
     fn action(id: &str, scope: ActionScope, description: &str) -> ActionSpec {
         ActionSpec {
@@ -404,46 +422,57 @@ mod tests {
         }
     }
 
-    fn kanban_state() -> WidgetState {
+    fn now() -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 10, 18)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .expect("data válida")
+    }
+
+    fn kanban_record() -> WidgetRecord {
         let item = |id: &str| DetailItem {
             id: Some(id.to_string()),
             text: id.to_string(),
             flag: None,
             meta: vec![],
         };
-        WidgetState::Ready(WidgetSnapshot {
-            mini: None,
-            alerts: vec![],
-            summary: Summary {
-                blocks: vec![],
-                title: "Kanban".to_string(),
-                lines: vec![],
-            },
-            detail: Some(vec![DetailSection {
-                blocks: vec![],
-                heading: "inbox".to_string(),
-                items: vec![item("inbox/a.md"), item("inbox/b.md")],
-            }]),
-            actions: vec![
-                action("move", ActionScope::Item, "Mover para done"),
-                action("refresh", ActionScope::Widget, "Atualizar kanban"),
-            ],
-        })
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(
+            Ok(WidgetSnapshot {
+                mini: None,
+                alerts: vec![],
+                summary: Summary {
+                    blocks: vec![],
+                    title: "Kanban".to_string(),
+                    lines: vec![],
+                },
+                detail: Some(vec![DetailSection {
+                    blocks: vec![],
+                    heading: "inbox".to_string(),
+                    items: vec![item("inbox/a.md"), item("inbox/b.md")],
+                }]),
+                actions: vec![
+                    action("move", ActionScope::Item, "Mover para done"),
+                    action("refresh", ActionScope::Widget, "Atualizar kanban"),
+                ],
+            }),
+            now(),
+        );
+        record
     }
 
-    fn entry(id: &str, state: WidgetState, has_tab: bool) -> WidgetEntry {
+    fn entry(id: &str, record: WidgetRecord, has_tab: bool) -> WidgetEntry {
         WidgetEntry {
             id: WidgetId::new(id),
-            state,
+            record,
             has_tab,
         }
     }
 
     fn app() -> AppState {
         AppState::new(vec![
-            entry("kanban", kanban_state(), true),
-            entry("plain", WidgetState::Loading, false),
-            entry("notes", WidgetState::Loading, true),
+            entry("kanban", kanban_record(), true),
+            entry("plain", WidgetRecord::loading(), false),
+            entry("notes", WidgetRecord::loading(), true),
         ])
     }
 
@@ -504,7 +533,7 @@ mod tests {
         let mut app = app();
         press(&mut app, &[KeyInput::Enter]);
         assert_eq!(app.active_tab(), 1);
-        let mut app = AppState::new(vec![entry("plain", WidgetState::Loading, false)]);
+        let mut app = AppState::new(vec![entry("plain", WidgetRecord::loading(), false)]);
         press(&mut app, &[KeyInput::Enter]);
         assert_eq!(app.active_tab(), 0);
     }
@@ -605,7 +634,18 @@ mod tests {
     fn update_widget_clamps_selection_and_closes_action_menu() {
         let mut app = app();
         press(&mut app, &[KeyInput::Tab, KeyInput::Down, character('a')]);
-        app.update_widget(&WidgetId::new("kanban"), WidgetState::Loading);
+        let emptied = WidgetSnapshot {
+            mini: None,
+            alerts: vec![],
+            summary: Summary {
+                blocks: vec![],
+                title: "Kanban".to_string(),
+                lines: vec![],
+            },
+            detail: None,
+            actions: vec![],
+        };
+        app.update_widget(&WidgetId::new("kanban"), Ok(emptied), now());
         assert_eq!(app.mode(), &Mode::Browsing);
         assert_eq!(app.selected_item(), 0);
     }
@@ -809,10 +849,15 @@ mod tests {
     }
     #[test]
     fn i_is_blocked_with_notice_while_the_ia_is_loading() {
-        let mut app = AppState::new(vec![entry("ia", WidgetState::Loading, true)]);
+        let mut app = AppState::new(vec![entry("ia", WidgetRecord::loading(), true)]);
+        app.begin_widget_refresh(&WidgetId::new("ia"));
         assert_eq!(app.handle_key(character('i')), None);
         assert!(app.notice().unwrap().contains("processando"));
-        app.update_widget(&WidgetId::new("ia"), WidgetState::Failed("x".to_string()));
+        app.update_widget(
+            &WidgetId::new("ia"),
+            Err(SourceError::Failed("x".to_string())),
+            now(),
+        );
         assert_eq!(
             app.handle_key(character('i')),
             Some(Command::RequestRecommendation)

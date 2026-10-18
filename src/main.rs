@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+
+use chrono::NaiveDateTime;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,7 +17,7 @@ use mosaic::application::llm::{
     execute_recommendation, LlmError, LlmRunner, RecommendationStore, StoredRecommendation,
 };
 use mosaic::application::pomodoro_notifications::{AlertMessage, Notifier};
-use mosaic::application::ports::Clock;
+use mosaic::application::ports::{Clock, SourceError};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
@@ -27,7 +29,7 @@ use mosaic::application::widget_notices::with_interval_notice;
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::WidgetSnapshot;
-use mosaic::domain::widget::{WidgetId, WidgetState};
+use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, parse_config, AppConfig, ConfigError, Harness, LlmConfig,
@@ -76,8 +78,8 @@ enum AppError {
 }
 
 enum AppEvent {
-    WidgetUpdated(WidgetId, WidgetState),
-    ActionFinished(WidgetId, ActionNotice, WidgetState),
+    WidgetUpdated(WidgetId, Result<WidgetSnapshot, SourceError>),
+    ActionFinished(WidgetId, ActionNotice, Result<WidgetSnapshot, SourceError>),
     RecommendationFinished(Result<StoredRecommendation, LlmError>),
 }
 
@@ -193,12 +195,13 @@ fn run() -> Result<(), AppError> {
     let (sender, receiver) = mpsc::channel();
     let services = build_services(&config, &directory, &sender);
     let mut spans: Vec<u16> = config.widgets.iter().map(|widget| widget.span).collect();
+    let clock = SystemClock;
     let mut entries: Vec<WidgetEntry> = config
         .widgets
         .iter()
         .map(|widget| WidgetEntry {
             id: widget.id.clone(),
-            state: WidgetState::Loading,
+            record: WidgetRecord::loading(),
             has_tab: true,
         })
         .collect();
@@ -206,7 +209,7 @@ fn run() -> Result<(), AppError> {
         spans.push(IA_WIDGET_SPAN);
         entries.push(WidgetEntry {
             id: WidgetId::new(IA_WIDGET_ID),
-            state: stored_ia_state(llm.store.as_ref()),
+            record: stored_ia_record(llm.store.as_ref(), clock.now()),
             has_tab: true,
         });
     }
@@ -214,7 +217,6 @@ fn run() -> Result<(), AppError> {
     if config.pomodoro.enabled {
         state = state.with_pomodoro(PomodoroTimer::new(config.pomodoro.settings()));
     }
-    let clock = SystemClock;
 
     let mut terminal = ratatui::init();
     let result = event_loop(
@@ -363,7 +365,7 @@ fn event_loop(
     let mut alert_tracker = AlertTracker::new();
     loop {
         while let Ok(app_event) = receiver.try_recv() {
-            apply_event(state, app_event, services, &mut alert_tracker);
+            apply_event(state, app_event, services, &mut alert_tracker, clock.now());
         }
         let elapsed = last_tick.elapsed();
         last_tick = Instant::now();
@@ -400,9 +402,9 @@ fn announce_widget_alerts(
     services: &Services,
     tracker: &mut AlertTracker,
     id: &WidgetId,
-    widget_state: &WidgetState,
+    result: &Result<WidgetSnapshot, SourceError>,
 ) {
-    let WidgetState::Ready(snapshot) = widget_state else {
+    let Ok(snapshot) = result else {
         return;
     };
     for alert in tracker.fresh_alerts(id, &snapshot.alerts) {
@@ -422,19 +424,20 @@ fn apply_event(
     app_event: AppEvent,
     services: &Services,
     tracker: &mut AlertTracker,
+    now: NaiveDateTime,
 ) {
     match app_event {
-        AppEvent::WidgetUpdated(id, widget_state) => {
-            announce_widget_alerts(state, services, tracker, &id, &widget_state);
-            state.update_widget(&id, widget_state)
+        AppEvent::WidgetUpdated(id, result) => {
+            announce_widget_alerts(state, services, tracker, &id, &result);
+            state.update_widget(&id, result, now)
         }
-        AppEvent::ActionFinished(id, notice, widget_state) => {
-            announce_widget_alerts(state, services, tracker, &id, &widget_state);
-            state.update_widget(&id, widget_state);
+        AppEvent::ActionFinished(id, notice, result) => {
+            announce_widget_alerts(state, services, tracker, &id, &result);
+            state.update_widget(&id, result, now);
             state.show_notice(describe_notice(notice));
         }
         AppEvent::RecommendationFinished(result) => {
-            apply_recommendation_result(state, services, result)
+            apply_recommendation_result(state, services, result, now)
         }
     }
 }
@@ -443,25 +446,34 @@ fn apply_recommendation_result(
     state: &mut AppState,
     services: &Services,
     result: Result<StoredRecommendation, LlmError>,
+    now: NaiveDateTime,
 ) {
     let ia = WidgetId::new(IA_WIDGET_ID);
     match result {
         Ok(stored) => {
-            state.update_widget(&ia, WidgetState::Ready(recommendation_snapshot(&stored)));
+            state.update_widget(&ia, Ok(recommendation_snapshot(&stored)), now);
             state.show_notice(RECOMMENDATION_READY_MESSAGE.to_string());
         }
         Err(LlmError::Unavailable(message)) => {
             if let Some(llm) = &services.llm {
-                state.update_widget(&ia, stored_ia_state(llm.store.as_ref()));
+                state.update_widget(&ia, stored_ia_result(llm.store.as_ref()), now);
             }
             state.show_notice(message);
         }
-        Err(LlmError::Failed(message)) => state.update_widget(&ia, WidgetState::Failed(message)),
+        Err(LlmError::Failed(message)) => {
+            state.update_widget(&ia, Err(SourceError::Failed(message)), now)
+        }
     }
 }
 
-fn stored_ia_state(store: &dyn RecommendationStore) -> WidgetState {
-    WidgetState::Ready(match store.load() {
+fn stored_ia_record(store: &dyn RecommendationStore, now: NaiveDateTime) -> WidgetRecord {
+    let mut record = WidgetRecord::loading();
+    record.apply(stored_ia_result(store), now);
+    record
+}
+
+fn stored_ia_result(store: &dyn RecommendationStore) -> Result<WidgetSnapshot, SourceError> {
+    Ok(match store.load() {
         Some(stored) => recommendation_snapshot(&stored),
         None => idle_snapshot(),
     })
@@ -491,8 +503,8 @@ fn spawn_action(action: ConfirmedAction, runtime: &WidgetRuntime, sender: &Sende
     let sender = sender.clone();
     thread::spawn(move || {
         let widget = action.widget().clone();
-        let (notice, widget_state) = execute_confirmed(runner.as_ref(), runner.as_ref(), action);
-        let _ = sender.send(AppEvent::ActionFinished(widget, notice, widget_state));
+        let (notice, result) = execute_confirmed(runner.as_ref(), runner.as_ref(), action);
+        let _ = sender.send(AppEvent::ActionFinished(widget, notice, result));
     });
 }
 
@@ -525,7 +537,7 @@ fn request_recommendation(
                 Some(WidgetContext {
                     widget_id: &entry.id,
                     selection: llm.selections.get(entry.id.as_str())?,
-                    state: &entry.state,
+                    state: &entry.record,
                 })
             })
             .collect();
@@ -556,7 +568,7 @@ fn start_recommendation(
     let Some(llm) = &services.llm else {
         return;
     };
-    state.update_widget(&WidgetId::new(IA_WIDGET_ID), WidgetState::Loading);
+    state.begin_widget_refresh(&WidgetId::new(IA_WIDGET_ID));
     let runner = Arc::clone(&llm.runner);
     let store = Arc::clone(&llm.store);
     let model = llm.config.model.clone();

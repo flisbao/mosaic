@@ -1,11 +1,8 @@
-use crate::application::ports::WidgetSource;
-use crate::domain::widget::WidgetState;
+use crate::application::ports::{SourceError, WidgetSource};
+use crate::domain::widget::WidgetSnapshot;
 
-pub fn refresh_widget(source: &dyn WidgetSource) -> WidgetState {
-    match source.snapshot() {
-        Ok(snapshot) => WidgetState::Ready(snapshot),
-        Err(error) => WidgetState::Failed(error.to_string()),
-    }
+pub fn refresh_widget(source: &dyn WidgetSource) -> Result<WidgetSnapshot, SourceError> {
+    source.snapshot()
 }
 
 #[cfg(test)]
@@ -59,25 +56,20 @@ pub(crate) mod fakes {
 mod tests {
     use super::fakes::{snapshot_titled, FakeSource};
     use super::*;
-    use crate::application::ports::SourceError;
-    use crate::domain::widget::WidgetState;
 
     #[test]
-    fn successful_snapshot_becomes_ready() {
+    fn successful_snapshot_is_returned() {
         let source = FakeSource::returning(Ok(snapshot_titled("Kanban")));
-        assert_eq!(
-            refresh_widget(&source),
-            WidgetState::Ready(snapshot_titled("Kanban"))
-        );
+        assert_eq!(refresh_widget(&source), Ok(snapshot_titled("Kanban")));
         assert_eq!(source.call_count(), 1);
     }
 
     #[test]
-    fn source_failure_becomes_failed_with_message() {
+    fn source_failure_is_returned_as_error() {
         let source = FakeSource::returning(Err(SourceError::Failed("fora do ar".to_string())));
         assert_eq!(
             refresh_widget(&source),
-            WidgetState::Failed("fora do ar".to_string())
+            Err(SourceError::Failed("fora do ar".to_string()))
         );
     }
 }

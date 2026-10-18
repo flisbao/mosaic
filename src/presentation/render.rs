@@ -9,7 +9,6 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
-use crate::domain::widget::WidgetState;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_view::render_blocks;
@@ -154,9 +153,13 @@ fn render_box(
 }
 
 fn box_lines(entry: &WidgetEntry, width: usize) -> Vec<Line<'static>> {
-    match &entry.state {
-        WidgetState::Loading => vec![Line::from(LOADING_TEXT)],
-        WidgetState::Failed(message) => message
+    let record = &entry.record;
+    if record.is_refreshing() {
+        return vec![Line::from(LOADING_TEXT)];
+    }
+    match (record.snapshot(), record.last_error()) {
+        (Some(snapshot), _) => render_blocks(&snapshot.summary.display_blocks(), width),
+        (None, Some(message)) => message
             .lines()
             .map(|line| {
                 Line::styled(
@@ -165,7 +168,7 @@ fn box_lines(entry: &WidgetEntry, width: usize) -> Vec<Line<'static>> {
                 )
             })
             .collect(),
-        WidgetState::Ready(snapshot) => render_blocks(&snapshot.summary.display_blocks(), width),
+        (None, None) => vec![Line::from(LOADING_TEXT)],
     }
 }
 
@@ -196,7 +199,7 @@ fn render_detail(frame: &mut Frame, state: &AppState, area: Rect) {
 }
 
 fn detail_lines(entry: &WidgetEntry, selected: usize, width: usize) -> (Vec<Line<'static>>, usize) {
-    let WidgetState::Ready(snapshot) = &entry.state else {
+    let Some(snapshot) = entry.record.snapshot() else {
         return (box_lines(entry, width), 0);
     };
     let Some(sections) = &snapshot.detail else {
@@ -339,9 +342,9 @@ fn action_menu_lines(state: &AppState, selected: usize) -> Vec<String> {
 }
 
 fn entry_title(entry: &WidgetEntry) -> String {
-    match &entry.state {
-        WidgetState::Ready(snapshot) => snapshot.summary.title.clone(),
-        _ => entry.id.as_str().to_string(),
+    match entry.record.snapshot() {
+        Some(snapshot) => snapshot.summary.title.clone(),
+        None => entry.id.as_str().to_string(),
     }
 }
 
@@ -379,7 +382,7 @@ mod tests {
     use super::*;
     use crate::domain::widget::{
         ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetId,
-        WidgetSnapshot, WidgetState,
+        WidgetRecord, WidgetSnapshot,
     };
     use crate::presentation::app_state::{AppState, WidgetEntry};
     use crate::presentation::key_input::KeyInput;
@@ -415,15 +418,27 @@ mod tests {
         }
     }
 
-    fn entry(id: &str, state: WidgetState, has_tab: bool) -> WidgetEntry {
+    fn ready(snapshot: WidgetSnapshot) -> WidgetRecord {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(Ok(snapshot), now());
+        record
+    }
+
+    fn failed(message: &str) -> WidgetRecord {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(Err(message.to_string()), now());
+        record
+    }
+
+    fn entry(id: &str, record: WidgetRecord, has_tab: bool) -> WidgetEntry {
         WidgetEntry {
             id: WidgetId::new(id),
-            state,
+            record,
             has_tab,
         }
     }
 
-    fn kanban_entry() -> WidgetEntry {
+    fn kanban_snapshot() -> WidgetSnapshot {
         let mut kanban = snapshot("Kanban", vec![plain_line("inbox 3")]);
         kanban.detail = Some(vec![DetailSection {
             blocks: vec![],
@@ -450,7 +465,11 @@ mod tests {
             scope: ActionScope::Item,
             params_json: "{}".to_string(),
         }];
-        entry("kanban", WidgetState::Ready(kanban), true)
+        kanban
+    }
+
+    fn kanban_entry() -> WidgetEntry {
+        entry("kanban", ready(kanban_snapshot()), true)
     }
 
     fn draw(state: &AppState, width: u16, height: u16) -> Vec<String> {
@@ -491,12 +510,8 @@ mod tests {
     fn home_draws_one_box_per_widget_title() {
         let state = AppState::new(vec![
             kanban_entry(),
-            entry(
-                "agenda",
-                WidgetState::Ready(snapshot("Agenda", vec![])),
-                false,
-            ),
-            entry("time", WidgetState::Ready(snapshot("Time", vec![])), false),
+            entry("agenda", ready(snapshot("Agenda", vec![])), false),
+            entry("time", ready(snapshot("Time", vec![])), false),
         ]);
         let text = screen(&state, 100, 31);
         for title in ["Kanban", "Agenda", "Time"] {
@@ -506,11 +521,7 @@ mod tests {
 
     #[test]
     fn failed_widget_shows_error_inside_its_box() {
-        let state = AppState::new(vec![entry(
-            "kanban",
-            WidgetState::Failed("plugin quebrou".to_string()),
-            false,
-        )]);
+        let state = AppState::new(vec![entry("kanban", failed("plugin quebrou"), false)]);
         assert!(screen(&state, 100, 30).contains("plugin quebrou"));
     }
 
@@ -522,7 +533,7 @@ mod tests {
         };
         let state = AppState::new(vec![entry(
             "kanban",
-            WidgetState::Ready(snapshot("Kanban", vec![line])),
+            ready(snapshot("Kanban", vec![line])),
             false,
         )]);
         assert!(screen(&state, 100, 30).contains("● inbox 3"));
@@ -584,7 +595,7 @@ mod tests {
     fn wide_characters_are_truncated_with_ellipsis_inside_box() {
         let state = AppState::new(vec![entry(
             "kanban",
-            WidgetState::Ready(snapshot("Kanban", vec![plain_line(&"日本語".repeat(15))])),
+            ready(snapshot("Kanban", vec![plain_line(&"日本語".repeat(15))])),
             false,
         )]);
         let rows = draw(&state, 60, 20);
@@ -716,7 +727,7 @@ mod tests {
         let sentence = format!("{} FIM-DA-FRASE", "palavra ".repeat(30));
         let mut state = AppState::new(vec![entry(
             "ia",
-            WidgetState::Ready(WidgetSnapshot {
+            ready(WidgetSnapshot {
                 mini: None,
                 alerts: vec![],
                 summary: Summary {
@@ -790,7 +801,7 @@ mod tests {
     fn entry_with_blocks(blocks: Vec<blocks::Block>) -> WidgetEntry {
         let mut widget_snapshot = snapshot("Agenda", vec![]);
         widget_snapshot.summary.blocks = blocks;
-        entry("agenda", WidgetState::Ready(widget_snapshot), true)
+        entry("agenda", ready(widget_snapshot), true)
     }
 
     fn rows_and_stat_blocks() -> Vec<blocks::Block> {
@@ -846,7 +857,7 @@ mod tests {
     fn legacy_lines_still_render_exactly_as_before() {
         let state = AppState::new(vec![entry(
             "kanban",
-            WidgetState::Ready(snapshot(
+            ready(snapshot(
                 "Kanban",
                 vec![
                     plain_line("inbox 3"),
@@ -865,13 +876,10 @@ mod tests {
 
     #[test]
     fn detail_section_shows_blocks_before_items() {
-        let mut entry = kanban_entry();
-        let WidgetState::Ready(snapshot) = &mut entry.state else {
-            panic!("esperava Ready");
-        };
+        let mut snapshot = kanban_snapshot();
         let sections = snapshot.detail.as_mut().unwrap();
         sections[0].blocks = vec![blocks::Block::Lines(vec![widget_line("RESUMO DA SEÇÃO")])];
-        let mut state = AppState::new(vec![entry]);
+        let mut state = AppState::new(vec![entry("kanban", ready(snapshot), true)]);
         press(&mut state, &[KeyInput::Tab]);
         let rows = draw(&state, 100, 30);
         let position = |needle: &str| rows.iter().position(|row| row.contains(needle)).unwrap();
@@ -881,15 +889,12 @@ mod tests {
 
     #[test]
     fn selection_ignores_block_content() {
-        let mut entry = kanban_entry();
-        let WidgetState::Ready(snapshot) = &mut entry.state else {
-            panic!("esperava Ready");
-        };
+        let mut snapshot = kanban_snapshot();
         snapshot.detail.as_mut().unwrap()[0].blocks = vec![blocks::Block::Lines(vec![
             widget_line("a"),
             widget_line("b"),
         ])];
-        let mut state = AppState::new(vec![entry]);
+        let mut state = AppState::new(vec![entry("kanban", ready(snapshot), true)]);
         press(&mut state, &[KeyInput::Tab, KeyInput::Down]);
         assert_eq!(state.selected_item(), 1);
         press(&mut state, &[KeyInput::Down]);
