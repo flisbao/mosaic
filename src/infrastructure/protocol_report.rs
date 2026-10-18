@@ -9,6 +9,8 @@ use crate::domain::widget::{
 };
 use crate::infrastructure::plugin_protocol::ProtocolError;
 
+pub use crate::domain::snapshot_report::{ParsedSnapshot, Problem, Severity};
+
 pub const SUPPORTED_PROTOCOL_VERSION: u64 = 1;
 pub const MAXIMUM_TEXT_CHARACTERS: usize = 500;
 pub const MAXIMUM_ALERT_ID_CHARACTERS: usize = 100;
@@ -27,25 +29,6 @@ const DETAIL_KEYS: [&str; 1] = ["sections"];
 const SECTION_KEYS: [&str; 3] = ["heading", "items", "blocks"];
 const ITEM_KEYS: [&str; 4] = ["id", "text", "flag", "meta"];
 const ACTION_KEYS: [&str; 5] = ["id", "label", "description", "applies_to", "params"];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    Error,
-    Warning,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Problem {
-    pub path: String,
-    pub message: String,
-    pub severity: Severity,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedSnapshot {
-    pub snapshot: WidgetSnapshot,
-    pub problems: Vec<Problem>,
-}
 
 pub fn unsupported_protocol_text(version: u64) -> String {
     format!("este widget exige o protocolo {version}; atualize o panel-tui")
