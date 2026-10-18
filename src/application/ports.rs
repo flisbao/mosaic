@@ -10,9 +10,12 @@ pub enum SourceError {
     Failed(String),
 }
 
-pub trait WidgetSource: Send + Sync {
-    fn snapshot(&self) -> Result<WidgetSnapshot, SourceError>;
+pub trait Cancellable: Send + Sync {
     fn cancel(&self);
+}
+
+pub trait WidgetSource: Cancellable {
+    fn snapshot(&self) -> Result<WidgetSnapshot, SourceError>;
 }
 
 pub trait ActionExecutor: Send + Sync {

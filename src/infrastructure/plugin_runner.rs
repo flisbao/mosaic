@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
+use crate::application::ports::{ActionExecutor, Cancellable, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
 use crate::infrastructure::config::WidgetSettings;
@@ -51,7 +51,9 @@ impl WidgetSource for PluginRunner {
         let output = self.raw_snapshot_output()?;
         parse_snapshot(&output).map_err(|error| SourceError::Failed(error.to_string()))
     }
+}
 
+impl Cancellable for PluginRunner {
     fn cancel(&self) {
         self.cancel_flag.cancel();
     }

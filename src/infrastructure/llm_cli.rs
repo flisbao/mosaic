@@ -3,6 +3,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
+use crate::application::ports::Cancellable;
 use crate::infrastructure::private_directory::prepare_private_directory;
 use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
 
@@ -19,6 +20,7 @@ pub struct ClaudeCli {
     working_directory: PathBuf,
     max_budget_usd: Option<f64>,
     timeout: Duration,
+    cancel_flag: CancelFlag,
 }
 
 impl ClaudeCli {
@@ -33,6 +35,7 @@ impl ClaudeCli {
             working_directory,
             max_budget_usd,
             timeout,
+            cancel_flag: CancelFlag::default(),
         }
     }
 
@@ -75,7 +78,14 @@ impl LlmRunner for ClaudeCli {
             &self.environment(),
             Some(&request.prompt),
             self.timeout,
+            &self.cancel_flag,
         )
+    }
+}
+
+impl Cancellable for ClaudeCli {
+    fn cancel(&self) {
+        self.cancel_flag.cancel();
     }
 }
 
@@ -83,6 +93,7 @@ pub struct OpenCodeCli {
     program: String,
     working_directory: PathBuf,
     timeout: Duration,
+    cancel_flag: CancelFlag,
 }
 
 impl OpenCodeCli {
@@ -91,6 +102,7 @@ impl OpenCodeCli {
             program,
             working_directory,
             timeout,
+            cancel_flag: CancelFlag::default(),
         }
     }
 
@@ -136,7 +148,14 @@ impl LlmRunner for OpenCodeCli {
             &self.environment(),
             None,
             self.timeout,
+            &self.cancel_flag,
         )
+    }
+}
+
+impl Cancellable for OpenCodeCli {
+    fn cancel(&self) {
+        self.cancel_flag.cancel();
     }
 }
 
@@ -147,6 +166,7 @@ fn run_cli(
     environment: &[(String, String)],
     stdin_text: Option<&str>,
     timeout: Duration,
+    cancel: &CancelFlag,
 ) -> Result<String, LlmError> {
     prepare_private_directory(working_directory)
         .map_err(|error| LlmError::Failed(error.to_string()))?;
@@ -159,7 +179,7 @@ fn run_cli(
         timeout,
         maximum_output_bytes: MAXIMUM_LLM_OUTPUT_BYTES,
     };
-    run_process(command, stdin_text, &limits, &CancelFlag::default()).map_err(|error| {
+    run_process(command, stdin_text, &limits, cancel).map_err(|error| {
         if error.program_not_found() {
             LlmError::Unavailable(format!("`{program}` não encontrado no PATH"))
         } else {
@@ -173,9 +193,12 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Instant;
 
     use super::*;
     use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
+    use crate::application::ports::Cancellable;
 
     trait RunRetrying: LlmRunner {
         fn run_retrying(&self, request: &LlmRequest) -> Result<String, LlmError> {
@@ -425,5 +448,54 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, LlmError::Failed(_)));
         assert!(error.to_string().contains("excedeu o limite"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancel_stops_the_running_llm_process_and_blocks_later_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let marker = directory.path().join("spawned.txt");
+        let body = format!(
+            "echo $$ > '{}'; touch '{}'; exec sleep 30",
+            pid_file.display(),
+            marker.display()
+        );
+        let cli = Arc::new(claude(
+            fake_program(directory.path(), &body),
+            directory.path(),
+            60,
+        ));
+        let running = Arc::clone(&cli);
+        let worker = std::thread::spawn(move || running.run(&request("prompt", None)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pid_file.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+
+        Cancellable::cancel(cli.as_ref());
+
+        assert!(
+            !is_signalable(&pid),
+            "cancel() deve matar o processo do LLM antes de retornar"
+        );
+        let error = worker.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("cancelado"), "{error}");
+
+        fs::remove_file(&marker).unwrap();
+        let later = cli.run(&request("prompt", None)).unwrap_err();
+        assert!(later.to_string().contains("cancelado"), "{later}");
+        assert!(
+            !marker.exists(),
+            "execução após cancel() não deve criar processo"
+        );
+    }
+
+    fn is_signalable(pid: &str) -> bool {
+        Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }

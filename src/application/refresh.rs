@@ -9,7 +9,7 @@ pub fn refresh_widget(source: &dyn WidgetSource) -> Result<WidgetSnapshot, Sourc
 pub(crate) mod fakes {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::application::ports::{SourceError, WidgetSource};
+    use crate::application::ports::{Cancellable, SourceError, WidgetSource};
     use crate::domain::widget::{Summary, WidgetSnapshot};
 
     pub struct FakeSource {
@@ -41,7 +41,9 @@ pub(crate) mod fakes {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.result.clone()
         }
+    }
 
+    impl Cancellable for FakeSource {
         fn cancel(&self) {
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
@@ -66,6 +68,7 @@ pub(crate) mod fakes {
 mod tests {
     use super::fakes::{snapshot_titled, FakeSource};
     use super::*;
+    use crate::application::ports::Cancellable;
 
     #[test]
     fn successful_snapshot_is_returned() {

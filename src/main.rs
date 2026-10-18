@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -17,7 +17,7 @@ use mosaic::application::llm::{
     execute_recommendation, LlmError, LlmRunner, RecommendationStore, StoredRecommendation,
 };
 use mosaic::application::pomodoro_notifications::{AlertMessage, Notifier};
-use mosaic::application::ports::{Clock, SourceError, WidgetSource};
+use mosaic::application::ports::{Cancellable, Clock, SourceError};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
@@ -25,7 +25,7 @@ use mosaic::application::recommendation_view::{
     idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
 };
 use mosaic::application::refresh::refresh_widget;
-use mosaic::application::shutdown::ShutdownCoordinator;
+use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::application::widget_notices::with_interval_notice;
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
@@ -94,6 +94,7 @@ struct WidgetRuntime {
 
 struct LlmServices {
     runner: Arc<dyn LlmRunner>,
+    cancellable: Arc<dyn Cancellable>,
     store: Arc<dyn RecommendationStore>,
     config: LlmConfig,
     selections: HashMap<String, LlmSelection>,
@@ -233,8 +234,8 @@ fn run() -> Result<(), AppError> {
         &sender,
         &receiver,
     );
-    services.shutdown.shutdown();
     ratatui::restore();
+    services.shutdown.shutdown();
     result
 }
 
@@ -269,23 +270,36 @@ fn build_services(
     termination: Arc<AtomicBool>,
 ) -> Services {
     let runtime = start_widgets(&config.widgets, directory, sender);
-    let shutdown = ShutdownCoordinator::new(widget_sources(&runtime));
+    let llm = config.llm.enabled.then(|| build_llm_services(config));
+    let shutdown = ShutdownCoordinator::new(cancellables(&runtime, llm.as_ref()));
     Services {
         runtime,
         shutdown,
         termination,
-        llm: config.llm.enabled.then(|| build_llm_services(config)),
+        llm,
         notifier: build_notifier(config),
         config_directory: directory.to_path_buf(),
     }
 }
 
-fn widget_sources(runtime: &WidgetRuntime) -> Vec<Arc<dyn WidgetSource>> {
-    runtime
+fn cancellables(runtime: &WidgetRuntime, llm: Option<&LlmServices>) -> Vec<Arc<dyn Cancellable>> {
+    let widgets = runtime
         .runners
         .values()
-        .map(|runner| Arc::clone(runner) as Arc<dyn WidgetSource>)
+        .map(|runner| Arc::clone(runner) as Arc<dyn Cancellable>);
+    widgets
+        .chain(llm.map(|services| Arc::clone(&services.cancellable)))
         .collect()
+}
+
+fn share_llm_runner<T: LlmRunner + Cancellable + 'static>(
+    runner: T,
+) -> (Arc<dyn LlmRunner>, Arc<dyn Cancellable>) {
+    let shared = Arc::new(runner);
+    (
+        Arc::clone(&shared) as Arc<dyn LlmRunner>,
+        shared as Arc<dyn Cancellable>,
+    )
 }
 
 fn build_llm_services(config: &AppConfig) -> LlmServices {
@@ -295,14 +309,14 @@ fn build_llm_services(config: &AppConfig) -> LlmServices {
         .join(APP_DIRECTORY_NAME)
         .join(LLM_WORKING_DIRECTORY_NAME);
     let timeout = Duration::from_secs(config.llm.timeout_seconds);
-    let runner: Arc<dyn LlmRunner> = match config.llm.harness {
-        Harness::Claude => Arc::new(ClaudeCli::new(
+    let (runner, cancellable) = match config.llm.harness {
+        Harness::Claude => share_llm_runner(ClaudeCli::new(
             "claude".to_string(),
             working_directory,
             config.llm.max_budget_usd,
             timeout,
         )),
-        Harness::OpenCode => Arc::new(OpenCodeCli::new(
+        Harness::OpenCode => share_llm_runner(OpenCodeCli::new(
             "opencode".to_string(),
             working_directory,
             timeout,
@@ -326,6 +340,7 @@ fn build_llm_services(config: &AppConfig) -> LlmServices {
         .collect();
     LlmServices {
         runner,
+        cancellable,
         store: Arc::new(FileRecommendationStore::new(store_path)),
         config: config.llm.clone(),
         selections,
@@ -411,7 +426,7 @@ fn event_loop(
     let mut last_tick = Instant::now();
     let mut alert_tracker = AlertTracker::new();
     loop {
-        if services.termination.load(Ordering::SeqCst) {
+        if should_stop(&services.termination) {
             return Ok(());
         }
         while let Ok(app_event) = receiver.try_recv() {

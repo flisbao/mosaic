@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -49,9 +49,7 @@ pub struct CancelFlag(Arc<CancelState>);
 impl CancelFlag {
     pub fn cancel(&self) {
         self.0.cancelled.store(true, Ordering::SeqCst);
-        let Ok(active) = self.0.active_process_group.lock() else {
-            return;
-        };
+        let active = self.lock_active_process_group();
         if let Some(group) = *active {
             signal_process_group(group);
         }
@@ -65,28 +63,16 @@ impl CancelFlag {
         self.0.cancelled.load(Ordering::SeqCst)
     }
 
+    fn lock_active_process_group(&self) -> MutexGuard<'_, Option<u32>> {
+        self.0
+            .active_process_group
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn set_active_process_group(&self, group: Option<u32>) {
-        if let Ok(mut active) = self.0.active_process_group.lock() {
-            *active = group;
-        }
+        *self.lock_active_process_group() = group;
         self.0.released.notify_all();
-    }
-}
-
-struct ActiveProcessGroup<'a> {
-    cancel: &'a CancelFlag,
-}
-
-impl<'a> ActiveProcessGroup<'a> {
-    fn enter(cancel: &'a CancelFlag, group: u32) -> Self {
-        cancel.set_active_process_group(Some(group));
-        Self { cancel }
-    }
-}
-
-impl Drop for ActiveProcessGroup<'_> {
-    fn drop(&mut self) {
-        self.cancel.set_active_process_group(None);
     }
 }
 
@@ -129,7 +115,7 @@ pub fn run_process(
             }
         });
     }
-    let _active_group = ActiveProcessGroup::enter(cancel, child.id());
+    cancel.set_active_process_group(Some(child.id()));
     let stdout = capture(child.stdout.take(), limits.maximum_output_bytes, true);
     let stderr = capture(child.stderr.take(), limits.maximum_output_bytes, false);
     let status = wait_for_exit(&mut child, &stdout, limits, cancel)?;
@@ -157,22 +143,25 @@ fn wait_for_exit(
     let deadline = Instant::now() + limits.timeout;
     loop {
         if stdout.overflowed.load(Ordering::SeqCst) {
-            terminate(child);
+            terminate(child, cancel);
             return Err(overflow_error(limits));
         }
         if cancel.is_cancelled() {
-            terminate(child);
+            terminate(child, cancel);
             return Err(cancelled_error());
         }
         match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
+            Ok(Some(status)) => {
+                cancel.set_active_process_group(None);
+                return Ok(status);
+            }
             Ok(None) if Instant::now() >= deadline => {
-                terminate(child);
+                terminate(child, cancel);
                 return Err(timeout_error(limits));
             }
             Ok(None) => thread::sleep(POLL_INTERVAL),
             Err(error) => {
-                terminate(child);
+                terminate(child, cancel);
                 return Err(ProcessError::new(format!(
                     "falha ao aguardar o processo: {error}"
                 )));
@@ -208,10 +197,11 @@ fn isolate_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn isolate_process_group(_command: &mut Command) {}
 
-fn terminate(child: &mut Child) {
+fn terminate(child: &mut Child, cancel: &CancelFlag) {
     signal_process_group(child.id());
     let _ = child.kill();
     let _ = child.wait();
+    cancel.set_active_process_group(None);
 }
 
 #[cfg(unix)]
@@ -297,6 +287,25 @@ mod tests {
     const SPAWN_CHECK_INTERVAL: Duration = Duration::from_millis(10);
     const DESCENDANT_CHECK_INTERVAL: Duration = Duration::from_millis(20);
     const DESCENDANT_EXIT_LIMIT: Duration = Duration::from_secs(5);
+    const GRANDCHILD_PIPE_HOLD_SECONDS: u64 = 3;
+    const PIPE_HOLD_CANCEL_BUDGET: Duration = Duration::from_secs(1);
+    const IDLE_CANCEL_BUDGET: Duration = Duration::from_millis(100);
+
+    fn wait_until(condition: impl Fn() -> bool) {
+        let deadline = Instant::now() + WAIT_LIMIT;
+        while !condition() && Instant::now() < deadline {
+            thread::sleep(SPAWN_CHECK_INTERVAL);
+        }
+    }
+
+    fn poison_active_process_group(flag: &CancelFlag) {
+        let poisoner = flag.clone();
+        let _ = thread::spawn(move || {
+            let _guard = poisoner.0.active_process_group.lock().unwrap();
+            panic!("envenenando o mutex de cancelamento");
+        })
+        .join();
+    }
 
     fn shell(script: &str) -> Command {
         let mut command = Command::new("sh");
@@ -451,6 +460,67 @@ mod tests {
             !process_is_running(&pid),
             "cancel() deve retornar após o término do processo"
         );
+        assert!(runner.join().unwrap().is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancel_does_not_wait_for_pipe_held_after_the_child_exited() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let flag = CancelFlag::default();
+        let script = format!(
+            "setsid sleep {GRANDCHILD_PIPE_HOLD_SECONDS} & echo $$ > '{}'; sleep 0.2",
+            pid_file.display()
+        );
+        let runner_flag = flag.clone();
+        let runner = thread::spawn(move || {
+            run_process(shell(&script), None, &limits(60, 1024), &runner_flag)
+        });
+        wait_until(|| pid_file_is_written(&pid_file));
+        let child = read_grandchild_pid(&pid_file);
+        wait_until(|| !process_is_running(&child));
+
+        let started = Instant::now();
+        flag.cancel();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < PIPE_HOLD_CANCEL_BUDGET,
+            "cancel() esperou {elapsed:?} pelo neto que segura o pipe"
+        );
+        assert!(runner.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn cancel_without_active_process_returns_immediately() {
+        let flag = CancelFlag::default();
+
+        let started = Instant::now();
+        flag.cancel();
+
+        assert!(started.elapsed() < IDLE_CANCEL_BUDGET);
+        assert!(flag.is_cancelled());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancel_still_kills_the_process_after_the_lock_is_poisoned() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let flag = CancelFlag::default();
+        let script = format!("echo $$ > '{}'; exec sleep 30", pid_file.display());
+        let runner_flag = flag.clone();
+        let runner = thread::spawn(move || {
+            run_process(shell(&script), None, &limits(60, 1024), &runner_flag)
+        });
+        wait_until(|| pid_file_is_written(&pid_file) && has_active_process_group(&flag));
+        poison_active_process_group(&flag);
+        let pid = read_grandchild_pid(&pid_file);
+
+        flag.cancel();
+
+        assert!(!process_is_running(&pid));
         assert!(runner.join().unwrap().is_err());
     }
 
