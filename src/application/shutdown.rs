@@ -28,9 +28,23 @@ impl ShutdownCoordinator {
     }
 
     pub fn register(&self, key: &str, cancellable: Arc<dyn Cancellable>) {
-        let mut sources = self.lock_sources();
-        sources.retain(|(existing, _)| existing != key);
-        sources.push((key.to_string(), cancellable));
+        let replaced = {
+            let mut sources = self.lock_sources();
+            match sources.iter().position(|(existing, _)| existing == key) {
+                Some(position) => {
+                    let previous =
+                        std::mem::replace(&mut sources[position], (key.to_string(), cancellable));
+                    Some(previous.1)
+                }
+                None => {
+                    sources.push((key.to_string(), cancellable));
+                    None
+                }
+            }
+        };
+        if let Some(previous) = replaced {
+            previous.cancel();
+        }
     }
 
     pub fn retire(&self, key: &str) {
@@ -233,16 +247,19 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_cancels_the_source_registered_last_under_a_key() {
+    fn register_under_existing_key_cancels_the_replaced_source_once() {
         let replaced = fake_source();
         let replacement = fake_source();
         let coordinator = ShutdownCoordinator::new();
         coordinator.register("jira", replaced.clone());
         coordinator.register("jira", replacement.clone());
 
+        assert_eq!(replaced.cancel_call_count(), 1);
+        assert_eq!(replacement.cancel_call_count(), 0);
+
         coordinator.shutdown();
 
-        assert_eq!(replaced.cancel_call_count(), 0);
+        assert_eq!(replaced.cancel_call_count(), 1);
         assert_eq!(replacement.cancel_call_count(), 1);
     }
 

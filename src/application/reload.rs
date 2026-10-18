@@ -3,9 +3,22 @@ use std::collections::HashMap;
 use crate::application::reload_plan::{ReloadPlan, WidgetChange};
 use crate::domain::widget::WidgetId;
 
+pub trait WidgetSpec {
+    fn widget_id(&self) -> &WidgetId;
+}
+
 pub trait WidgetLifecycle {
-    fn start(&mut self, id: &WidgetId, generation: u64);
+    type Spec: WidgetSpec;
+
+    fn start(&mut self, spec: &Self::Spec, generation: u64);
     fn retire(&mut self, id: &WidgetId);
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedWidgets<S, C> {
+    pub config: C,
+    pub plan: ReloadPlan,
+    pub specs: Vec<S>,
 }
 
 #[derive(Debug, Default)]
@@ -16,7 +29,7 @@ pub struct WidgetGenerations {
 
 impl WidgetGenerations {
     pub fn advance(&mut self, id: &WidgetId) -> u64 {
-        self.last_issued += 1;
+        self.last_issued = self.last_issued.saturating_add(1);
         self.current.insert(id.clone(), self.last_issued);
         self.last_issued
     }
@@ -34,9 +47,24 @@ impl WidgetGenerations {
     }
 }
 
-pub fn apply_plan(
+pub fn apply_if_current<T>(
+    generations: &WidgetGenerations,
+    id: &WidgetId,
+    generation: u64,
+    result: T,
+    apply: impl FnOnce(T),
+) -> bool {
+    if !generations.accepts(id, generation) {
+        return false;
+    }
+    apply(result);
+    true
+}
+
+pub fn apply_plan<L: WidgetLifecycle>(
     plan: &ReloadPlan,
-    lifecycle: &mut dyn WidgetLifecycle,
+    specs: &[L::Spec],
+    lifecycle: &mut L,
     generations: &mut WidgetGenerations,
 ) {
     for (id, change) in &plan.changes {
@@ -48,35 +76,72 @@ pub fn apply_plan(
             }
             WidgetChange::Restart => {
                 lifecycle.retire(id);
-                start_widget(id, lifecycle, generations);
+                start_widget(id, specs, lifecycle, generations);
             }
-            WidgetChange::Add => start_widget(id, lifecycle, generations),
+            WidgetChange::Add => start_widget(id, specs, lifecycle, generations),
         }
     }
 }
 
-fn start_widget(
+fn start_widget<L: WidgetLifecycle>(
     id: &WidgetId,
-    lifecycle: &mut dyn WidgetLifecycle,
+    specs: &[L::Spec],
+    lifecycle: &mut L,
     generations: &mut WidgetGenerations,
 ) {
+    let Some(spec) = specs.iter().find(|spec| spec.widget_id() == id) else {
+        return;
+    };
     let generation = generations.advance(id);
-    lifecycle.start(id, generation);
+    lifecycle.start(spec, generation);
+}
+
+pub fn reload_widgets<L, C, E>(
+    text: Result<String, E>,
+    prepare: impl FnOnce(&str) -> Result<PreparedWidgets<L::Spec, C>, E>,
+    lifecycle: &mut L,
+    generations: &mut WidgetGenerations,
+) -> Result<(C, ReloadPlan), E>
+where
+    L: WidgetLifecycle,
+{
+    let text = text?;
+    let prepared = prepare(&text)?;
+    apply_plan(&prepared.plan, &prepared.specs, lifecycle, generations);
+    Ok((prepared.config, prepared.plan))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use chrono::NaiveDate;
 
-    #[derive(Debug, Default, PartialEq)]
+    use super::*;
+    use crate::application::ports::SourceError;
+    use crate::application::refresh::fakes::snapshot_titled;
+    use crate::domain::widget::{WidgetRecord, WidgetSnapshot};
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct FakeSpec {
+        id: WidgetId,
+    }
+
+    impl WidgetSpec for FakeSpec {
+        fn widget_id(&self) -> &WidgetId {
+            &self.id
+        }
+    }
+
+    #[derive(Debug, Default)]
     struct RecordingLifecycle {
         calls: Vec<String>,
     }
 
     impl WidgetLifecycle for RecordingLifecycle {
-        fn start(&mut self, id: &WidgetId, generation: u64) {
+        type Spec = FakeSpec;
+
+        fn start(&mut self, spec: &FakeSpec, generation: u64) {
             self.calls
-                .push(format!("start {} {generation}", id.as_str()));
+                .push(format!("start {} {generation}", spec.id.as_str()));
         }
 
         fn retire(&mut self, id: &WidgetId) {
@@ -84,17 +149,33 @@ mod tests {
         }
     }
 
+    fn widget(id: &str) -> WidgetId {
+        WidgetId::new(id)
+    }
+
+    fn spec(id: &str) -> FakeSpec {
+        FakeSpec { id: widget(id) }
+    }
+
     fn plan_with(changes: &[(&str, WidgetChange)]) -> ReloadPlan {
         ReloadPlan {
             changes: changes
                 .iter()
-                .map(|(id, change)| (WidgetId::new(*id), *change))
+                .map(|(id, change)| (widget(id), *change))
                 .collect(),
         }
     }
 
-    fn widget(id: &str) -> WidgetId {
-        WidgetId::new(id)
+    fn now() -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 10, 18)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .unwrap()
+    }
+
+    fn title_of(record: &WidgetRecord) -> Option<String> {
+        record
+            .snapshot()
+            .map(|snapshot: &WidgetSnapshot| snapshot.summary.title.clone())
     }
 
     #[test]
@@ -103,7 +184,7 @@ mod tests {
         let mut generations = WidgetGenerations::default();
         let plan = plan_with(&[("jira", WidgetChange::Keep)]);
 
-        apply_plan(&plan, &mut lifecycle, &mut generations);
+        apply_plan(&plan, &[spec("jira")], &mut lifecycle, &mut generations);
 
         assert!(lifecycle.calls.is_empty());
     }
@@ -112,11 +193,10 @@ mod tests {
     fn remove_retires_widget_and_rejects_its_results() {
         let mut lifecycle = RecordingLifecycle::default();
         let mut generations = WidgetGenerations::default();
-        generations.advance(&widget("clima"));
         let generation = generations.advance(&widget("clima"));
         let plan = plan_with(&[("clima", WidgetChange::Remove)]);
 
-        apply_plan(&plan, &mut lifecycle, &mut generations);
+        apply_plan(&plan, &[], &mut lifecycle, &mut generations);
 
         assert_eq!(lifecycle.calls, vec!["retire clima".to_string()]);
         assert!(!generations.accepts(&widget("clima"), generation));
@@ -129,7 +209,7 @@ mod tests {
         let old = generations.advance(&widget("jira"));
         let plan = plan_with(&[("jira", WidgetChange::Restart)]);
 
-        apply_plan(&plan, &mut lifecycle, &mut generations);
+        apply_plan(&plan, &[spec("jira")], &mut lifecycle, &mut generations);
 
         assert_eq!(lifecycle.calls.len(), 2);
         assert_eq!(lifecycle.calls[0], "retire jira");
@@ -143,10 +223,11 @@ mod tests {
         let mut generations = WidgetGenerations::default();
         let plan = plan_with(&[("agenda", WidgetChange::Add)]);
 
-        apply_plan(&plan, &mut lifecycle, &mut generations);
+        apply_plan(&plan, &[spec("agenda")], &mut lifecycle, &mut generations);
 
         assert_eq!(lifecycle.calls.len(), 1);
         assert!(lifecycle.calls[0].starts_with("start agenda "));
+        assert!(generations.current(&widget("agenda")).is_some());
     }
 
     #[test]
@@ -180,5 +261,135 @@ mod tests {
         assert_ne!(first, second);
         assert!(!generations.accepts(&widget("jira"), first));
         assert!(generations.accepts(&widget("jira"), second));
+    }
+
+    #[test]
+    fn stale_result_after_restart_does_not_change_the_record() {
+        let mut generations = WidgetGenerations::default();
+        let mut records: HashMap<WidgetId, WidgetRecord> = HashMap::new();
+        records.insert(widget("jira"), WidgetRecord::loading());
+        let old = generations.advance(&widget("jira"));
+        generations.advance(&widget("jira"));
+        let mut write = |result: Result<WidgetSnapshot, SourceError>| {
+            records
+                .get_mut(&widget("jira"))
+                .unwrap()
+                .apply(result, now());
+        };
+
+        let applied_stale = apply_if_current(
+            &generations,
+            &widget("jira"),
+            old,
+            Ok(snapshot_titled("velho")),
+            &mut write,
+        );
+
+        assert!(!applied_stale);
+        assert_eq!(title_of(&records[&widget("jira")]), None);
+    }
+
+    #[test]
+    fn current_generation_result_updates_the_record() {
+        let mut generations = WidgetGenerations::default();
+        let mut records: HashMap<WidgetId, WidgetRecord> = HashMap::new();
+        records.insert(widget("jira"), WidgetRecord::loading());
+        generations.advance(&widget("jira"));
+        let current = generations.advance(&widget("jira"));
+        let mut write = |result: Result<WidgetSnapshot, SourceError>| {
+            records
+                .get_mut(&widget("jira"))
+                .unwrap()
+                .apply(result, now());
+        };
+
+        let applied = apply_if_current(
+            &generations,
+            &widget("jira"),
+            current,
+            Ok(snapshot_titled("novo")),
+            &mut write,
+        );
+
+        assert!(applied);
+        assert_eq!(
+            title_of(&records[&widget("jira")]),
+            Some("novo".to_string())
+        );
+    }
+
+    fn prepared(
+        plan: ReloadPlan,
+        specs: Vec<FakeSpec>,
+    ) -> Result<PreparedWidgets<FakeSpec, String>, String> {
+        Ok(PreparedWidgets {
+            config: "nova".to_string(),
+            plan,
+            specs,
+        })
+    }
+
+    #[test]
+    fn unreadable_config_makes_no_lifecycle_calls_and_no_preparation() {
+        let mut lifecycle = RecordingLifecycle::default();
+        let mut generations = WidgetGenerations::default();
+        let mut prepare_called = false;
+
+        let result = reload_widgets(
+            Err::<String, String>("ilegível".to_string()),
+            |_| {
+                prepare_called = true;
+                prepared(ReloadPlan { changes: vec![] }, vec![])
+            },
+            &mut lifecycle,
+            &mut generations,
+        );
+
+        assert_eq!(result.err(), Some("ilegível".to_string()));
+        assert!(!prepare_called);
+        assert!(lifecycle.calls.is_empty());
+    }
+
+    #[test]
+    fn invalid_config_makes_no_lifecycle_calls_and_keeps_widgets_generations() {
+        let mut lifecycle = RecordingLifecycle::default();
+        let mut generations = WidgetGenerations::default();
+        generations.advance(&widget("jira"));
+
+        let result = reload_widgets(
+            Ok("texto".to_string()),
+            |_| Err::<PreparedWidgets<FakeSpec, String>, String>("linha 3".to_string()),
+            &mut lifecycle,
+            &mut generations,
+        );
+
+        assert_eq!(result.err(), Some("linha 3".to_string()));
+        assert!(lifecycle.calls.is_empty());
+        assert!(generations.current(&widget("jira")).is_some());
+    }
+
+    #[test]
+    fn valid_reload_retires_before_starting_and_returns_the_config() {
+        let mut lifecycle = RecordingLifecycle::default();
+        let mut generations = WidgetGenerations::default();
+        generations.advance(&widget("jira"));
+        let plan = plan_with(&[
+            ("jira", WidgetChange::Restart),
+            ("clima", WidgetChange::Keep),
+        ]);
+
+        let result = reload_widgets(
+            Ok("texto".to_string()),
+            |_| prepared(plan.clone(), vec![spec("jira"), spec("clima")]),
+            &mut lifecycle,
+            &mut generations,
+        );
+
+        assert_eq!(lifecycle.calls.len(), 2, "{:?}", lifecycle.calls);
+        assert_eq!(lifecycle.calls[0], "retire jira");
+        assert!(lifecycle.calls[1].starts_with("start jira "));
+        let (config, returned_plan) = result.unwrap();
+        assert_eq!(config, "nova");
+        assert_eq!(returned_plan, plan);
     }
 }

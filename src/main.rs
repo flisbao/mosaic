@@ -25,7 +25,9 @@ use mosaic::application::recommendation_view::{
     idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
 };
 use mosaic::application::refresh::refresh_widget;
-use mosaic::application::reload::{apply_plan, WidgetGenerations, WidgetLifecycle};
+use mosaic::application::reload::{
+    apply_if_current, apply_plan, reload_widgets, WidgetGenerations, WidgetLifecycle,
+};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::application::widget_notices::with_interval_notice;
@@ -36,9 +38,9 @@ use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, load_config, parse_config, prepare_reload,
-    read_config_file, AppConfig, ConfigError, Harness, LlmConfig, PreparedReload, WidgetSettings,
-    DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM, DEFAULT_LLM_MAX_ITEMS,
-    DEFAULT_SPAN,
+    read_config_file, reload_notice, retain_restart_sections, AppConfig, ConfigError, Harness,
+    LlmConfig, WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+    DEFAULT_LLM_MAX_ITEMS, DEFAULT_SPAN,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
@@ -79,7 +81,6 @@ const CHECK_CONFIG_FLAG: &str = "--config";
 const CHECK_CONFIG_USAGE: &str = "uso: mosaic check --config [caminho]";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
-const RELOAD_DONE_NOTICE: &str = "Configuração recarregada";
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -104,7 +105,6 @@ struct WidgetRuntime {
     working_directory: PathBuf,
     sender: Sender<AppEvent>,
     shutdown: Arc<ShutdownCoordinator>,
-    settings: HashMap<WidgetId, WidgetSettings>,
     runners: HashMap<WidgetId, Arc<PluginRunner>>,
     refresh_triggers: HashMap<WidgetId, Sender<()>>,
 }
@@ -119,17 +119,9 @@ impl WidgetRuntime {
             working_directory,
             sender,
             shutdown,
-            settings: HashMap::new(),
             runners: HashMap::new(),
             refresh_triggers: HashMap::new(),
         }
-    }
-
-    fn replace_settings(&mut self, widgets: &[WidgetSettings]) {
-        self.settings = widgets
-            .iter()
-            .map(|widget| (widget.id.clone(), widget.clone()))
-            .collect();
     }
 
     fn runner(&self, id: &WidgetId) -> Option<&Arc<PluginRunner>> {
@@ -148,17 +140,20 @@ fn shutdown_key(id: &WidgetId) -> String {
 }
 
 impl WidgetLifecycle for WidgetRuntime {
-    fn start(&mut self, id: &WidgetId, generation: u64) {
-        let Some(settings) = self.settings.get(id).cloned() else {
-            return;
-        };
+    type Spec = WidgetSettings;
+
+    fn start(&mut self, settings: &WidgetSettings, generation: u64) {
+        let id = settings.id.clone();
         let interval = Duration::from_secs(settings.interval_seconds);
         let interval_notice = settings
             .interval_adjusted
             .then_some(settings.interval_seconds);
-        let runner = Arc::new(PluginRunner::new(settings, self.working_directory.clone()));
+        let runner = Arc::new(PluginRunner::new(
+            settings.clone(),
+            self.working_directory.clone(),
+        ));
         self.shutdown.register(
-            &shutdown_key(id),
+            &shutdown_key(&id),
             Arc::clone(&runner) as Arc<dyn Cancellable>,
         );
         let trigger = spawn_refresher(
@@ -170,7 +165,7 @@ impl WidgetLifecycle for WidgetRuntime {
             self.sender.clone(),
         );
         self.runners.insert(id.clone(), runner);
-        self.refresh_triggers.insert(id.clone(), trigger);
+        self.refresh_triggers.insert(id, trigger);
     }
 
     fn retire(&mut self, id: &WidgetId) {
@@ -196,7 +191,7 @@ struct Services {
     llm: Option<LlmServices>,
     notifier: CompositeNotifier,
     config_directory: PathBuf,
-    widgets: Vec<WidgetSettings>,
+    config: AppConfig,
 }
 
 struct CheckInvocation {
@@ -399,10 +394,10 @@ fn build_services(
         sender.clone(),
         Arc::clone(&shutdown),
     );
-    runtime.replace_settings(&config.widgets);
     let mut generations = WidgetGenerations::default();
     apply_plan(
         &startup_plan(&config.widgets),
+        &config.widgets,
         &mut runtime,
         &mut generations,
     );
@@ -418,7 +413,7 @@ fn build_services(
         llm,
         notifier: build_notifier(config),
         config_directory: directory.to_path_buf(),
-        widgets: config.widgets.clone(),
+        config: config.clone(),
     }
 }
 
@@ -607,16 +602,16 @@ fn apply_event(
 ) {
     match app_event {
         AppEvent::WidgetUpdated(id, generation, result) => {
-            if services.generations.accepts(&id, generation) {
+            apply_if_current(&services.generations, &id, generation, result, |result| {
                 announce_widget_alerts(state, services, tracker, &id, &result);
                 state.update_widget(&id, result, now);
-            }
+            });
         }
         AppEvent::ActionFinished(id, generation, notice, result) => {
-            if services.generations.accepts(&id, generation) {
+            apply_if_current(&services.generations, &id, generation, result, |result| {
                 announce_widget_alerts(state, services, tracker, &id, &result);
                 state.update_widget(&id, result, now);
-            }
+            });
             state.show_notice(describe_notice(notice));
         }
         AppEvent::RecommendationFinished(result) => {
@@ -673,27 +668,37 @@ fn describe_notice(notice: ActionNotice) -> String {
 }
 
 fn reload_config(state: &mut AppState, services: &mut Services, spans: &mut Vec<u16>) {
-    let prepared = match read_config_file(&config_file_path(&services.config_directory))
-        .and_then(|text| prepare_reload(&services.widgets, &text))
-    {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            state.show_notice(error.to_string());
-            return;
-        }
-    };
-    let PreparedReload { config, plan } = prepared;
+    let outcome = reload_widgets(
+        read_config_file(&config_file_path(&services.config_directory)),
+        |text| prepare_reload(&services.config.widgets, text),
+        &mut services.runtime,
+        &mut services.generations,
+    );
+    match outcome {
+        Ok((next, plan)) => apply_reloaded_config(state, services, spans, next, &plan),
+        Err(error) => state.show_notice(error.to_string()),
+    }
+}
+
+fn apply_reloaded_config(
+    state: &mut AppState,
+    services: &mut Services,
+    spans: &mut Vec<u16>,
+    next: AppConfig,
+    plan: &ReloadPlan,
+) {
+    let notice = reload_notice(&services.config, &next);
     let TabLayout {
         entries,
         tabs,
         spans: reloaded_spans,
-    } = rebuilt_layout(state, &config, &plan);
+    } = rebuilt_layout(state, &next, plan);
     state.replace_tabs(entries, tabs);
     *spans = reloaded_spans;
-    services.runtime.replace_settings(&config.widgets);
-    apply_plan(&plan, &mut services.runtime, &mut services.generations);
-    let notice = startup_notice(&config.warnings).unwrap_or_else(|| RELOAD_DONE_NOTICE.to_string());
-    adopt_widgets(services, config.widgets);
+    services.config = retain_restart_sections(&services.config, next);
+    if let Some(llm) = services.llm.as_mut() {
+        llm.selections = llm_selections(&services.config.widgets);
+    }
     state.show_notice(notice);
 }
 
@@ -714,13 +719,6 @@ fn rebuilt_layout(state: &AppState, config: &AppConfig, plan: &ReloadPlan) -> Ta
         &plan.kept_widget_ids(),
     );
     layout
-}
-
-fn adopt_widgets(services: &mut Services, widgets: Vec<WidgetSettings>) {
-    if let Some(llm) = services.llm.as_mut() {
-        llm.selections = llm_selections(&widgets);
-    }
-    services.widgets = widgets;
 }
 
 fn spawn_action(action: ConfirmedAction, services: &Services, sender: &Sender<AppEvent>) {

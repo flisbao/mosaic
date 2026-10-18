@@ -5,7 +5,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::application::reload_plan::{plan_reload, ReloadPlan, WidgetIdentity};
+use crate::application::reload::{PreparedWidgets, WidgetSpec};
+use crate::application::reload_plan::{plan_reload, WidgetIdentity};
 use crate::domain::pomodoro::PomodoroSettings;
 use crate::domain::widget::WidgetId;
 
@@ -23,6 +24,9 @@ pub const DEFAULT_LLM_TIMEOUT_SECONDS: u64 = 120;
 pub const DEFAULT_PRIORITY_PROMPT: &str = "prompts/prioridade.md";
 pub const DEFAULT_SUGGESTIONS: [&str; 3] = ["Beber água", "Levantar e alongar", "Tomar um café"];
 pub const IMPLICIT_TAB_NAME: &str = "Mosaic";
+const RELOAD_DONE_NOTICE: &str = "Configuração recarregada";
+const RESTART_REQUIRED_NOTICE: &str = "só valem após reiniciar";
+const WARNING_SEPARATOR: &str = " | ";
 
 const CONFIG_DIRECTORY_NAME: &str = "mosaic";
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -452,14 +456,40 @@ pub fn config_file_path(directory: &Path) -> PathBuf {
     directory.join(CONFIG_FILE_NAME)
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct PreparedReload {
-    pub config: AppConfig,
-    pub plan: ReloadPlan,
-}
-
 pub fn read_config_file(path: &Path) -> Result<String, ConfigError> {
     std::fs::read_to_string(path).map_err(|error| ConfigError::Io(error.to_string()))
+}
+
+pub fn reload_notice(current: &AppConfig, next: &AppConfig) -> String {
+    let restart_sections = restart_sections_changed(current, next);
+    let mut notice = RELOAD_DONE_NOTICE.to_string();
+    if !restart_sections.is_empty() {
+        notice.push_str(&format!(
+            "; {} {RESTART_REQUIRED_NOTICE}",
+            restart_sections.join("/")
+        ));
+    }
+    if !next.warnings.is_empty() {
+        notice.push_str(&format!(". {}", next.warnings.join(WARNING_SEPARATOR)));
+    }
+    notice
+}
+
+fn restart_sections_changed(current: &AppConfig, next: &AppConfig) -> Vec<&'static str> {
+    let mut sections = Vec::new();
+    if current.llm != next.llm {
+        sections.push("[llm]");
+    }
+    if current.pomodoro != next.pomodoro {
+        sections.push("[pomodoro]/notificações");
+    }
+    sections
+}
+
+pub fn retain_restart_sections(active: &AppConfig, mut next: AppConfig) -> AppConfig {
+    next.llm = active.llm.clone();
+    next.pomodoro = active.pomodoro.clone();
+    next
 }
 
 pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
@@ -469,16 +499,23 @@ pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
 pub fn prepare_reload(
     current: &[WidgetSettings],
     text: &str,
-) -> Result<PreparedReload, ConfigError> {
+) -> Result<PreparedWidgets<WidgetSettings, AppConfig>, ConfigError> {
     let config = parse_config(text)?;
     let current_identities: Vec<WidgetIdentity> =
         current.iter().map(WidgetIdentity::from).collect();
     let next_identities: Vec<WidgetIdentity> =
         config.widgets.iter().map(WidgetIdentity::from).collect();
-    Ok(PreparedReload {
+    Ok(PreparedWidgets {
         plan: plan_reload(&current_identities, &next_identities),
+        specs: config.widgets.clone(),
         config,
     })
+}
+
+impl WidgetSpec for WidgetSettings {
+    fn widget_id(&self) -> &WidgetId {
+        &self.id
+    }
 }
 
 impl From<&WidgetSettings> for WidgetIdentity {
@@ -1075,6 +1112,69 @@ command = "sh"
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn reload_notice_without_restart_sections_is_plain() {
+        let current = parse_config(RELOAD_BASE).unwrap();
+        let next = parse_config(RELOAD_BASE).unwrap();
+
+        assert_eq!(reload_notice(&current, &next), "Configuração recarregada");
+    }
+
+    #[test]
+    fn reload_notice_names_each_section_that_needs_restart() {
+        let current = parse_config(RELOAD_BASE).unwrap();
+        let llm = parse_config(&format!("{RELOAD_BASE}\n[llm]\nharness = \"opencode\"\n")).unwrap();
+        let pomodoro =
+            parse_config(&format!("{RELOAD_BASE}\n[pomodoro]\nfocus_minutes = 30\n")).unwrap();
+        let both = parse_config(&format!(
+            "{RELOAD_BASE}\n[llm]\nharness = \"opencode\"\n[pomodoro]\nfocus_minutes = 30\n"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            reload_notice(&current, &llm),
+            "Configuração recarregada; [llm] só valem após reiniciar"
+        );
+        assert_eq!(
+            reload_notice(&current, &pomodoro),
+            "Configuração recarregada; [pomodoro]/notificações só valem após reiniciar"
+        );
+        assert_eq!(
+            reload_notice(&current, &both),
+            "Configuração recarregada; [llm]/[pomodoro]/notificações só valem após reiniciar"
+        );
+    }
+
+    #[test]
+    fn reload_notice_appends_config_warnings() {
+        let current = parse_config(RELOAD_BASE).unwrap();
+        let next = parse_config(
+            &RELOAD_BASE.replace("interval_seconds = 60", "interval_seconds = 60\ntab = true"),
+        )
+        .unwrap();
+
+        let notice = reload_notice(&current, &next);
+
+        assert!(notice.starts_with("Configuração recarregada. "), "{notice}");
+        assert!(notice.contains("aposentado"), "{notice}");
+    }
+
+    #[test]
+    fn retain_restart_sections_keeps_active_llm_and_pomodoro_but_takes_new_widgets() {
+        let active = parse_config(RELOAD_BASE).unwrap();
+        let next = parse_config(&format!(
+            "{}\n[llm]\nharness = \"opencode\"\n",
+            RELOAD_BASE.replace("command = \"sh\"", "command = \"bash\"")
+        ))
+        .unwrap();
+
+        let retained = retain_restart_sections(&active, next.clone());
+
+        assert_eq!(retained.llm, active.llm);
+        assert_eq!(retained.pomodoro, active.pomodoro);
+        assert_eq!(retained.widgets, next.widgets);
     }
 
     #[test]

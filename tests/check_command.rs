@@ -191,6 +191,43 @@ fn check_config_flag_exits_zero_on_valid_and_one_on_invalid() {
 }
 
 #[test]
+fn check_config_with_two_paths_is_a_usage_error() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let output = run_mosaic(directory.path(), &["check", "--config", "a.toml", "b.toml"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(EXIT_USAGE),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn check_config_with_missing_file_exits_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("nao-existe.toml");
+
+    let output = run_mosaic(
+        directory.path(),
+        &["check", "--config", missing.to_str().unwrap()],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(EXIT_INVALID),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("falha de leitura"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn check_config_without_path_reads_the_default_config_file() {
     let directory = tempfile::tempdir().unwrap();
     let config_directory = directory.path().join("mosaic");
