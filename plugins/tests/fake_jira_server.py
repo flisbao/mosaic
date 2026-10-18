@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Servidor Jira falso para testes de integração do panel-tui.
+"""Servidor Jira falso para testes de integração do mosaic.
 
 Imprime a porta na primeira linha do stdout e atende até ser encerrado.
 Variáveis: FAKE_JIRA_EMAIL e FAKE_JIRA_TOKEN definem as credenciais aceitas.

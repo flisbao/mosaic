@@ -8,58 +8,58 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event};
-use panel_tui::application::alert_tracker::AlertTracker;
-use panel_tui::application::check_report::build_check_report;
-use panel_tui::application::execute_action::{execute_confirmed, ActionNotice};
-use panel_tui::application::llm::{
+use mosaic::application::alert_tracker::AlertTracker;
+use mosaic::application::check_report::build_check_report;
+use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
+use mosaic::application::llm::{
     execute_recommendation, LlmError, LlmRunner, RecommendationStore, StoredRecommendation,
 };
-use panel_tui::application::pomodoro_notifications::{AlertMessage, Notifier};
-use panel_tui::application::ports::Clock;
-use panel_tui::application::recommendation::{
+use mosaic::application::pomodoro_notifications::{AlertMessage, Notifier};
+use mosaic::application::ports::Clock;
+use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
-use panel_tui::application::recommendation_view::{
+use mosaic::application::recommendation_view::{
     idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
 };
-use panel_tui::application::refresh::refresh_widget;
-use panel_tui::application::widget_notices::with_interval_notice;
-use panel_tui::domain::action::ConfirmedAction;
-use panel_tui::domain::card::AlertLevel;
-use panel_tui::domain::pomodoro::PomodoroTimer;
-use panel_tui::domain::widget::WidgetSnapshot;
-use panel_tui::domain::widget::{WidgetId, WidgetState};
-use panel_tui::infrastructure::config::{
+use mosaic::application::refresh::refresh_widget;
+use mosaic::application::widget_notices::with_interval_notice;
+use mosaic::domain::action::ConfirmedAction;
+use mosaic::domain::card::AlertLevel;
+use mosaic::domain::pomodoro::PomodoroTimer;
+use mosaic::domain::widget::WidgetSnapshot;
+use mosaic::domain::widget::{WidgetId, WidgetState};
+use mosaic::infrastructure::config::{
     config_directory, config_file_path, parse_config, AppConfig, ConfigError, Harness, LlmConfig,
     WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
     DEFAULT_LLM_MAX_ITEMS, DEFAULT_SPAN,
 };
-use panel_tui::infrastructure::default_files::install_defaults_if_missing;
-use panel_tui::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
-use panel_tui::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
-use panel_tui::infrastructure::plugin_runner::PluginRunner;
-use panel_tui::infrastructure::protocol_report::parse_snapshot_report;
-use panel_tui::infrastructure::recommendation_file::{
+use mosaic::infrastructure::default_files::install_defaults_if_missing;
+use mosaic::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
+use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
+use mosaic::infrastructure::plugin_runner::PluginRunner;
+use mosaic::infrastructure::protocol_report::parse_snapshot_report;
+use mosaic::infrastructure::recommendation_file::{
     default_recommendation_path, FileRecommendationStore,
 };
-use panel_tui::infrastructure::system_clock::SystemClock;
-use panel_tui::infrastructure::terminal_capabilities::detect_graphics_support;
-use panel_tui::presentation::app_state::{AppState, Command, WidgetEntry};
-use panel_tui::presentation::card_view::{lines_to_plain_text, render_blocks};
-use panel_tui::presentation::key_input::from_crossterm;
-use panel_tui::presentation::render::render;
+use mosaic::infrastructure::system_clock::SystemClock;
+use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
+use mosaic::presentation::app_state::{AppState, Command, WidgetEntry};
+use mosaic::presentation::card_view::{lines_to_plain_text, render_blocks};
+use mosaic::presentation::key_input::from_crossterm;
+use mosaic::presentation::render::render;
 use thiserror::Error;
 
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
-const APP_DIRECTORY_NAME: &str = "panel-tui";
+const APP_DIRECTORY_NAME: &str = "mosaic";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
-const FALLBACK_STORE_FILE_NAME: &str = "panel-tui-recommendation.json";
+const FALLBACK_STORE_FILE_NAME: &str = "mosaic-recommendation.json";
 const IA_WIDGET_SPAN: u16 = 1;
 const CHECK_SUBCOMMAND: &str = "check";
-const CHECK_USAGE: &str = "uso: panel check <comando> [args...] [--env NOME=valor]...";
+const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
 const CHECK_ENV_FLAG: &str = "--env";
 const CHECK_WIDGET_ID: &str = "check";
 const CHECK_TIMEOUT_SECONDS: u64 = 10;
@@ -176,7 +176,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("panel: {error}");
+            eprintln!("mosaic: {error}");
             ExitCode::FAILURE
         }
     }

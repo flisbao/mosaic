@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use panel_tui::domain::card::{BLOCK_TYPE_NAMES, TONE_NAMES};
-use panel_tui::domain::snapshot_report::Severity;
-use panel_tui::domain::widget::FLAG_NAMES;
-use panel_tui::infrastructure::protocol_report::parse_snapshot_report;
+use mosaic::domain::card::{BLOCK_TYPE_NAMES, TONE_NAMES};
+use mosaic::domain::snapshot_report::Severity;
+use mosaic::domain::widget::FLAG_NAMES;
+use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use serde_json::Value;
 
 const ERROR_PREFIX: &str = "ERRO ";

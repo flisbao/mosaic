@@ -22,7 +22,7 @@ pub const DEFAULT_LLM_TIMEOUT_SECONDS: u64 = 120;
 pub const DEFAULT_PRIORITY_PROMPT: &str = "prompts/prioridade.md";
 pub const DEFAULT_SUGGESTIONS: [&str; 3] = ["Beber água", "Levantar e alongar", "Tomar um café"];
 
-const CONFIG_DIRECTORY_NAME: &str = "panel-tui";
+const CONFIG_DIRECTORY_NAME: &str = "mosaic";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const SECONDS_PER_MINUTE: u64 = 60;
 const POMODORO_SECTION: &str = "pomodoro";

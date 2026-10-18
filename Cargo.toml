@@ -1,17 +1,17 @@
 [package]
-name = "panel-tui"
+name = "mosaic"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Painel de terminal extensível por plugins"
+description = "Terminal dashboard built from pluggable widgets"
 license = "MIT"
 
 [lib]
-name = "panel_tui"
+name = "mosaic"
 path = "src/lib.rs"
 
 [[bin]]
-name = "panel"
+name = "mosaic"
 path = "src/main.rs"
 
 [dependencies]

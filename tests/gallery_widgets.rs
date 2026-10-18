@@ -3,13 +3,13 @@
 use std::path::Path;
 use std::process::Command;
 
-use panel_tui::application::ports::SourceError;
-use panel_tui::domain::card::{Block, BLOCK_TYPE_NAMES};
-use panel_tui::domain::snapshot_report::Severity;
-use panel_tui::domain::widget::WidgetId;
-use panel_tui::infrastructure::config::WidgetSettings;
-use panel_tui::infrastructure::plugin_runner::PluginRunner;
-use panel_tui::infrastructure::protocol_report::parse_snapshot_report;
+use mosaic::application::ports::SourceError;
+use mosaic::domain::card::{Block, BLOCK_TYPE_NAMES};
+use mosaic::domain::snapshot_report::Severity;
+use mosaic::domain::widget::WidgetId;
+use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::plugin_runner::PluginRunner;
+use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 
 fn interpreter_is_available(command: &str) -> bool {
     Command::new(command).arg("--version").output().is_ok()

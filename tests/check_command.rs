@@ -8,7 +8,7 @@ const EXIT_INVALID: i32 = 1;
 const EXIT_USAGE: i32 = 2;
 
 fn run_check(working_directory: &Path, arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_panel"))
+    Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .arg("check")
         .args(arguments)
         .current_dir(working_directory)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plugin do panel-tui: kanban em pastas, um arquivo .md por tarefa."""
+"""Plugin do mosaic: kanban em pastas, um arquivo .md por tarefa."""
 
 import json
 import os

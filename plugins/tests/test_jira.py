@@ -52,7 +52,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.budget_seconds, 40)
         self.assertIsNone(config.board)
         self.assertEqual(config.team, [])
-        self.assertTrue(str(config.state_dir).endswith(".local/state/panel-tui/jira"))
+        self.assertTrue(str(config.state_dir).endswith(".local/state/mosaic/jira"))
 
     def test_token_comes_from_the_named_variable(self):
         environment = base_environment(JIRA_TOKEN_ENV="OUTRO", OUTRO="  abc  ")

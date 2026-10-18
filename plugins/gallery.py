@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Galeria do panel-tui: um card com todos os blocos do protocolo v1 e um aviso por hora.
+"""Galeria do mosaic: um card com todos os blocos do protocolo v1 e um aviso por hora.
 
 Não usa rede. Serve de modelo para escrever o seu widget; valide com
-`panel check python3 plugins/gallery.py`.
+`mosaic check python3 plugins/gallery.py`.
 """
 
 import json

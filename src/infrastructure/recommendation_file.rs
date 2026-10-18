@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::llm::{RecommendationStore, StoredRecommendation};
 
-const APP_DIRECTORY_NAME: &str = "panel-tui";
+const APP_DIRECTORY_NAME: &str = "mosaic";
 const FILE_NAME: &str = "recommendation.json";
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn default_path_ends_with_app_directory_and_file_name() {
         if let Some(path) = default_recommendation_path() {
-            assert!(path.ends_with("panel-tui/recommendation.json"));
+            assert!(path.ends_with("mosaic/recommendation.json"));
         }
     }
 }

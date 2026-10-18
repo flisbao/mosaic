@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use panel_tui::application::execute_action::{execute_confirmed, ActionNotice};
-use panel_tui::application::refresh::refresh_widget;
-use panel_tui::domain::widget::{WidgetId, WidgetState};
-use panel_tui::infrastructure::config::WidgetSettings;
-use panel_tui::infrastructure::plugin_runner::PluginRunner;
-use panel_tui::presentation::app_state::{AppState, Command, Mode, WidgetEntry};
-use panel_tui::presentation::key_input::KeyInput;
+use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
+use mosaic::application::refresh::refresh_widget;
+use mosaic::domain::widget::{WidgetId, WidgetState};
+use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::plugin_runner::PluginRunner;
+use mosaic::presentation::app_state::{AppState, Command, Mode, WidgetEntry};
+use mosaic::presentation::key_input::KeyInput;
 
 fn kanban_plugin_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/kanban.py")

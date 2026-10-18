@@ -36,7 +36,7 @@ const ITEM_KEYS: [&str; 4] = ["id", "text", "flag", "meta"];
 const ACTION_KEYS: [&str; 5] = ["id", "label", "description", "applies_to", "params"];
 
 pub fn unsupported_protocol_text(version: u64) -> String {
-    format!("este widget exige o protocolo {version}; atualize o panel-tui")
+    format!("este widget exige o protocolo {version}; atualize o mosaic")
 }
 
 pub fn parse_snapshot_report(json: &str) -> Result<ParsedSnapshot, ProtocolError> {
@@ -826,7 +826,7 @@ mod tests {
         assert_eq!(parsed.snapshot.summary.lines.len(), 1);
         assert_eq!(
             parsed.snapshot.summary.lines[0].text,
-            "este widget exige o protocolo 2; atualize o panel-tui"
+            "este widget exige o protocolo 2; atualize o mosaic"
         );
         assert_eq!(parsed.snapshot.summary.title, "K");
     }
