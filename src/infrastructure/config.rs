@@ -11,8 +11,10 @@ use crate::domain::pomodoro::PomodoroSettings;
 use crate::domain::widget::WidgetId;
 
 pub const MINIMUM_INTERVAL_SECONDS: u64 = 30;
+pub const MAXIMUM_INTERVAL_SECONDS: u64 = 86_400;
 pub const DEFAULT_INTERVAL_SECONDS: u64 = MINIMUM_INTERVAL_SECONDS;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 5;
+pub const MAXIMUM_TIMEOUT_SECONDS: u64 = 3_600;
 pub const DEFAULT_SPAN: u16 = 1;
 pub const DEFAULT_LLM_MAX_ITEMS: usize = 20;
 pub const DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM: usize = 120;
@@ -122,6 +124,18 @@ pub enum ConfigError {
     InvalidSetting {
         section: String,
         field: &'static str,
+    },
+    #[error("widget '{widget}': '{field}' não pode passar de {maximum}")]
+    ValueTooLarge {
+        widget: String,
+        field: &'static str,
+        maximum: u64,
+    },
+    #[error("[{section}]: '{field}' não pode passar de {maximum}")]
+    SettingTooLarge {
+        section: String,
+        field: &'static str,
+        maximum: u64,
     },
     #[error("widget '{widget}': aba '{tab}' não existe na configuração")]
     UnknownTab { widget: String, tab: String },
@@ -295,13 +309,21 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
         &widget.id,
         "interval_seconds",
     )?;
-    let interval_seconds = configured_interval.max(MINIMUM_INTERVAL_SECONDS);
+    let interval_seconds =
+        configured_interval.clamp(MINIMUM_INTERVAL_SECONDS, MAXIMUM_INTERVAL_SECONDS);
     let timeout_seconds = positive_or_default(
         widget.timeout_seconds,
         DEFAULT_TIMEOUT_SECONDS,
         &widget.id,
         "timeout_seconds",
     )?;
+    if timeout_seconds > MAXIMUM_TIMEOUT_SECONDS {
+        return Err(ConfigError::ValueTooLarge {
+            widget: widget.id.clone(),
+            field: "timeout_seconds",
+            maximum: MAXIMUM_TIMEOUT_SECONDS,
+        });
+    }
     let max_items = positive_limit(widget.max_items, &widget.id, "max_items")?;
     let llm_max_items = positive_or_default(
         widget.llm_max_items.map(|value| value as u64),
@@ -382,17 +404,25 @@ fn convert_llm(raw: RawLlm) -> Result<LlmConfig, ConfigError> {
             field: "max_budget_usd",
         });
     }
+    let timeout_seconds = positive_setting(
+        raw.timeout_seconds,
+        DEFAULT_LLM_TIMEOUT_SECONDS,
+        LLM_SECTION,
+        "timeout_seconds",
+    )?;
+    if timeout_seconds > MAXIMUM_TIMEOUT_SECONDS {
+        return Err(ConfigError::SettingTooLarge {
+            section: LLM_SECTION.to_string(),
+            field: "timeout_seconds",
+            maximum: MAXIMUM_TIMEOUT_SECONDS,
+        });
+    }
     Ok(LlmConfig {
         enabled: raw.enabled.unwrap_or(true),
         harness,
         model: raw.model.filter(|model| !model.trim().is_empty()),
         max_budget_usd: raw.max_budget_usd,
-        timeout_seconds: positive_setting(
-            raw.timeout_seconds,
-            DEFAULT_LLM_TIMEOUT_SECONDS,
-            LLM_SECTION,
-            "timeout_seconds",
-        )?,
+        timeout_seconds,
         confirm_before_send: raw.confirm_before_send.unwrap_or(true),
         priority_prompt: raw
             .priority_prompt
@@ -633,11 +663,49 @@ mod tests {
 
     #[test]
     fn interval_at_or_above_minimum_is_kept() {
-        for interval in [30, 31, i64::MAX] {
+        for interval in [30, 31, MAXIMUM_INTERVAL_SECONDS as i64] {
             let widget = interval_settings(interval);
             assert_eq!(widget.interval_seconds, interval as u64);
             assert!(!widget.interval_adjusted, "{interval}");
         }
+    }
+
+    #[test]
+    fn interval_above_maximum_is_capped_and_flagged() {
+        for interval in [MAXIMUM_INTERVAL_SECONDS as i64 + 1, i64::MAX] {
+            let widget = interval_settings(interval);
+            assert_eq!(widget.interval_seconds, MAXIMUM_INTERVAL_SECONDS);
+            assert!(widget.interval_adjusted, "{interval}");
+        }
+    }
+
+    #[test]
+    fn widget_timeout_above_maximum_is_rejected() {
+        let text = format!(
+            "[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntimeout_seconds = {}\n",
+            MAXIMUM_TIMEOUT_SECONDS + 1
+        );
+        assert_eq!(
+            parse_config(&text).unwrap_err(),
+            ConfigError::ValueTooLarge {
+                widget: "a".to_string(),
+                field: "timeout_seconds",
+                maximum: MAXIMUM_TIMEOUT_SECONDS,
+            }
+        );
+    }
+
+    #[test]
+    fn llm_timeout_above_maximum_is_rejected() {
+        let text = format!("[llm]\ntimeout_seconds = {}\n", MAXIMUM_TIMEOUT_SECONDS + 1);
+        assert_eq!(
+            parse_config(&text).unwrap_err(),
+            ConfigError::SettingTooLarge {
+                section: "llm".to_string(),
+                field: "timeout_seconds",
+                maximum: MAXIMUM_TIMEOUT_SECONDS,
+            }
+        );
     }
 
     #[test]

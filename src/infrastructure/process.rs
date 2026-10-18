@@ -12,6 +12,7 @@ use thiserror::Error;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READ_CHUNK_BYTES: usize = 8192;
 const CANCEL_RELEASE_LIMIT: Duration = Duration::from_secs(2);
+const INVALID_TIMEOUT_MESSAGE: &str = "tempo limite inválido";
 
 #[derive(Debug, Error)]
 #[error("{message}")]
@@ -128,7 +129,9 @@ pub fn run_process(
         return Err(cancelled_error());
     }
     let program = command.get_program().to_string_lossy().to_string();
-    let deadline = Instant::now() + limits.timeout;
+    let deadline = Instant::now()
+        .checked_add(limits.timeout)
+        .ok_or_else(|| ProcessError::new(INVALID_TIMEOUT_MESSAGE))?;
     isolate_process_group(&mut command);
     let mut child = command
         .stdin(Stdio::piped())
@@ -722,5 +725,18 @@ mod tests {
         .unwrap_err();
         assert!(started.elapsed() < WAIT_LIMIT, "{:?}", started.elapsed());
         assert!(error.to_string().contains("tempo"), "{error}");
+    }
+
+    #[test]
+    fn unrepresentable_timeout_is_an_error_not_a_panic() {
+        let limits = ProcessLimits {
+            timeout: Duration::MAX,
+            maximum_output_bytes: 1024,
+        };
+        let error = run(shell("exit 0"), None, &limits).unwrap_err();
+        assert!(
+            error.to_string().contains("tempo limite inválido"),
+            "{error}"
+        );
     }
 }
