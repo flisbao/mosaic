@@ -47,7 +47,7 @@ def build_issues(now):
         issue("VHPJ-1", "Ticket novo sem dono", TO_DO, None, now - hours(5), now - hours(5)),
         issue("VHPJ-2", "Corrigir login", IN_PROGRESS, ANA, now - hours(48), now - timedelta(minutes=30)),
         issue("VHPJ-3", "Ajustar relatório", IN_PROGRESS, BRUNO, now - hours(24), now - hours(6)),
-        issue("VHPJ-4", "Migrar banco", DONE, ANA, now - hours(72), now - hours(24), now - hours(24)),
+        issue("VHPJ-4", "Migrar banco", DONE, ANA, now - hours(72), now - hours(30), now - hours(30)),
         issue("VHPJ-5", "Meu ticket em andamento", IN_PROGRESS, ME, now - hours(30), now - hours(2)),
         issue("VHPJ-6", "Meu ticket concluído", DONE, ME, now - hours(80), now - hours(48), now - hours(48)),
     ]

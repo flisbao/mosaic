@@ -32,6 +32,8 @@ impl ProcessError {
 
 #[cfg(unix)]
 const LOWEST_SAFE_PROCESS_GROUP_ID: i32 = 2;
+#[cfg(unix)]
+const ABSOLUTE_KILL_PATH: &str = "/bin/kill";
 
 #[derive(Clone, Default)]
 pub struct CancelFlag(Arc<AtomicBool>);
@@ -127,9 +129,10 @@ fn wait_for_exit(
             }
             Ok(None) => thread::sleep(POLL_INTERVAL),
             Err(error) => {
+                terminate(child);
                 return Err(ProcessError::new(format!(
                     "falha ao aguardar o processo: {error}"
-                )))
+                )));
             }
         }
     }
@@ -171,8 +174,19 @@ fn terminate(child: &mut Child) {
 #[cfg(unix)]
 fn signal_process_group(pid: u32) {
     if let Some(target) = process_group_argument(pid) {
-        let _ = Command::new("kill").args(["-KILL", "--", &target]).output();
+        let _ = kill_command().args(["-KILL", "--", &target]).output();
     }
+}
+
+#[cfg(unix)]
+fn kill_command() -> Command {
+    let absolute = std::path::Path::new(ABSOLUTE_KILL_PATH);
+    let program = if absolute.exists() {
+        ABSOLUTE_KILL_PATH
+    } else {
+        "kill"
+    };
+    Command::new(program)
 }
 
 #[cfg(not(unix))]
@@ -238,6 +252,8 @@ mod tests {
     const WAIT_LIMIT: Duration = Duration::from_secs(5);
     const CANCEL_DELAY: Duration = Duration::from_millis(100);
     const SPAWN_CHECK_INTERVAL: Duration = Duration::from_millis(10);
+    const DESCENDANT_CHECK_INTERVAL: Duration = Duration::from_millis(20);
+    const DESCENDANT_EXIT_LIMIT: Duration = Duration::from_secs(5);
 
     fn shell(script: &str) -> Command {
         let mut command = Command::new("sh");
@@ -282,11 +298,33 @@ mod tests {
         })
     }
 
-    fn process_exists(pid: &str) -> bool {
-        Command::new("kill")
+    fn is_gone(pid: &str) -> bool {
+        let signalable = kill_command()
             .args(["-0", pid])
-            .status()
-            .is_ok_and(|status| status.success())
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !signalable {
+            return true;
+        }
+        Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .is_ok_and(|output| {
+                let state = String::from_utf8_lossy(&output.stdout);
+                let state = state.trim();
+                state.is_empty() || state.starts_with('Z')
+            })
+    }
+
+    fn wait_until_gone(pid: &str) -> bool {
+        let deadline = Instant::now() + DESCENDANT_EXIT_LIMIT;
+        while Instant::now() < deadline {
+            if is_gone(pid) {
+                return true;
+            }
+            thread::sleep(DESCENDANT_CHECK_INTERVAL);
+        }
+        is_gone(pid)
     }
 
     fn read_grandchild_pid(pid_file: &Path) -> String {
@@ -326,7 +364,7 @@ mod tests {
         cancel_thread.join().unwrap();
         assert!(error.to_string().contains("cancelado"), "{error}");
         let grandchild = read_grandchild_pid(&pid_file);
-        assert!(!process_exists(&grandchild));
+        assert!(wait_until_gone(&grandchild));
     }
 
     #[test]
@@ -349,7 +387,7 @@ mod tests {
         let error = run(shell(&grandchild_script(&pid_file)), None, &limits(2, 1024)).unwrap_err();
         assert!(started.elapsed() < WAIT_LIMIT);
         assert!(error.to_string().contains("tempo"), "{error}");
-        assert!(!process_exists(&read_grandchild_pid(&pid_file)));
+        assert!(wait_until_gone(&read_grandchild_pid(&pid_file)));
     }
 
     #[test]
