@@ -1,19 +1,12 @@
 use serde_json::{Map, Value};
 
-use crate::domain::blocks::{
-    lines::{WidgetLine, MAXIMUM_LINES_PER_BLOCK},
-    rows::{Row, Tag, MAXIMUM_TAGS_PER_ROW},
-    stat::{StatItem, MAXIMUM_STAT_ITEMS},
-    table::{Cell, Column, MAXIMUM_TABLE_COLUMNS},
-    Block,
-};
+use crate::domain::blocks::Block;
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetSnapshot,
 };
-use crate::domain::widget_content::{
-    clean_text, clean_text_limited, Alert, AlertLevel, Align, Tone,
-};
+use crate::domain::widget_content::{clean_text, clean_text_limited, Alert, AlertLevel, Tone};
 use crate::infrastructure::plugin_protocol::ProtocolError;
+use crate::infrastructure::protocol_blocks::find_parser;
 
 pub use crate::domain::snapshot_report::{ParsedSnapshot, Problem, Severity};
 
@@ -81,7 +74,7 @@ pub fn parse_snapshot_report(json: &str) -> Result<ParsedSnapshot, ProtocolError
     })
 }
 
-fn child_path(parent: &str, key: &str) -> String {
+pub(super) fn child_path(parent: &str, key: &str) -> String {
     if parent.is_empty() {
         key.to_string()
     } else {
@@ -93,12 +86,12 @@ fn key_path(parent: &str, key: &str) -> String {
     child_path(parent, &clean_text_limited(key, MAXIMUM_KEY_CHARACTERS))
 }
 
-fn indexed_path(parent: &str, index: usize) -> String {
+pub(super) fn indexed_path(parent: &str, index: usize) -> String {
     format!("{parent}[{index}]")
 }
 
 #[derive(Default)]
-struct Reader {
+pub(super) struct Reader {
     problems: Vec<Problem>,
 }
 
@@ -111,11 +104,11 @@ impl Reader {
         });
     }
 
-    fn error(&mut self, path: &str, message: &str) {
+    pub(super) fn error(&mut self, path: &str, message: &str) {
         self.report(path, message, Severity::Error);
     }
 
-    fn warning(&mut self, path: &str, message: &str) {
+    pub(super) fn warning(&mut self, path: &str, message: &str) {
         self.report(path, message, Severity::Warning);
     }
 
@@ -125,7 +118,7 @@ impl Reader {
         }
     }
 
-    fn limited(&mut self, text: &str, path: &str) -> String {
+    pub(super) fn limited(&mut self, text: &str, path: &str) -> String {
         let cleaned = clean_text(text);
         if cleaned.chars().count() <= MAXIMUM_TEXT_CHARACTERS {
             return cleaned;
@@ -137,7 +130,7 @@ impl Reader {
         clean_text_limited(&cleaned, MAXIMUM_TEXT_CHARACTERS)
     }
 
-    fn required_text(
+    pub(super) fn required_text(
         &mut self,
         object: &Map<String, Value>,
         key: &str,
@@ -157,7 +150,7 @@ impl Reader {
         }
     }
 
-    fn optional_text(
+    pub(super) fn optional_text(
         &mut self,
         object: &Map<String, Value>,
         key: &str,
@@ -174,7 +167,7 @@ impl Reader {
         }
     }
 
-    fn flag(&mut self, object: &Map<String, Value>, path: &str) -> Option<Flag> {
+    pub(super) fn flag(&mut self, object: &Map<String, Value>, path: &str) -> Option<Flag> {
         let field_path = child_path(path, "flag");
         match object.get("flag") {
             Some(Value::String(name)) => {
@@ -243,7 +236,11 @@ impl Reader {
         }
     }
 
-    fn object_entry<'a>(&mut self, entry: &'a Value, path: &str) -> Option<&'a Map<String, Value>> {
+    pub(super) fn object_entry<'a>(
+        &mut self,
+        entry: &'a Value,
+        path: &str,
+    ) -> Option<&'a Map<String, Value>> {
         let object = entry.as_object();
         if object.is_none() {
             self.error(path, "precisa ser um objeto");
@@ -251,14 +248,19 @@ impl Reader {
         object
     }
 
-    fn error_count(&self) -> usize {
+    pub(super) fn error_count(&self) -> usize {
         self.problems
             .iter()
             .filter(|problem| problem.severity == Severity::Error)
             .count()
     }
 
-    fn capped<'a>(&mut self, entries: &'a [Value], limit: usize, path: &str) -> &'a [Value] {
+    pub(super) fn capped<'a>(
+        &mut self,
+        entries: &'a [Value],
+        limit: usize,
+        path: &str,
+    ) -> &'a [Value] {
         if entries.len() <= limit {
             return entries;
         }
@@ -266,7 +268,7 @@ impl Reader {
         &entries[..limit]
     }
 
-    fn required_list<'a>(
+    pub(super) fn required_list<'a>(
         &mut self,
         object: &'a Map<String, Value>,
         key: &str,
@@ -285,7 +287,7 @@ impl Reader {
         }
     }
 
-    fn tone(&mut self, object: &Map<String, Value>, path: &str) -> Tone {
+    pub(super) fn tone(&mut self, object: &Map<String, Value>, path: &str) -> Tone {
         let tone_path = child_path(path, "tone");
         match object.get("tone") {
             Some(Value::String(name)) => Tone::parse(name).unwrap_or_else(|| {
@@ -327,232 +329,14 @@ impl Reader {
             self.error(&child_path(path, "type"), "type ausente");
             return None;
         };
-        let errors_before = self.error_count();
-        let block = match kind {
-            "lines" => self.lines_block(object, path),
-            "rows" => self.rows_block(object, path),
-            "stat" => self.stat_block(object, path),
-            "table" => self.table_block(object, path),
-            other => {
-                let message = format!("tipo de bloco desconhecido: {}", clean_text(other));
-                self.warning(path, &message);
-                return None;
-            }
-        };
-        (self.error_count() == errors_before).then_some(block)
-    }
-
-    fn lines_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
-        let lines_path = child_path(path, "lines");
-        let entries = self.required_list(object, "lines", path);
-        let entries = self.capped(entries, MAXIMUM_LINES_PER_BLOCK, &lines_path);
-        let mut lines = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let line_path = indexed_path(&lines_path, index);
-            let Some(line) = self.object_entry(entry, &line_path) else {
-                continue;
-            };
-            let Some(text) = self.required_text(line, "text", &line_path) else {
-                continue;
-            };
-            let tone = self.tone(line, &line_path);
-            let flag = self.flag(line, &line_path);
-            lines.push(WidgetLine { text, tone, flag });
-        }
-        Block::Lines(lines)
-    }
-
-    fn rows_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
-        let rows_path = child_path(path, "rows");
-        let entries = self.required_list(object, "rows", path);
-        let entries = self.capped(entries, MAXIMUM_LINES_PER_BLOCK, &rows_path);
-        let mut rows = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let row_path = indexed_path(&rows_path, index);
-            if let Some(row) = self.row(entry, &row_path) {
-                rows.push(row);
-            }
-        }
-        Block::Rows(rows)
-    }
-
-    fn row(&mut self, entry: &Value, path: &str) -> Option<Row> {
-        let object = self.object_entry(entry, path)?;
-        let text = self.required_text(object, "text", path)?;
-        Some(Row {
-            text,
-            time: self.optional_text(object, "time", path),
-            tags: self.tags(object, path),
-            tone: self.tone(object, path),
-            marker: self.marker(object, path),
-            flag: self.flag(object, path),
-        })
-    }
-
-    fn stat_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
-        let items_path = child_path(path, "items");
-        let entries = self.required_list(object, "items", path);
-        let entries = self.capped(entries, MAXIMUM_STAT_ITEMS, &items_path);
-        let mut items = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let item_path = indexed_path(&items_path, index);
-            let Some(item) = self.object_entry(entry, &item_path) else {
-                continue;
-            };
-            let value = self.required_text(item, "value", &item_path);
-            let label = self.required_text(item, "label", &item_path);
-            let (Some(value), Some(label)) = (value, label) else {
-                continue;
-            };
-            let tone = self.tone(item, &item_path);
-            items.push(StatItem { value, label, tone });
-        }
-        Block::Stat {
-            items,
-            hint: self.optional_text(object, "hint", path),
-        }
-    }
-
-    fn table_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
-        let columns = self.columns(object, path);
-        let rows_path = child_path(path, "rows");
-        let entries = self.required_list(object, "rows", path);
-        let entries = self.capped(entries, MAXIMUM_LINES_PER_BLOCK, &rows_path);
-        let mut rows = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let row_path = indexed_path(&rows_path, index);
-            if let Some(cells) = self.table_row(entry, columns.len(), &row_path) {
-                rows.push(cells);
-            }
-        }
-        Block::Table { columns, rows }
-    }
-
-    fn columns(&mut self, object: &Map<String, Value>, path: &str) -> Vec<Column> {
-        let columns_path = child_path(path, "columns");
-        let entries = self.required_list(object, "columns", path);
-        if entries.is_empty() && object.get("columns").is_some_and(Value::is_array) {
-            self.error(&columns_path, "precisa ter ao menos uma coluna");
-        }
-        let entries = self.capped(entries, MAXIMUM_TABLE_COLUMNS, &columns_path);
-        let mut columns = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let column_path = indexed_path(&columns_path, index);
-            let Some(column) = self.object_entry(entry, &column_path) else {
-                continue;
-            };
-            let Some(title) = self.required_text(column, "title", &column_path) else {
-                continue;
-            };
-            let align = self.align(column, &column_path);
-            columns.push(Column { title, align });
-        }
-        columns
-    }
-
-    fn align(&mut self, column: &Map<String, Value>, path: &str) -> Align {
-        match column.get("align").and_then(Value::as_str) {
-            Some("right") => Align::Right,
-            Some("left") | None => Align::Left,
-            Some(_) => {
-                self.warning(
-                    &child_path(path, "align"),
-                    "alinhamento desconhecido; usando left",
-                );
-                Align::Left
-            }
-        }
-    }
-
-    fn table_row(&mut self, entry: &Value, width: usize, path: &str) -> Option<Vec<Cell>> {
-        let Some(entries) = entry.as_array() else {
-            self.error(path, "precisa ser uma lista de células");
+        let Some(parser) = find_parser(kind) else {
+            let message = format!("tipo de bloco desconhecido: {}", clean_text(kind));
+            self.warning(path, &message);
             return None;
         };
-        if entries.len() != width {
-            self.warning(
-                path,
-                &format!(
-                    "a linha tem {} células e a tabela {width} colunas",
-                    entries.len()
-                ),
-            );
-        }
-        let mut cells = vec![];
-        for (index, cell) in entries.iter().take(width).enumerate() {
-            cells.extend(self.cell(cell, &indexed_path(path, index)));
-        }
-        cells.resize_with(width, || Cell {
-            text: String::new(),
-            tone: Tone::Normal,
-            flag: None,
-        });
-        Some(cells)
-    }
-
-    fn cell(&mut self, entry: &Value, path: &str) -> Option<Cell> {
-        match entry {
-            Value::String(text) => Some(Cell {
-                text: self.limited(text, path),
-                tone: Tone::Normal,
-                flag: None,
-            }),
-            Value::Object(object) => {
-                let text = self.required_text(object, "text", path)?;
-                Some(Cell {
-                    text,
-                    tone: self.tone(object, path),
-                    flag: self.flag(object, path),
-                })
-            }
-            _ => {
-                self.error(path, "célula precisa ser texto ou objeto");
-                None
-            }
-        }
-    }
-
-    fn marker(&mut self, object: &Map<String, Value>, path: &str) -> Option<char> {
-        let text = self.optional_text(object, "marker", path)?;
-        let mut characters = text.chars();
-        match (characters.next(), characters.next()) {
-            (Some(marker), None) => Some(marker),
-            _ => {
-                self.warning(
-                    &child_path(path, "marker"),
-                    "precisa ter exatamente um caractere; ignorado",
-                );
-                None
-            }
-        }
-    }
-
-    fn tags(&mut self, row: &Map<String, Value>, path: &str) -> Vec<Tag> {
-        let tags_path = child_path(path, "tags");
-        let entries = match row.get("tags") {
-            Some(Value::Array(entries)) => entries,
-            Some(Value::Null) | None => return vec![],
-            Some(_) => {
-                self.warning(&tags_path, "precisa ser uma lista; ignorado");
-                return vec![];
-            }
-        };
-        let entries = self.capped(entries, MAXIMUM_TAGS_PER_ROW, &tags_path);
-        let mut tags = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let tag_path = indexed_path(&tags_path, index);
-            let Some(tag) = entry.as_object() else {
-                self.warning(&tag_path, "precisa ser um objeto; ignorado");
-                continue;
-            };
-            let Some(text) = self.optional_text(tag, "text", &tag_path) else {
-                self.warning(&tag_path, "etiqueta sem texto; ignorada");
-                continue;
-            };
-            let tone = self.tone(tag, &tag_path);
-            tags.push(Tag { text, tone });
-        }
-        tags
+        let errors_before = self.error_count();
+        let block = parser.parse(self, object, path);
+        (self.error_count() == errors_before).then_some(block)
     }
 
     fn legacy_lines(&mut self, summary: &Map<String, Value>) -> Vec<SummaryLine> {
