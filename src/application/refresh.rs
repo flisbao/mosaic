@@ -15,6 +15,7 @@ pub(crate) mod fakes {
     pub struct FakeSource {
         pub result: Result<WidgetSnapshot, SourceError>,
         pub calls: AtomicUsize,
+        pub cancel_calls: AtomicUsize,
     }
 
     impl FakeSource {
@@ -22,11 +23,16 @@ pub(crate) mod fakes {
             Self {
                 result,
                 calls: AtomicUsize::new(0),
+                cancel_calls: AtomicUsize::new(0),
             }
         }
 
         pub fn call_count(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
+        }
+
+        pub fn cancel_call_count(&self) -> usize {
+            self.cancel_calls.load(Ordering::SeqCst)
         }
     }
 
@@ -34,6 +40,10 @@ pub(crate) mod fakes {
         fn snapshot(&self) -> Result<WidgetSnapshot, SourceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.result.clone()
+        }
+
+        fn cancel(&self) {
+            self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -62,6 +72,14 @@ mod tests {
         let source = FakeSource::returning(Ok(snapshot_titled("Kanban")));
         assert_eq!(refresh_widget(&source), Ok(snapshot_titled("Kanban")));
         assert_eq!(source.call_count(), 1);
+    }
+
+    #[test]
+    fn fake_source_counts_cancel_calls() {
+        let source = FakeSource::returning(Ok(snapshot_titled("Kanban")));
+        source.cancel();
+        source.cancel();
+        assert_eq!(source.cancel_call_count(), 2);
     }
 
     #[test]

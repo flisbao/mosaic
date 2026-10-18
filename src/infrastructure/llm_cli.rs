@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
 use crate::infrastructure::private_directory::prepare_private_directory;
-use crate::infrastructure::process::{run_process, ProcessLimits};
+use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
@@ -159,7 +159,7 @@ fn run_cli(
         timeout,
         maximum_output_bytes: MAXIMUM_LLM_OUTPUT_BYTES,
     };
-    run_process(command, stdin_text, &limits).map_err(|error| {
+    run_process(command, stdin_text, &limits, &CancelFlag::default()).map_err(|error| {
         if error.program_not_found() {
             LlmError::Unavailable(format!("`{program}` não encontrado no PATH"))
         } else {

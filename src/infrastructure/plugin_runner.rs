@@ -7,13 +7,14 @@ use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
 use crate::infrastructure::config::WidgetSettings;
 use crate::infrastructure::plugin_protocol::parse_snapshot;
-use crate::infrastructure::process::{run_process, ProcessLimits};
+use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 
 pub struct PluginRunner {
     settings: WidgetSettings,
     working_directory: PathBuf,
+    cancel_flag: CancelFlag,
 }
 
 impl PluginRunner {
@@ -21,6 +22,7 @@ impl PluginRunner {
         Self {
             settings,
             working_directory,
+            cancel_flag: CancelFlag::default(),
         }
     }
 
@@ -35,7 +37,7 @@ impl PluginRunner {
             timeout: Duration::from_secs(self.settings.timeout_seconds),
             maximum_output_bytes: MAXIMUM_PLUGIN_OUTPUT_BYTES,
         };
-        run_process(command, stdin_text, &limits)
+        run_process(command, stdin_text, &limits, &self.cancel_flag)
             .map_err(|error| SourceError::Failed(error.to_string()))
     }
 
@@ -48,6 +50,10 @@ impl WidgetSource for PluginRunner {
     fn snapshot(&self) -> Result<WidgetSnapshot, SourceError> {
         let output = self.raw_snapshot_output()?;
         parse_snapshot(&output).map_err(|error| SourceError::Failed(error.to_string()))
+    }
+
+    fn cancel(&self) {
+        self.cancel_flag.cancel();
     }
 }
 
@@ -219,6 +225,15 @@ mod tests {
             5,
         );
         assert_eq!(runner.snapshot().unwrap().summary.title, "/tmp/kanban");
+    }
+
+    #[test]
+    fn plugin_runner_cancel_delegates_to_flag() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = runner(directory.path(), "exec sleep 30", 60);
+        runner.cancel();
+        assert!(runner.cancel_flag.is_cancelled());
+        assert!(snapshot_error(&runner).contains("cancelado"));
     }
 
     #[test]

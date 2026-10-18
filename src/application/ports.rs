@@ -12,6 +12,7 @@ pub enum SourceError {
 
 pub trait WidgetSource: Send + Sync {
     fn snapshot(&self) -> Result<WidgetSnapshot, SourceError>;
+    fn cancel(&self);
 }
 
 pub trait ActionExecutor: Send + Sync {
