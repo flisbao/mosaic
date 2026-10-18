@@ -57,6 +57,10 @@ impl Cancellable for PluginRunner {
     fn cancel(&self) {
         self.cancel_flag.cancel();
     }
+
+    fn request_cancel(&self) {
+        self.cancel_flag.request_cancel();
+    }
 }
 
 impl ActionExecutor for PluginRunner {

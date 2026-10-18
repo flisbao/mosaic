@@ -8,6 +8,11 @@ pub fn should_stop(flag: &AtomicBool) -> bool {
     flag.load(Ordering::SeqCst)
 }
 
+fn cancel_in_background(cancellable: Arc<dyn Cancellable>) {
+    cancellable.request_cancel();
+    thread::spawn(move || cancellable.cancel());
+}
+
 pub struct ShutdownCoordinator {
     sources: Mutex<Vec<(String, Arc<dyn Cancellable>)>>,
     completed: AtomicBool,
@@ -43,7 +48,7 @@ impl ShutdownCoordinator {
             }
         };
         if let Some(previous) = replaced {
-            previous.cancel();
+            cancel_in_background(previous);
         }
     }
 
@@ -56,7 +61,7 @@ impl ShutdownCoordinator {
                 .map(|position| sources.remove(position))
         };
         if let Some((_, cancellable)) = retired {
-            cancellable.cancel();
+            cancel_in_background(cancellable);
         }
     }
 
@@ -103,6 +108,74 @@ mod tests {
     const SLOW_CANCEL_DURATION: Duration = Duration::from_millis(100);
     const SLOW_SOURCE_COUNT: usize = 8;
     const PARALLEL_SHUTDOWN_BUDGET: Duration = Duration::from_millis(400);
+    const SLOW_RETIRE_CANCEL_DURATION: Duration = Duration::from_millis(400);
+    const RETIRE_RETURN_BUDGET: Duration = Duration::from_millis(50);
+    const BACKGROUND_CANCEL_LIMIT: Duration = Duration::from_secs(3);
+    const POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+    struct SlowRetireCancellable {
+        request_calls: AtomicUsize,
+        cancel_calls: AtomicUsize,
+    }
+
+    impl SlowRetireCancellable {
+        fn new() -> Self {
+            Self {
+                request_calls: AtomicUsize::new(0),
+                cancel_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl Cancellable for SlowRetireCancellable {
+        fn cancel(&self) {
+            thread::sleep(SLOW_RETIRE_CANCEL_DURATION);
+            self.cancel_calls.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn request_cancel(&self) {
+            self.request_calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn wait_until(condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + BACKGROUND_CANCEL_LIMIT;
+        while !condition() && Instant::now() < deadline {
+            thread::sleep(POLL_INTERVAL);
+        }
+        condition()
+    }
+
+    #[test]
+    fn retire_returns_before_a_slow_cancel_finishes() {
+        let slow = Arc::new(SlowRetireCancellable::new());
+        let coordinator = ShutdownCoordinator::new();
+        coordinator.register("slow", slow.clone());
+
+        let started = Instant::now();
+        coordinator.retire("slow");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < RETIRE_RETURN_BUDGET,
+            "retire bloqueou por {elapsed:?}"
+        );
+        assert_eq!(slow.request_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retire_cancels_a_slow_source_exactly_once_in_background() {
+        let slow = Arc::new(SlowRetireCancellable::new());
+        let coordinator = ShutdownCoordinator::new();
+        coordinator.register("slow", slow.clone());
+
+        coordinator.retire("slow");
+
+        assert!(wait_until(|| slow.cancel_calls.load(Ordering::SeqCst) == 1));
+        coordinator.shutdown();
+        thread::sleep(SLOW_RETIRE_CANCEL_DURATION);
+        assert_eq!(slow.cancel_calls.load(Ordering::SeqCst), 1);
+    }
 
     struct SlowCancellable {
         cancel_calls: AtomicUsize,
@@ -230,7 +303,7 @@ mod tests {
 
         coordinator.retire("removed");
 
-        assert_eq!(removed.cancel_call_count(), 1);
+        assert!(wait_until(|| removed.cancel_call_count() == 1));
         assert_eq!(kept.cancel_call_count(), 0);
     }
 
@@ -243,6 +316,7 @@ mod tests {
         coordinator.retire("removed");
         coordinator.shutdown();
 
+        assert!(wait_until(|| removed.cancel_call_count() == 1));
         assert_eq!(removed.cancel_call_count(), 1);
     }
 
@@ -254,7 +328,7 @@ mod tests {
         coordinator.register("jira", replaced.clone());
         coordinator.register("jira", replacement.clone());
 
-        assert_eq!(replaced.cancel_call_count(), 1);
+        assert!(wait_until(|| replaced.cancel_call_count() == 1));
         assert_eq!(replacement.cancel_call_count(), 0);
 
         coordinator.shutdown();

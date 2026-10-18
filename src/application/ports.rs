@@ -12,6 +12,7 @@ pub enum SourceError {
 
 pub trait Cancellable: Send + Sync {
     fn cancel(&self);
+    fn request_cancel(&self) {}
 }
 
 pub trait WidgetSource: Cancellable {

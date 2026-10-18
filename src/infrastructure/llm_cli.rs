@@ -87,6 +87,10 @@ impl Cancellable for ClaudeCli {
     fn cancel(&self) {
         self.cancel_flag.cancel();
     }
+
+    fn request_cancel(&self) {
+        self.cancel_flag.request_cancel();
+    }
 }
 
 pub struct OpenCodeCli {
@@ -156,6 +160,10 @@ impl LlmRunner for OpenCodeCli {
 impl Cancellable for OpenCodeCli {
     fn cancel(&self) {
         self.cancel_flag.cancel();
+    }
+
+    fn request_cancel(&self) {
+        self.cancel_flag.request_cancel();
     }
 }
 
