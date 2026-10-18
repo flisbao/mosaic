@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -9,6 +9,7 @@ use thiserror::Error;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const READ_CHUNK_BYTES: usize = 8192;
+const CANCEL_RELEASE_LIMIT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Error)]
 #[error("{message}")]
@@ -35,16 +36,57 @@ const LOWEST_SAFE_PROCESS_GROUP_ID: i32 = 2;
 #[cfg(unix)]
 const ABSOLUTE_KILL_PATH: &str = "/bin/kill";
 
+#[derive(Default)]
+struct CancelState {
+    cancelled: AtomicBool,
+    active_process_group: Mutex<Option<u32>>,
+    released: Condvar,
+}
+
 #[derive(Clone, Default)]
-pub struct CancelFlag(Arc<AtomicBool>);
+pub struct CancelFlag(Arc<CancelState>);
 
 impl CancelFlag {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.cancelled.store(true, Ordering::SeqCst);
+        let Ok(active) = self.0.active_process_group.lock() else {
+            return;
+        };
+        if let Some(group) = *active {
+            signal_process_group(group);
+        }
+        let _ = self
+            .0
+            .released
+            .wait_timeout_while(active, CANCEL_RELEASE_LIMIT, |group| group.is_some());
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn set_active_process_group(&self, group: Option<u32>) {
+        if let Ok(mut active) = self.0.active_process_group.lock() {
+            *active = group;
+        }
+        self.0.released.notify_all();
+    }
+}
+
+struct ActiveProcessGroup<'a> {
+    cancel: &'a CancelFlag,
+}
+
+impl<'a> ActiveProcessGroup<'a> {
+    fn enter(cancel: &'a CancelFlag, group: u32) -> Self {
+        cancel.set_active_process_group(Some(group));
+        Self { cancel }
+    }
+}
+
+impl Drop for ActiveProcessGroup<'_> {
+    fn drop(&mut self) {
+        self.cancel.set_active_process_group(None);
     }
 }
 
@@ -87,6 +129,7 @@ pub fn run_process(
             }
         });
     }
+    let _active_group = ActiveProcessGroup::enter(cancel, child.id());
     let stdout = capture(child.stdout.take(), limits.maximum_output_bytes, true);
     let stderr = capture(child.stderr.take(), limits.maximum_output_bytes, false);
     let status = wait_for_exit(&mut child, &stdout, limits, cancel)?;
@@ -365,6 +408,50 @@ mod tests {
         assert!(error.to_string().contains("cancelado"), "{error}");
         let grandchild = read_grandchild_pid(&pid_file);
         assert!(wait_until_gone(&grandchild));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_is_running(pid: &str) -> bool {
+        fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(')')
+                .is_some_and(|(_, state)| !state.trim_start().starts_with('Z'))
+        })
+    }
+
+    fn has_active_process_group(flag: &CancelFlag) -> bool {
+        flag.0
+            .active_process_group
+            .lock()
+            .is_ok_and(|group| group.is_some())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancel_returns_after_active_process_is_terminated() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let flag = CancelFlag::default();
+        let script = format!("echo $$ > '{}'; exec sleep 30", pid_file.display());
+        let runner_flag = flag.clone();
+        let runner = thread::spawn(move || {
+            run_process(shell(&script), None, &limits(60, 1024), &runner_flag)
+        });
+        let deadline = Instant::now() + WAIT_LIMIT;
+        while !(pid_file_is_written(&pid_file) && has_active_process_group(&flag))
+            && Instant::now() < deadline
+        {
+            thread::sleep(SPAWN_CHECK_INTERVAL);
+        }
+        let pid = read_grandchild_pid(&pid_file);
+        assert!(process_is_running(&pid));
+
+        flag.cancel();
+
+        assert!(
+            !process_is_running(&pid),
+            "cancel() deve retornar após o término do processo"
+        );
+        assert!(runner.join().unwrap().is_err());
     }
 
     #[test]

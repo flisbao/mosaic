@@ -7,4 +7,5 @@ pub mod ports;
 pub mod recommendation;
 pub mod recommendation_view;
 pub mod refresh;
+pub mod shutdown;
 pub mod widget_notices;

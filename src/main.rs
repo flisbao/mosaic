@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -16,7 +17,7 @@ use mosaic::application::llm::{
     execute_recommendation, LlmError, LlmRunner, RecommendationStore, StoredRecommendation,
 };
 use mosaic::application::pomodoro_notifications::{AlertMessage, Notifier};
-use mosaic::application::ports::{Clock, SourceError};
+use mosaic::application::ports::{Clock, SourceError, WidgetSource};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
@@ -24,6 +25,7 @@ use mosaic::application::recommendation_view::{
     idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
 };
 use mosaic::application::refresh::refresh_widget;
+use mosaic::application::shutdown::ShutdownCoordinator;
 use mosaic::application::widget_notices::with_interval_notice;
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
@@ -43,6 +45,7 @@ use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use mosaic::infrastructure::recommendation_file::{
     default_recommendation_path, FileRecommendationStore,
 };
+use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
 use mosaic::presentation::app_state::{AppState, Command};
@@ -98,6 +101,8 @@ struct LlmServices {
 
 struct Services {
     runtime: WidgetRuntime,
+    shutdown: ShutdownCoordinator,
+    termination: Arc<AtomicBool>,
     llm: Option<LlmServices>,
     notifier: CompositeNotifier,
     config_directory: PathBuf,
@@ -193,8 +198,9 @@ fn run() -> Result<(), AppError> {
     let config = parse_config(&config_text)?;
     let _graphics_support = detect_graphics_support(&|name| std::env::var(name).ok());
 
+    let termination = termination_requested()?;
     let (sender, receiver) = mpsc::channel();
-    let services = build_services(&config, &directory, &sender);
+    let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
     let clock = SystemClock;
     let ia_record = services
         .llm
@@ -227,6 +233,7 @@ fn run() -> Result<(), AppError> {
         &sender,
         &receiver,
     );
+    services.shutdown.shutdown();
     ratatui::restore();
     result
 }
@@ -255,13 +262,30 @@ fn tab_placements(config: &AppConfig) -> Vec<TabPlacement> {
         .collect()
 }
 
-fn build_services(config: &AppConfig, directory: &Path, sender: &Sender<AppEvent>) -> Services {
+fn build_services(
+    config: &AppConfig,
+    directory: &Path,
+    sender: &Sender<AppEvent>,
+    termination: Arc<AtomicBool>,
+) -> Services {
+    let runtime = start_widgets(&config.widgets, directory, sender);
+    let shutdown = ShutdownCoordinator::new(widget_sources(&runtime));
     Services {
-        runtime: start_widgets(&config.widgets, directory, sender),
+        runtime,
+        shutdown,
+        termination,
         llm: config.llm.enabled.then(|| build_llm_services(config)),
         notifier: build_notifier(config),
         config_directory: directory.to_path_buf(),
     }
+}
+
+fn widget_sources(runtime: &WidgetRuntime) -> Vec<Arc<dyn WidgetSource>> {
+    runtime
+        .runners
+        .values()
+        .map(|runner| Arc::clone(runner) as Arc<dyn WidgetSource>)
+        .collect()
 }
 
 fn build_llm_services(config: &AppConfig) -> LlmServices {
@@ -387,6 +411,9 @@ fn event_loop(
     let mut last_tick = Instant::now();
     let mut alert_tracker = AlertTracker::new();
     loop {
+        if services.termination.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         while let Ok(app_event) = receiver.try_recv() {
             apply_event(state, app_event, services, &mut alert_tracker, clock.now());
         }

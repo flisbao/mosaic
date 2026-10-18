@@ -9,5 +9,6 @@ pub mod process;
 pub mod protocol_blocks;
 pub mod protocol_report;
 pub mod recommendation_file;
+pub mod shutdown;
 pub mod system_clock;
 pub mod terminal_capabilities;
