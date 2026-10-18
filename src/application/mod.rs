@@ -1,3 +1,4 @@
+pub mod alert_tracker;
 pub mod execute_action;
 pub mod llm;
 pub mod pomodoro_notifications;
