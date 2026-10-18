@@ -1,0 +1,1 @@
+{"summary":{"title":"Kanban","lines":[{"text":"inbox 3","flag":"updated"}]},"detail":{"sections":[{"heading":"inbox","items":[{"id":"inbox/a.md","text":"Tarefa A","flag":"warning","meta":{"prioridade":"alta"}},{"text":"sem id"}]}]},"actions":[{"id":"move","label":"Mover","description":"Mover para done","applies_to":"item","params":{"to":"done"}}]}
