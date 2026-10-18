@@ -109,6 +109,18 @@ mod tests {
     }
 
     #[test]
+    fn uppercase_h_and_l_are_not_horizontal_movement() {
+        assert_eq!(
+            from_crossterm(press(KeyCode::Char('H'))),
+            Some(KeyInput::Character('H'))
+        );
+        assert_eq!(
+            from_crossterm(press(KeyCode::Char('L'))),
+            Some(KeyInput::Character('L'))
+        );
+    }
+
+    #[test]
     fn other_characters_are_passed_through() {
         assert_eq!(
             from_crossterm(press(KeyCode::Char('a'))),

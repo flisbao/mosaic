@@ -213,12 +213,6 @@ impl AppState {
             KeyInput::Character('p') => self.toggle_pomodoro(),
             KeyInput::Character('P') => self.reset_pomodoro(),
             KeyInput::Character('q') => return Some(Command::Quit),
-            KeyInput::Left
-            | KeyInput::Right
-            | KeyInput::PageUp
-            | KeyInput::PageDown
-            | KeyInput::Home
-            | KeyInput::End => {}
             _ => {}
         }
         None
@@ -239,12 +233,6 @@ impl AppState {
                 None => Mode::Browsing,
             },
             KeyInput::Escape | KeyInput::Character('n') => Mode::Browsing,
-            KeyInput::Left
-            | KeyInput::Right
-            | KeyInput::PageUp
-            | KeyInput::PageDown
-            | KeyInput::Home
-            | KeyInput::End => Mode::ChoosingAction { selected },
             _ => Mode::ChoosingAction { selected },
         };
     }
@@ -257,15 +245,6 @@ impl AppState {
         match key {
             KeyInput::Character('s') => Some(Command::Execute(proposed.confirm())),
             KeyInput::Escape | KeyInput::Character('n') => None,
-            KeyInput::Left
-            | KeyInput::Right
-            | KeyInput::PageUp
-            | KeyInput::PageDown
-            | KeyInput::Home
-            | KeyInput::End => {
-                self.mode = Mode::Confirming(proposed);
-                None
-            }
             _ => {
                 self.mode = Mode::Confirming(proposed);
                 None
@@ -282,15 +261,6 @@ impl AppState {
         match key {
             KeyInput::Character('s') => Some(Command::SendRecommendation(plan)),
             KeyInput::Escape | KeyInput::Character('n') => None,
-            KeyInput::Left
-            | KeyInput::Right
-            | KeyInput::PageUp
-            | KeyInput::PageDown
-            | KeyInput::Home
-            | KeyInput::End => {
-                self.mode = Mode::ConfirmingSend { text, plan };
-                None
-            }
             _ => {
                 self.mode = Mode::ConfirmingSend { text, plan };
                 None

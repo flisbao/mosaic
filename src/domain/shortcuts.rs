@@ -15,6 +15,7 @@ mod tests {
 
     const WIDGET_COUNT_EXCEEDING_ALPHABET: usize = 30;
     const FREE_LETTER_COUNT: usize = 25;
+    const LETTER_Q_INDEX: usize = 16;
     const LETTER_AFTER_RESERVED_R_INDEX: usize = 17;
     const LAST_FREE_LETTER_INDEX: usize = 24;
     const INDEX_BEYOND_FREE_LETTERS: usize = 25;
@@ -23,11 +24,19 @@ mod tests {
     #[test]
     fn letters_start_at_a_and_skip_reserved() {
         let shortcuts = assign_shortcuts(WIDGET_COUNT_EXCEEDING_ALPHABET);
-        assert_eq!(shortcuts[16], Some('Q'));
+        assert_eq!(shortcuts[LETTER_Q_INDEX], Some('Q'));
         assert_eq!(shortcuts[LETTER_AFTER_RESERVED_R_INDEX], Some('S'));
         assert_eq!(shortcuts[LAST_FREE_LETTER_INDEX], Some('Z'));
         assert_eq!(shortcuts[INDEX_BEYOND_FREE_LETTERS], None);
         assert_eq!(shortcuts[LAST_WIDGET_INDEX], None);
+    }
+
+    #[test]
+    fn reserved_letters_are_never_assigned() {
+        let shortcuts = assign_shortcuts(WIDGET_COUNT_EXCEEDING_ALPHABET);
+        for reserved in RESERVED_SHORTCUT_LETTERS {
+            assert!(!shortcuts.contains(&Some(reserved)));
+        }
     }
 
     #[test]
