@@ -20,6 +20,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         args: vec![kanban_plugin_path().to_string_lossy().to_string()],
         env: vec![("KANBAN_DIR".to_string(), root.to_string_lossy().to_string())],
         interval_seconds: 30,
+        interval_adjusted: false,
         timeout_seconds: 10,
         span: 1,
         tab: true,

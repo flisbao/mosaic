@@ -9,7 +9,7 @@ const DEFAULT_CONFIG: &str = r#"[[widgets]]
 id = "kanban"
 command = "python3"
 args = ["plugins/kanban.py"]
-interval_seconds = 15
+interval_seconds = 30
 tab = true
 llm_sections = ["inbox", "in progress", "acompanhar_jira"]
 
@@ -152,6 +152,15 @@ mod tests {
                 "{plugin}"
             );
         }
+    }
+
+    #[test]
+    fn default_kanban_uses_the_minimum_interval() {
+        let config = crate::infrastructure::config::parse_config(default_config_text()).unwrap();
+        let kanban = &config.widgets[0];
+        assert_eq!(kanban.id.as_str(), "kanban");
+        assert_eq!(kanban.interval_seconds, 30);
+        assert!(!kanban.interval_adjusted);
     }
 
     #[test]

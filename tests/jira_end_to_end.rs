@@ -69,6 +69,7 @@ fn jira_runner(server: &FakeJira, state_dir: &Path, mode: &str, token: &str) -> 
             .map(|(name, value)| (name.to_string(), value.clone()))
             .collect(),
         interval_seconds: 120,
+        interval_adjusted: false,
         timeout_seconds: 30,
         span: 1,
         tab: true,

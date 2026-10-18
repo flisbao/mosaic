@@ -75,6 +75,7 @@ mod tests {
             args: vec!["plugin.sh".to_string()],
             env: vec![("KANBAN_DIR".to_string(), "/tmp/kanban".to_string())],
             interval_seconds: 30,
+            interval_adjusted: false,
             timeout_seconds,
             span: 1,
             tab: false,
