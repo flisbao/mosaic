@@ -400,11 +400,14 @@ mod tests {
             meta: vec![],
         };
         WidgetState::Ready(WidgetSnapshot {
+            alerts: vec![],
             summary: Summary {
+                blocks: vec![],
                 title: "Kanban".to_string(),
                 lines: vec![],
             },
             detail: Some(vec![DetailSection {
+                blocks: vec![],
                 heading: "inbox".to_string(),
                 items: vec![item("inbox/a.md"), item("inbox/b.md")],
             }]),

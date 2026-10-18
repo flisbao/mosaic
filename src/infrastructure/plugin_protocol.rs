@@ -66,7 +66,9 @@ pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
     let raw: RawSnapshot =
         serde_json::from_str(json).map_err(|error| ProtocolError(error.to_string()))?;
     Ok(WidgetSnapshot {
+        alerts: vec![],
         summary: Summary {
+            blocks: vec![],
             title: raw.summary.title,
             lines: raw
                 .summary
@@ -83,6 +85,7 @@ pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
                 .sections
                 .into_iter()
                 .map(|section| DetailSection {
+                    blocks: vec![],
                     heading: section.heading,
                     items: section
                         .items

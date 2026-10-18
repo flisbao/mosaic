@@ -427,7 +427,9 @@ mod tests {
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
         WidgetSnapshot {
+            alerts: vec![],
             summary: Summary {
+                blocks: vec![],
                 title: title.to_string(),
                 lines,
             },
@@ -454,6 +456,7 @@ mod tests {
     fn kanban_entry() -> WidgetEntry {
         let mut kanban = snapshot("Kanban", vec![plain_line("inbox 3")]);
         kanban.detail = Some(vec![DetailSection {
+            blocks: vec![],
             heading: "inbox".to_string(),
             items: vec![
                 DetailItem {
@@ -744,11 +747,14 @@ mod tests {
         let mut state = AppState::new(vec![entry(
             "ia",
             WidgetState::Ready(WidgetSnapshot {
+                alerts: vec![],
                 summary: Summary {
+                    blocks: vec![],
                     title: "IA".to_string(),
                     lines: vec![],
                 },
                 detail: Some(vec![DetailSection {
+                    blocks: vec![],
                     heading: "Recomendação".to_string(),
                     items: vec![DetailItem {
                         id: None,
