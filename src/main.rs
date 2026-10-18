@@ -8,11 +8,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event};
+use panel_tui::application::alert_tracker::AlertTracker;
+use panel_tui::application::check_report::build_check_report;
 use panel_tui::application::execute_action::{execute_confirmed, ActionNotice};
 use panel_tui::application::llm::{
     execute_recommendation, LlmError, LlmRunner, RecommendationStore, StoredRecommendation,
 };
-use panel_tui::application::pomodoro_notifications::Notifier;
+use panel_tui::application::pomodoro_notifications::{AlertMessage, Notifier};
 use panel_tui::application::ports::Clock;
 use panel_tui::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
@@ -21,23 +23,29 @@ use panel_tui::application::recommendation_view::{
     idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
 };
 use panel_tui::application::refresh::refresh_widget;
+use panel_tui::application::widget_notices::with_interval_notice;
 use panel_tui::domain::action::ConfirmedAction;
+use panel_tui::domain::card::AlertLevel;
 use panel_tui::domain::pomodoro::PomodoroTimer;
+use panel_tui::domain::widget::WidgetSnapshot;
 use panel_tui::domain::widget::{WidgetId, WidgetState};
 use panel_tui::infrastructure::config::{
     config_directory, config_file_path, parse_config, AppConfig, ConfigError, Harness, LlmConfig,
-    WidgetSettings,
+    WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+    DEFAULT_LLM_MAX_ITEMS, DEFAULT_SPAN,
 };
 use panel_tui::infrastructure::default_files::install_defaults_if_missing;
 use panel_tui::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
 use panel_tui::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
 use panel_tui::infrastructure::plugin_runner::PluginRunner;
+use panel_tui::infrastructure::protocol_report::parse_snapshot_report;
 use panel_tui::infrastructure::recommendation_file::{
     default_recommendation_path, FileRecommendationStore,
 };
 use panel_tui::infrastructure::system_clock::SystemClock;
 use panel_tui::infrastructure::terminal_capabilities::detect_graphics_support;
 use panel_tui::presentation::app_state::{AppState, Command, WidgetEntry};
+use panel_tui::presentation::card_view::{lines_to_plain_text, render_blocks};
 use panel_tui::presentation::key_input::from_crossterm;
 use panel_tui::presentation::render::render;
 use thiserror::Error;
@@ -50,6 +58,14 @@ const APP_DIRECTORY_NAME: &str = "panel-tui";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const FALLBACK_STORE_FILE_NAME: &str = "panel-tui-recommendation.json";
 const IA_WIDGET_SPAN: u16 = 1;
+const CHECK_SUBCOMMAND: &str = "check";
+const CHECK_USAGE: &str = "uso: panel check <comando> [args...] [--env NOME=valor]...";
+const CHECK_ENV_FLAG: &str = "--env";
+const CHECK_WIDGET_ID: &str = "check";
+const CHECK_TIMEOUT_SECONDS: u64 = 10;
+const CHECK_PREVIEW_WIDTH: usize = 60;
+const EXIT_CODE_USAGE: u8 = 2;
+const EXIT_CODE_FAILURE: u8 = 1;
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -84,7 +100,79 @@ struct Services {
     config_directory: PathBuf,
 }
 
+struct CheckInvocation {
+    command: String,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, String> {
+    let mut command = None;
+    let mut args = Vec::new();
+    let mut env = Vec::new();
+    let mut remaining = arguments.iter();
+    while let Some(argument) = remaining.next() {
+        if argument != CHECK_ENV_FLAG {
+            match command {
+                None => command = Some(argument.clone()),
+                Some(_) => args.push(argument.clone()),
+            }
+            continue;
+        }
+        let assignment = remaining
+            .next()
+            .ok_or_else(|| format!("{CHECK_ENV_FLAG} precisa de NOME=valor\n{CHECK_USAGE}"))?;
+        match assignment.split_once('=') {
+            Some((name, value)) if !name.is_empty() => {
+                env.push((name.to_string(), value.to_string()))
+            }
+            _ => return Err(format!("variável inválida: {assignment}\n{CHECK_USAGE}")),
+        }
+    }
+    let command = command.ok_or_else(|| CHECK_USAGE.to_string())?;
+    Ok(CheckInvocation { command, args, env })
+}
+
+fn check_preview(snapshot: &WidgetSnapshot) -> Vec<String> {
+    let blocks = snapshot.summary.display_blocks();
+    lines_to_plain_text(&render_blocks(&blocks, CHECK_PREVIEW_WIDTH))
+}
+
+fn run_check(arguments: &[String]) -> ExitCode {
+    let invocation = match parse_check_arguments(arguments) {
+        Ok(invocation) => invocation,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(EXIT_CODE_USAGE);
+        }
+    };
+    let settings = WidgetSettings {
+        id: WidgetId::new(CHECK_WIDGET_ID),
+        command: invocation.command,
+        args: invocation.args,
+        env: invocation.env,
+        interval_seconds: DEFAULT_INTERVAL_SECONDS,
+        interval_adjusted: false,
+        timeout_seconds: CHECK_TIMEOUT_SECONDS,
+        span: DEFAULT_SPAN,
+        tab: false,
+        llm_sections: vec![],
+        llm_max_items: DEFAULT_LLM_MAX_ITEMS,
+        llm_max_characters_per_item: DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+    };
+    let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let runner = PluginRunner::new(settings, working_directory);
+    let parse = |json: &str| parse_snapshot_report(json).map_err(|error| error.to_string());
+    let outcome = build_check_report(runner.raw_snapshot_output(), &parse, &check_preview);
+    println!("{}", outcome.text);
+    ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(EXIT_CODE_FAILURE))
+}
+
 fn main() -> ExitCode {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) == Some(CHECK_SUBCOMMAND) {
+        return run_check(&arguments[1..]);
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -223,6 +311,9 @@ fn start_widgets(
             settings.id.clone(),
             runner,
             Duration::from_secs(settings.interval_seconds),
+            settings
+                .interval_adjusted
+                .then_some(settings.interval_seconds),
             sender.clone(),
         ));
     }
@@ -236,11 +327,16 @@ fn spawn_refresher(
     id: WidgetId,
     runner: Arc<PluginRunner>,
     interval: Duration,
+    interval_notice: Option<u64>,
     sender: Sender<AppEvent>,
 ) -> Sender<()> {
     let (trigger, triggered) = mpsc::channel();
     thread::spawn(move || loop {
-        let state = refresh_widget(runner.as_ref());
+        let refreshed = refresh_widget(runner.as_ref());
+        let state = match interval_notice {
+            Some(seconds) => with_interval_notice(refreshed, seconds),
+            None => refreshed,
+        };
         if sender
             .send(AppEvent::WidgetUpdated(id.clone(), state))
             .is_err()
@@ -264,9 +360,10 @@ fn event_loop(
     receiver: &mpsc::Receiver<AppEvent>,
 ) -> Result<(), AppError> {
     let mut last_tick = Instant::now();
+    let mut alert_tracker = AlertTracker::new();
     loop {
         while let Ok(app_event) = receiver.try_recv() {
-            apply_event(state, app_event, services);
+            apply_event(state, app_event, services, &mut alert_tracker);
         }
         let elapsed = last_tick.elapsed();
         last_tick = Instant::now();
@@ -298,10 +395,41 @@ fn event_loop(
     }
 }
 
-fn apply_event(state: &mut AppState, app_event: AppEvent, services: &Services) {
+fn announce_widget_alerts(
+    state: &mut AppState,
+    services: &Services,
+    tracker: &mut AlertTracker,
+    id: &WidgetId,
+    widget_state: &WidgetState,
+) {
+    let WidgetState::Ready(snapshot) = widget_state else {
+        return;
+    };
+    for alert in tracker.fresh_alerts(id, &snapshot.alerts) {
+        let message = AlertMessage {
+            title: alert.title,
+            body: alert.body,
+        };
+        if alert.level == AlertLevel::Warn {
+            services.notifier.notify(&message);
+        }
+        state.show_alert(message);
+    }
+}
+
+fn apply_event(
+    state: &mut AppState,
+    app_event: AppEvent,
+    services: &Services,
+    tracker: &mut AlertTracker,
+) {
     match app_event {
-        AppEvent::WidgetUpdated(id, widget_state) => state.update_widget(&id, widget_state),
+        AppEvent::WidgetUpdated(id, widget_state) => {
+            announce_widget_alerts(state, services, tracker, &id, &widget_state);
+            state.update_widget(&id, widget_state)
+        }
         AppEvent::ActionFinished(id, notice, widget_state) => {
+            announce_widget_alerts(state, services, tracker, &id, &widget_state);
             state.update_widget(&id, widget_state);
             state.show_notice(describe_notice(notice));
         }
