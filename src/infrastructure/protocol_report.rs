@@ -18,6 +18,11 @@ pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
 pub const MAXIMUM_BLOCKS_PER_CARD: usize = 20;
 pub const MAXIMUM_LINES_PER_BLOCK: usize = 200;
 pub const MAXIMUM_TAGS_PER_ROW: usize = 3;
+pub const MAXIMUM_LEGACY_LINES: usize = 200;
+pub const MAXIMUM_SECTIONS: usize = 100;
+pub const MAXIMUM_ITEMS_PER_SECTION: usize = 1000;
+pub const MAXIMUM_ACTIONS: usize = 100;
+pub const MAXIMUM_KEY_CHARACTERS: usize = 100;
 pub const MAXIMUM_STAT_ITEMS: usize = 8;
 pub const MAXIMUM_TABLE_COLUMNS: usize = 10;
 
@@ -82,6 +87,10 @@ fn child_path(parent: &str, key: &str) -> String {
     }
 }
 
+fn key_path(parent: &str, key: &str) -> String {
+    child_path(parent, &clean_text_limited(key, MAXIMUM_KEY_CHARACTERS))
+}
+
 fn indexed_path(parent: &str, index: usize) -> String {
     format!("{parent}[{index}]")
 }
@@ -110,7 +119,7 @@ impl Reader {
 
     fn unknown_fields(&mut self, object: &Map<String, Value>, known: &[&str], path: &str) {
         for key in object.keys().filter(|key| !known.contains(&key.as_str())) {
-            self.warning(&child_path(path, key), UNKNOWN_FIELD_MESSAGE);
+            self.warning(&key_path(path, key), UNKNOWN_FIELD_MESSAGE);
         }
     }
 
@@ -548,6 +557,7 @@ impl Reader {
         let Some(entries) = self.list(summary, "lines", "summary") else {
             return vec![];
         };
+        let entries = self.capped(entries, MAXIMUM_LEGACY_LINES, "summary.lines");
         let mut lines = vec![];
         for (index, entry) in entries.iter().enumerate() {
             let path = indexed_path("summary.lines", index);
@@ -570,6 +580,7 @@ impl Reader {
         };
         self.unknown_fields(detail, &DETAIL_KEYS, "detail");
         let entries = self.list(detail, "sections", "detail")?;
+        let entries = self.capped(entries, MAXIMUM_SECTIONS, "detail.sections");
         let mut sections = vec![];
         for (index, entry) in entries.iter().enumerate() {
             let path = indexed_path("detail.sections", index);
@@ -587,12 +598,11 @@ impl Reader {
         let blocks = self.blocks(object, path);
         let items_path = child_path(path, "items");
         let mut items = vec![];
-        for (index, item) in self
+        let entries = self
             .list(object, "items", path)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
+            .map_or(&[][..], Vec::as_slice);
+        let entries = self.capped(entries, MAXIMUM_ITEMS_PER_SECTION, &items_path);
+        for (index, item) in entries.iter().enumerate() {
             if let Some(item) = self.item(item, &indexed_path(&items_path, index)) {
                 items.push(item);
             }
@@ -640,10 +650,10 @@ impl Reader {
         for (key, value) in meta {
             match value {
                 Value::String(text) => {
-                    let value = self.limited(text, &child_path(&meta_path, key));
-                    pairs.push((clean_text(key), value));
+                    let value = self.limited(text, &key_path(&meta_path, key));
+                    pairs.push((clean_text_limited(key, MAXIMUM_TEXT_CHARACTERS), value));
                 }
-                _ => self.warning(&child_path(&meta_path, key), "precisa ser texto; ignorado"),
+                _ => self.warning(&key_path(&meta_path, key), "precisa ser texto; ignorado"),
             }
         }
         pairs
@@ -653,6 +663,7 @@ impl Reader {
         let Some(entries) = self.list(root, "actions", "") else {
             return vec![];
         };
+        let entries = self.capped(entries, MAXIMUM_ACTIONS, "actions");
         let mut actions = vec![];
         for (index, entry) in entries.iter().enumerate() {
             if let Some(action) = self.action(entry, &indexed_path("actions", index)) {
@@ -1362,5 +1373,50 @@ mod tests {
                 "summary.blocks[2].rows[1][0]"
             ]
         );
+    }
+
+    #[test]
+    fn hostile_keys_are_cleaned_in_problem_paths() {
+        let long_key = "k".repeat(300);
+        let json = format!(
+            "{{\"summary\":{{\"title\":\"t\",\"x\\u001b[31mRED\\u202e\":1,\"{long_key}\":2}},\
+              \"detail\":{{\"sections\":[{{\"heading\":\"h\",\"items\":[{{\"text\":\"a\",\
+              \"meta\":{{\"m\\u001b]0;pwn\\u0007\":3}}}}]}}]}}}}"
+        );
+        let parsed = report(&json);
+        assert!(!parsed.problems.is_empty());
+        for problem in &parsed.problems {
+            assert!(
+                !problem.path.contains(['\u{1b}', '\u{202e}', '\u{7}']),
+                "{:?}",
+                problem.path
+            );
+            assert!(problem.path.chars().count() < 200, "{:?}", problem.path);
+        }
+    }
+
+    #[test]
+    fn legacy_lists_are_capped_with_warnings() {
+        let lines = vec![r#"{"text":"x"}"#; MAXIMUM_LEGACY_LINES + 1].join(",");
+        let sections = vec![r#"{"heading":"h"}"#; MAXIMUM_SECTIONS + 1].join(",");
+        let items = vec![r#"{"text":"i"}"#; MAXIMUM_ITEMS_PER_SECTION + 1].join(",");
+        let actions = vec![r#"{"id":"a","label":"A"}"#; MAXIMUM_ACTIONS + 1].join(",");
+        let parsed = report(&format!(
+            r#"{{"summary":{{"title":"t","lines":[{lines}]}},
+                "detail":{{"sections":[{sections},{{"heading":"x","items":[{items}]}}]}},
+                "actions":[{actions}]}}"#
+        ));
+        assert_eq!(parsed.snapshot.summary.lines.len(), MAXIMUM_LEGACY_LINES);
+        let sections = parsed.snapshot.detail.as_ref().unwrap();
+        assert_eq!(sections.len(), MAXIMUM_SECTIONS);
+        assert_eq!(parsed.snapshot.actions.len(), MAXIMUM_ACTIONS);
+        let mut warned = paths(&parsed, Severity::Warning);
+        warned.sort();
+        assert!(warned.contains(&"summary.lines".to_string()), "{warned:?}");
+        assert!(
+            warned.contains(&"detail.sections".to_string()),
+            "{warned:?}"
+        );
+        assert!(warned.contains(&"actions".to_string()), "{warned:?}");
     }
 }

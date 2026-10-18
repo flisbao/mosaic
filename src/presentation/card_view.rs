@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 use crate::domain::card::{Align, Block, CardLine, Cell, Column, Row, StatItem, Tag, Tone};
 use crate::domain::widget::Flag;
@@ -13,6 +13,12 @@ const STAT_SEPARATOR: &str = "   ";
 const COLUMN_SEPARATOR: &str = "  ";
 
 type Piece = (String, Style);
+
+pub fn display_width(text: &str) -> usize {
+    text.chars()
+        .map(|character| character.width().unwrap_or(0))
+        .sum()
+}
 
 pub fn tone_style(tone: Tone) -> Style {
     match tone {
@@ -35,7 +41,7 @@ pub fn flagged(flag: Option<Flag>, text: &str) -> String {
 }
 
 pub fn truncate_to_width(text: &str, width: usize) -> String {
-    if text.width() <= width {
+    if display_width(text) <= width {
         return text.to_string();
     }
     let budget = width.saturating_sub(ELLIPSIS.width().unwrap_or(1));
@@ -100,7 +106,7 @@ fn render_card_line(line: &CardLine, width: usize) -> Line<'static> {
 }
 
 fn pieces_width(pieces: &[Piece]) -> usize {
-    pieces.iter().map(|(text, _)| text.width()).sum()
+    pieces.iter().map(|(text, _)| display_width(text)).sum()
 }
 
 fn clip_pieces(pieces: Vec<Piece>, width: usize) -> Line<'static> {
@@ -108,7 +114,7 @@ fn clip_pieces(pieces: Vec<Piece>, width: usize) -> Line<'static> {
     let mut spans = vec![];
     for (text, style) in pieces {
         let clipped = hard_clip(&text, remaining);
-        remaining -= clipped.width();
+        remaining = remaining.saturating_sub(display_width(&clipped));
         if !clipped.is_empty() {
             spans.push(Span::styled(clipped, style));
         }
@@ -120,7 +126,7 @@ fn render_rows(rows: &[Row], width: usize) -> Vec<Line<'static>> {
     let time_width = rows
         .iter()
         .filter_map(|row| row.time.as_deref())
-        .map(UnicodeWidthStr::width)
+        .map(display_width)
         .max()
         .unwrap_or(0);
     rows.iter()
@@ -144,18 +150,18 @@ fn render_row(row: &Row, time_width: usize, width: usize) -> Line<'static> {
     let mut pieces: Vec<Piece> = vec![(marker_text(row.marker), row_style)];
     if time_width > 0 {
         let time = row.time.as_deref().unwrap_or("");
-        let padding = " ".repeat(time_width - time.width());
+        let padding = " ".repeat(time_width.saturating_sub(display_width(time)));
         pieces.push((format!("{time}{padding}{TAG_SEPARATOR}"), Style::default()));
     }
     let remaining = width.saturating_sub(pieces_width(&pieces));
     let text = flagged(row.flag, &row.text);
     let tags = tag_pieces(&row.tags);
     let tags_width = pieces_width(&tags);
-    let separator_width = TAG_SEPARATOR.width();
+    let separator_width = display_width(TAG_SEPARATOR);
     let (text_budget, tags_budget) = if tags.is_empty() {
         (remaining, 0)
-    } else if text.width() + separator_width + tags_width <= remaining {
-        (text.width(), tags_width)
+    } else if display_width(&text) + separator_width + tags_width <= remaining {
+        (display_width(&text), tags_width)
     } else {
         let text_budget = remaining.saturating_sub(tags_width + separator_width);
         let separator = if text_budget > 0 { separator_width } else { 0 };
@@ -165,7 +171,7 @@ fn render_row(row: &Row, time_width: usize, width: usize) -> Line<'static> {
         )
     };
     let text = truncate_to_width(&text, text_budget);
-    let used_by_text = text.width();
+    let used_by_text = display_width(&text);
     pieces.push((text, row_style));
     let tags = fit_pieces(tags, tags_budget);
     let gap = remaining.saturating_sub(used_by_text + pieces_width(&tags));
@@ -207,7 +213,7 @@ fn render_stat(items: &[StatItem], hint: Option<&str>, width: usize) -> Vec<Line
             lines.push(clip_pieces(fit_pieces(pieces, width), width));
             continue;
         }
-        let separator_width = STAT_SEPARATOR.width();
+        let separator_width = display_width(STAT_SEPARATOR);
         if !current.is_empty() && pieces_width(&current) + separator_width + item_width > width {
             take_line(&mut current, &mut lines);
         }
@@ -236,16 +242,16 @@ fn column_widths(columns: &[Column], rows: &[Vec<Cell>]) -> Vec<usize> {
             let widest_cell = rows
                 .iter()
                 .filter_map(|row| row.get(index))
-                .map(|cell| cell_text(cell).width())
+                .map(|cell| display_width(&cell_text(cell)))
                 .max()
                 .unwrap_or(0);
-            column.title.width().max(widest_cell)
+            display_width(&column.title).max(widest_cell)
         })
         .collect()
 }
 
 fn shrink_to_fit(widths: &mut [usize], width: usize) {
-    let separators = COLUMN_SEPARATOR.width() * widths.len().saturating_sub(1);
+    let separators = display_width(COLUMN_SEPARATOR) * widths.len().saturating_sub(1);
     while widths.iter().sum::<usize>() + separators > width {
         let Some((widest, &size)) = widths
             .iter()
@@ -263,7 +269,7 @@ fn shrink_to_fit(widths: &mut [usize], width: usize) {
 }
 
 fn render_table(columns: &[Column], rows: &[Vec<Cell>], width: usize) -> Vec<Line<'static>> {
-    let separator_width = COLUMN_SEPARATOR.width();
+    let separator_width = display_width(COLUMN_SEPARATOR);
     let visible = columns
         .len()
         .min((width + separator_width) / (1 + separator_width));
@@ -301,7 +307,7 @@ fn table_line(
             pieces.push((COLUMN_SEPARATOR.to_string(), Style::default()));
         }
         let shown = truncate_to_width(text, widths[index]);
-        let padding = " ".repeat(widths[index] - shown.width());
+        let padding = " ".repeat(widths[index].saturating_sub(display_width(&shown)));
         match columns[index].align {
             Align::Right => pieces.push((format!("{padding}{shown}"), *style)),
             Align::Left if index == last => pieces.push((shown, *style)),
@@ -333,7 +339,7 @@ fn fit_pieces(pieces: Vec<Piece>, budget: usize) -> Vec<Piece> {
             break;
         }
         let shown = truncate_to_width(&text, remaining);
-        remaining -= shown.width();
+        remaining = remaining.saturating_sub(display_width(&shown));
         fitted.push((shown, style));
     }
     fitted
@@ -376,7 +382,11 @@ mod tests {
     }
 
     fn widest(lines: &[String]) -> usize {
-        lines.iter().map(|text| text.width()).max().unwrap_or(0)
+        lines
+            .iter()
+            .map(|text| display_width(text))
+            .max()
+            .unwrap_or(0)
     }
 
     #[test]
@@ -449,7 +459,7 @@ mod tests {
             None,
         )])];
         let lines = plain(&blocks, 8);
-        assert!(lines[0].width() <= 8, "{:?}", lines);
+        assert!(display_width(&lines[0]) <= 8, "{:?}", lines);
         assert!(lines[0].contains('['));
     }
 
@@ -692,5 +702,28 @@ mod tests {
         let lines = render_blocks(&blocks, 10);
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn emoji_with_variation_selector_never_panics_or_overflows() {
+        let heart = "❤\u{FE0F}".repeat(3);
+        let blocks = [
+            Block::Lines(vec![line(&heart, Some(Flag::Updated))]),
+            Block::Rows(vec![row(
+                Some("❤\u{FE0F}"),
+                &heart,
+                &["❤\u{FE0F}"],
+                Some('❤'),
+            )]),
+            stat(vec![stat_item(&heart, &heart)], Some(&heart)),
+            table(
+                vec![column(&heart, Align::Left), column(&heart, Align::Right)],
+                vec![vec![cell(&heart), cell(&heart)]],
+            ),
+        ];
+        for width in 0..=40 {
+            let lines = plain(&blocks, width);
+            assert!(widest(&lines) <= width, "largura {width}: {lines:?}");
+        }
     }
 }

@@ -1,12 +1,15 @@
 use thiserror::Error;
 
 use crate::domain::card::Tone;
+use crate::domain::snapshot_report::Problem;
 use crate::domain::widget::{Flag, WidgetSnapshot};
 use crate::infrastructure::protocol_report::{parse_snapshot_report, Severity};
 
 #[derive(Debug, Error)]
 #[error("saída de plugin não é um JSON válido de snapshot: {0}")]
 pub struct ProtocolError(String);
+
+pub const MAXIMUM_ERROR_NOTICES: usize = 3;
 
 impl ProtocolError {
     pub(crate) fn new(message: impl ToString) -> Self {
@@ -17,18 +20,33 @@ impl ProtocolError {
 pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
     let parsed = parse_snapshot_report(json)?;
     let mut snapshot = parsed.snapshot;
-    let errors = parsed
-        .problems
-        .iter()
-        .filter(|problem| problem.severity == Severity::Error);
-    for problem in errors.rev() {
-        snapshot.summary.put_notice_first(
-            format!("bloco inválido: {}: {}", problem.path, problem.message),
-            Tone::Warn,
-            Some(Flag::Warning),
-        );
+    for notice in error_notices(&parsed.problems).into_iter().rev() {
+        snapshot
+            .summary
+            .put_notice_first(notice, Tone::Warn, Some(Flag::Warning));
     }
     Ok(snapshot)
+}
+
+fn error_notices(problems: &[Problem]) -> Vec<String> {
+    let errors: Vec<&Problem> = problems
+        .iter()
+        .filter(|problem| problem.severity == Severity::Error)
+        .collect();
+    if errors.len() <= MAXIMUM_ERROR_NOTICES {
+        return errors.into_iter().map(invalid_block_notice).collect();
+    }
+    let shown = MAXIMUM_ERROR_NOTICES - 1;
+    let mut notices: Vec<String> = errors[..shown]
+        .iter()
+        .map(|problem| invalid_block_notice(problem))
+        .collect();
+    notices.push(format!("… e mais {} erros", errors.len() - shown));
+    notices
+}
+
+fn invalid_block_notice(problem: &Problem) -> String {
+    format!("bloco inválido: {}: {}", problem.path, problem.message)
 }
 
 #[cfg(test)]
@@ -162,5 +180,19 @@ mod tests {
         let snapshot = parse_snapshot(r#"{"protocol":2,"summary":{"title":"K"}}"#).unwrap();
         assert_eq!(snapshot.summary.lines.len(), 1);
         assert!(snapshot.summary.lines[0].text.contains("protocolo 2"));
+    }
+
+    #[test]
+    fn many_errors_are_summarised_in_a_bounded_number_of_notices() {
+        let broken = vec!["1"; 5000].join(",");
+        let json = format!(
+            r#"{{"summary":{{"title":"K","lines":[{broken}],
+                "blocks":[{{"type":"lines","lines":[{{"text":"ok"}}]}}]}}}}"#
+        );
+        let started = std::time::Instant::now();
+        let snapshot = parse_snapshot(&json).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(snapshot.summary.blocks.len() <= 1 + MAXIMUM_ERROR_NOTICES);
+        assert!(snapshot.summary.lines.len() <= MAXIMUM_ERROR_NOTICES);
     }
 }
