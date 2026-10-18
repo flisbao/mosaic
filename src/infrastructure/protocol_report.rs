@@ -1,7 +1,8 @@
 use serde_json::{Map, Value};
 
 use crate::domain::card::{
-    clean_text, clean_text_limited, Alert, AlertLevel, Block, CardLine, Row, Tag, Tone,
+    clean_text, clean_text_limited, Alert, AlertLevel, Align, Block, CardLine, Cell, Column, Row,
+    StatItem, Tag, Tone,
 };
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetSnapshot,
@@ -15,6 +16,8 @@ pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
 pub const MAXIMUM_BLOCKS_PER_CARD: usize = 20;
 pub const MAXIMUM_LINES_PER_BLOCK: usize = 200;
 pub const MAXIMUM_TAGS_PER_ROW: usize = 3;
+pub const MAXIMUM_STAT_ITEMS: usize = 8;
+pub const MAXIMUM_TABLE_COLUMNS: usize = 10;
 
 const EMPTY_PARAMS_JSON: &str = "{}";
 const UNKNOWN_FIELD_MESSAGE: &str = "campo desconhecido";
@@ -334,6 +337,8 @@ impl Reader {
         let block = match kind {
             "lines" => self.lines_block(object, path),
             "rows" => self.rows_block(object, path),
+            "stat" => self.stat_block(object, path),
+            "table" => self.table_block(object, path),
             other => {
                 let message = format!("tipo de bloco desconhecido: {}", clean_text(other));
                 self.warning(path, &message);
@@ -388,6 +393,129 @@ impl Reader {
             marker: self.marker(object, path),
             flag: self.flag(object, path),
         })
+    }
+
+    fn stat_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
+        let items_path = child_path(path, "items");
+        let entries = self.required_list(object, "items", path);
+        let entries = self.capped(entries, MAXIMUM_STAT_ITEMS, &items_path);
+        let mut items = vec![];
+        for (index, entry) in entries.iter().enumerate() {
+            let item_path = indexed_path(&items_path, index);
+            let Some(item) = self.object_entry(entry, &item_path) else {
+                continue;
+            };
+            let value = self.required_text(item, "value", &item_path);
+            let label = self.required_text(item, "label", &item_path);
+            let (Some(value), Some(label)) = (value, label) else {
+                continue;
+            };
+            let tone = self.tone(item, &item_path);
+            items.push(StatItem { value, label, tone });
+        }
+        Block::Stat {
+            items,
+            hint: self.optional_text(object, "hint", path),
+        }
+    }
+
+    fn table_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
+        let columns = self.columns(object, path);
+        let rows_path = child_path(path, "rows");
+        let entries = self.required_list(object, "rows", path);
+        let entries = self.capped(entries, MAXIMUM_LINES_PER_BLOCK, &rows_path);
+        let mut rows = vec![];
+        for (index, entry) in entries.iter().enumerate() {
+            let row_path = indexed_path(&rows_path, index);
+            if let Some(cells) = self.table_row(entry, columns.len(), &row_path) {
+                rows.push(cells);
+            }
+        }
+        Block::Table { columns, rows }
+    }
+
+    fn columns(&mut self, object: &Map<String, Value>, path: &str) -> Vec<Column> {
+        let columns_path = child_path(path, "columns");
+        let entries = self.required_list(object, "columns", path);
+        if entries.is_empty() && object.get("columns").is_some_and(Value::is_array) {
+            self.error(&columns_path, "precisa ter ao menos uma coluna");
+        }
+        let entries = self.capped(entries, MAXIMUM_TABLE_COLUMNS, &columns_path);
+        let mut columns = vec![];
+        for (index, entry) in entries.iter().enumerate() {
+            let column_path = indexed_path(&columns_path, index);
+            let Some(column) = self.object_entry(entry, &column_path) else {
+                continue;
+            };
+            let Some(title) = self.required_text(column, "title", &column_path) else {
+                continue;
+            };
+            let align = self.align(column, &column_path);
+            columns.push(Column { title, align });
+        }
+        columns
+    }
+
+    fn align(&mut self, column: &Map<String, Value>, path: &str) -> Align {
+        match column.get("align").and_then(Value::as_str) {
+            Some("right") => Align::Right,
+            Some("left") | None => Align::Left,
+            Some(_) => {
+                self.warning(
+                    &child_path(path, "align"),
+                    "alinhamento desconhecido; usando left",
+                );
+                Align::Left
+            }
+        }
+    }
+
+    fn table_row(&mut self, entry: &Value, width: usize, path: &str) -> Option<Vec<Cell>> {
+        let Some(entries) = entry.as_array() else {
+            self.error(path, "precisa ser uma lista de células");
+            return None;
+        };
+        if entries.len() != width {
+            self.warning(
+                path,
+                &format!(
+                    "a linha tem {} células e a tabela {width} colunas",
+                    entries.len()
+                ),
+            );
+        }
+        let mut cells = vec![];
+        for (index, cell) in entries.iter().take(width).enumerate() {
+            cells.extend(self.cell(cell, &indexed_path(path, index)));
+        }
+        cells.resize_with(width, || Cell {
+            text: String::new(),
+            tone: Tone::Normal,
+            flag: None,
+        });
+        Some(cells)
+    }
+
+    fn cell(&mut self, entry: &Value, path: &str) -> Option<Cell> {
+        match entry {
+            Value::String(text) => Some(Cell {
+                text: self.limited(text, path),
+                tone: Tone::Normal,
+                flag: None,
+            }),
+            Value::Object(object) => {
+                let text = self.required_text(object, "text", path)?;
+                Some(Cell {
+                    text,
+                    tone: self.tone(object, path),
+                    flag: self.flag(object, path),
+                })
+            }
+            _ => {
+                self.error(path, "célula precisa ser texto ou objeto");
+                None
+            }
+        }
     }
 
     fn marker(&mut self, object: &Map<String, Value>, path: &str) -> Option<char> {
@@ -654,7 +782,9 @@ fn parse_flag(name: &str) -> Option<Flag> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::{AlertLevel, Block, CardLine, Row, Tag, Tone};
+    use crate::domain::card::{
+        AlertLevel, Align, Block, CardLine, Cell, Column, Row, StatItem, Tag, Tone,
+    };
     use crate::domain::widget::Flag;
 
     fn report(json: &str) -> ParsedSnapshot {
@@ -1049,5 +1179,205 @@ mod tests {
             panic!("esperava lines");
         };
         assert_eq!(lines[0].text, "novo");
+    }
+
+    fn cell(text: &str) -> Cell {
+        Cell {
+            text: text.to_string(),
+            tone: Tone::Normal,
+            flag: None,
+        }
+    }
+
+    #[test]
+    fn stat_block_parses_items_and_hint() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"stat","items":[{"value":"3","label":"reuniões","tone":"warn"},
+                {"value":"2h","label":"livre"}],"hint":"hoje"}]"#,
+        );
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let expected = Block::Stat {
+            items: vec![
+                StatItem {
+                    value: "3".to_string(),
+                    label: "reuniões".to_string(),
+                    tone: Tone::Warn,
+                },
+                StatItem {
+                    value: "2h".to_string(),
+                    label: "livre".to_string(),
+                    tone: Tone::Normal,
+                },
+            ],
+            hint: Some("hoje".to_string()),
+        };
+        assert_eq!(first_block(&parsed), &expected);
+    }
+
+    #[test]
+    fn stat_items_are_limited_to_eight() {
+        let items = [r#"{"value":"1","label":"x"}"#; 9].join(",");
+        let parsed = summary_with_blocks(&format!(r#"[{{"type":"stat","items":[{items}]}}]"#));
+        let Block::Stat { items, .. } = first_block(&parsed) else {
+            panic!("esperava stat");
+        };
+        assert_eq!(items.len(), 8);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].items"]
+        );
+    }
+
+    #[test]
+    fn stat_item_without_value_is_an_error_with_path() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"stat","items":[{"value":"1","label":"a"},{"label":"b"}]}]"#,
+        );
+        assert!(parsed.snapshot.summary.blocks.is_empty());
+        assert_eq!(
+            paths(&parsed, Severity::Error),
+            vec!["summary.blocks[0].items[1].value"]
+        );
+    }
+
+    #[test]
+    fn table_block_parses_columns_alignment_and_cells() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"table","columns":[{"title":"Nome"},{"title":"Qtd","align":"right"}],
+                "rows":[["ana","3"],["bia","10"]]}]"#,
+        );
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let expected = Block::Table {
+            columns: vec![
+                Column {
+                    title: "Nome".to_string(),
+                    align: Align::Left,
+                },
+                Column {
+                    title: "Qtd".to_string(),
+                    align: Align::Right,
+                },
+            ],
+            rows: vec![vec![cell("ana"), cell("3")], vec![cell("bia"), cell("10")]],
+        };
+        assert_eq!(first_block(&parsed), &expected);
+    }
+
+    #[test]
+    fn table_cell_can_be_a_plain_string_or_an_object() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"table","columns":[{"title":"A"},{"title":"B"}],
+                "rows":[["x",{"text":"y","tone":"danger","flag":"warning"}]]}]"#,
+        );
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let Block::Table { rows, .. } = first_block(&parsed) else {
+            panic!("esperava table");
+        };
+        assert_eq!(rows[0][0], cell("x"));
+        assert_eq!(
+            rows[0][1],
+            Cell {
+                text: "y".to_string(),
+                tone: Tone::Danger,
+                flag: Some(Flag::Warning),
+            }
+        );
+    }
+
+    #[test]
+    fn table_row_with_extra_cells_is_cut_with_a_warning() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"table","columns":[{"title":"A"}],"rows":[["1","2","3"]]}]"#,
+        );
+        let Block::Table { rows, .. } = first_block(&parsed) else {
+            panic!("esperava table");
+        };
+        assert_eq!(rows[0], vec![cell("1")]);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].rows[0]"]
+        );
+    }
+
+    #[test]
+    fn table_row_with_missing_cells_is_padded_with_a_warning() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"table","columns":[{"title":"A"},{"title":"B"}],"rows":[["1"]]}]"#,
+        );
+        let Block::Table { rows, .. } = first_block(&parsed) else {
+            panic!("esperava table");
+        };
+        assert_eq!(rows[0], vec![cell("1"), cell("")]);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].rows[0]"]
+        );
+    }
+
+    #[test]
+    fn table_without_columns_is_an_error() {
+        for columns in ["[]", "3", "null"] {
+            let parsed = summary_with_blocks(&format!(
+                r#"[{{"type":"table","columns":{columns},"rows":[]}}]"#
+            ));
+            assert!(parsed.snapshot.summary.blocks.is_empty(), "{columns}");
+            assert_eq!(
+                paths(&parsed, Severity::Error),
+                vec!["summary.blocks[0].columns"],
+                "{columns}"
+            );
+        }
+        let parsed = summary_with_blocks(r#"[{"type":"table","rows":[]}]"#);
+        assert_eq!(
+            paths(&parsed, Severity::Error),
+            vec!["summary.blocks[0].columns"]
+        );
+    }
+
+    #[test]
+    fn table_columns_are_limited_to_ten() {
+        let columns = [r#"{"title":"c"}"#; 11].join(",");
+        let parsed = summary_with_blocks(&format!(
+            r#"[{{"type":"table","columns":[{columns}],"rows":[]}}]"#
+        ));
+        let Block::Table { columns, .. } = first_block(&parsed) else {
+            panic!("esperava table");
+        };
+        assert_eq!(columns.len(), 10);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].columns"]
+        );
+    }
+
+    #[test]
+    fn table_rows_that_are_not_lists_are_errors_with_path() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"table","columns":[{"title":"A"}],"rows":[["ok"],"texto",{"a":1}]}]"#,
+        );
+        assert!(parsed.snapshot.summary.blocks.is_empty());
+        assert_eq!(
+            paths(&parsed, Severity::Error),
+            vec!["summary.blocks[0].rows[1]", "summary.blocks[0].rows[2]"]
+        );
+    }
+
+    #[test]
+    fn numbers_and_nulls_in_text_fields_are_errors_not_panics() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"stat","items":[{"value":5,"label":"x"}]},
+                {"type":"lines","lines":[{"text":null}]},
+                {"type":"table","columns":[{"title":"A"}],"rows":[[null],[7]]}]"#,
+        );
+        assert!(parsed.snapshot.summary.blocks.is_empty());
+        assert_eq!(
+            paths(&parsed, Severity::Error),
+            vec![
+                "summary.blocks[0].items[0].value",
+                "summary.blocks[1].lines[0].text",
+                "summary.blocks[2].rows[0][0]",
+                "summary.blocks[2].rows[1][0]"
+            ]
+        );
     }
 }
