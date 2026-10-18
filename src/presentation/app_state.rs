@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use crate::application::pomodoro_notifications::{alert_for, AlertMessage};
@@ -9,6 +10,7 @@ use crate::domain::widget::{ActionScope, ActionSpec, DetailItem, WidgetId, Widge
 use crate::presentation::key_input::KeyInput;
 
 const HOME_TAB: usize = 0;
+pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
 const POMODORO_DISABLED_NOTICE: &str = "Pomodoro desligado na configuração";
 const IA_BUSY_NOTICE: &str = "A IA já está processando um pedido";
@@ -51,7 +53,7 @@ pub struct AppState {
     mode: Mode,
     notice: Option<String>,
     pomodoro: Option<PomodoroTimer>,
-    alert: Option<AlertMessage>,
+    alerts: VecDeque<AlertMessage>,
 }
 
 impl AppState {
@@ -70,7 +72,7 @@ impl AppState {
             mode: Mode::Browsing,
             notice: None,
             pomodoro: None,
-            alert: None,
+            alerts: VecDeque::new(),
         }
     }
 
@@ -84,13 +86,23 @@ impl AppState {
     }
 
     pub fn alert(&self) -> Option<&AlertMessage> {
-        self.alert.as_ref()
+        self.alerts.front()
+    }
+
+    pub fn pending_alert_count(&self) -> usize {
+        self.alerts.len()
+    }
+
+    pub fn show_alert(&mut self, message: AlertMessage) {
+        if self.alerts.len() < MAXIMUM_QUEUED_ALERTS {
+            self.alerts.push_back(message);
+        }
     }
 
     pub fn advance_pomodoro(&mut self, elapsed: Duration) -> Option<AlertMessage> {
         let ended = self.pomodoro.as_mut()?.advance(elapsed)?;
         let alert = alert_for(&ended);
-        self.alert = Some(alert.clone());
+        self.show_alert(alert.clone());
         Some(alert)
     }
 
@@ -169,7 +181,7 @@ impl AppState {
 
     pub fn handle_key(&mut self, key: KeyInput) -> Option<Command> {
         self.notice = None;
-        if self.alert.take().is_some() {
+        if self.alerts.pop_front().is_some() {
             return None;
         }
         match std::mem::replace(&mut self.mode, Mode::Browsing) {
@@ -671,6 +683,57 @@ mod tests {
             .expect("aviso de fim de foco");
         assert_eq!(alert.title, "Foco concluído");
         assert_eq!(app.alert(), Some(&alert));
+    }
+
+    fn message(title: &str) -> AlertMessage {
+        AlertMessage {
+            title: title.to_string(),
+            body: String::new(),
+        }
+    }
+
+    #[test]
+    fn show_alert_queues_messages_in_order() {
+        let mut app = app_with_pomodoro();
+        app.show_alert(message("um"));
+        app.show_alert(message("dois"));
+        assert_eq!(app.pending_alert_count(), 2);
+        assert_eq!(app.alert().map(|alert| alert.title.as_str()), Some("um"));
+    }
+
+    #[test]
+    fn any_key_dismisses_only_the_front_alert() {
+        let mut app = app_with_pomodoro();
+        app.show_alert(message("um"));
+        app.show_alert(message("dois"));
+        assert_eq!(app.handle_key(character('q')), None);
+        assert_eq!(app.alert().map(|alert| alert.title.as_str()), Some("dois"));
+        assert_eq!(app.handle_key(character('q')), None);
+        assert!(app.alert().is_none());
+        assert_eq!(app.handle_key(character('q')), Some(Command::Quit));
+    }
+
+    #[test]
+    fn queue_is_bounded_to_twenty() {
+        let mut app = app_with_pomodoro();
+        for number in 0..30 {
+            app.show_alert(message(&number.to_string()));
+        }
+        assert_eq!(app.pending_alert_count(), MAXIMUM_QUEUED_ALERTS);
+        assert_eq!(app.alert().map(|alert| alert.title.as_str()), Some("0"));
+    }
+
+    #[test]
+    fn pomodoro_alert_and_widget_alerts_share_the_queue() {
+        let mut app = app_with_pomodoro();
+        press(&mut app, &[character('p')]);
+        app.show_alert(message("do widget"));
+        app.advance_pomodoro(std::time::Duration::from_secs(25 * 60));
+        assert_eq!(app.pending_alert_count(), 2);
+        assert_eq!(
+            app.alert().map(|alert| alert.title.as_str()),
+            Some("do widget")
+        );
     }
 
     #[test]
