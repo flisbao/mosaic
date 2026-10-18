@@ -66,9 +66,10 @@ fn invalid_fixtures_report_the_expected_problem() {
 }
 
 fn schema() -> Value {
-    let text =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/protocol.schema.json"))
-            .unwrap();
+    let text = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/protocol.schema.json"),
+    )
+    .unwrap();
     serde_json::from_str(&text).unwrap()
 }
 

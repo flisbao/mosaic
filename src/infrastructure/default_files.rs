@@ -43,7 +43,7 @@ timeout_seconds = 120
 confirm_before_send = true
 priority_prompt = "prompts/prioridade.md"
 
-# --- Jira (descomente e ajuste; veja docs/jira.md) ---
+# --- Jira (descomente e ajuste) ---
 # Guarde o token numa variável de ambiente, por exemplo:
 #   export JIRA_TOKEN_EMPRESA="seu-token-de-api"
 #
@@ -83,7 +83,7 @@ priority_prompt = "prompts/prioridade.md"
 # JIRA_MODE = "personal"
 # JIRA_PROJECT = "CLI"
 
-# --- Galeria de blocos (descomente para ver todos os blocos; veja docs/protocol.md) ---
+# --- Galeria de blocos (descomente para ver todos os blocos) ---
 # [[widgets]]
 # id = "gallery-python"
 # command = "python3"

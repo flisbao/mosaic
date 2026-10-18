@@ -2,3 +2,4 @@ target/
 .superpowers/
 __pycache__/
 *.pyc
+docs/

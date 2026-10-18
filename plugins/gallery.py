@@ -69,7 +69,7 @@ def build_snapshot(now):
                     "type": "lines",
                     "lines": [
                         {"text": "tudo em dia", "tone": "ok"},
-                        {"text": "veja docs/protocol.md", "tone": "muted"},
+                        {"text": "veja schema/protocol.schema.json", "tone": "muted"},
                     ],
                 },
             ],

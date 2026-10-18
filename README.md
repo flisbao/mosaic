@@ -23,13 +23,7 @@ print(json.dumps({"summary": {"title": "Olá", "blocks": [
 ]}}))
 ```
 
-Valide com `mosaic check python3 meu_widget.py`. O contrato completo está em [`docs/protocol.md`](docs/protocol.md) e o esquema em [`docs/protocol.schema.json`](docs/protocol.schema.json). Os widgets `plugins/gallery.py` e `plugins/gallery.js` mostram todos os blocos.
-
-## Mais documentação
-
-- [Jira](docs/jira.md)
-- [Kanban remoto](docs/kanban-remoto.md)
-- [Backlog](docs/backlog.md)
+Valide com `mosaic check python3 meu_widget.py`. O esquema JSON do protocolo está em [`schema/protocol.schema.json`](schema/protocol.schema.json). Os widgets `plugins/gallery.py` e `plugins/gallery.js` mostram todos os blocos.
 
 ## Licença
 
