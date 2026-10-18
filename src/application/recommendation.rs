@@ -164,7 +164,9 @@ mod tests {
 
     fn state(sections: Vec<(&str, Vec<DetailItem>)>) -> WidgetState {
         WidgetState::Ready(WidgetSnapshot {
+            alerts: vec![],
             summary: Summary {
+                blocks: vec![],
                 title: "Kanban".to_string(),
                 lines: vec![],
             },
@@ -172,6 +174,7 @@ mod tests {
                 sections
                     .into_iter()
                     .map(|(heading, items)| DetailSection {
+                        blocks: vec![],
                         heading: heading.to_string(),
                         items,
                     })

@@ -9,10 +9,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
-use crate::domain::widget::{Flag, WidgetState};
+use crate::domain::widget::WidgetState;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
+use crate::presentation::card_view::{flagged, render_blocks, truncate_to_width};
 
-const ELLIPSIS: char = '…';
 const HOME_TAB_NAME: &str = "Home";
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
 const LOADING_TEXT: &str = "carregando…";
@@ -164,12 +164,7 @@ fn box_lines(entry: &WidgetEntry, width: usize) -> Vec<Line<'static>> {
                 )
             })
             .collect(),
-        WidgetState::Ready(snapshot) => snapshot
-            .summary
-            .lines
-            .iter()
-            .map(|line| Line::from(truncate_to_width(&flagged(line.flag, &line.text), width)))
-            .collect(),
+        WidgetState::Ready(snapshot) => render_blocks(&snapshot.summary.display_blocks(), width),
     }
 }
 
@@ -214,6 +209,7 @@ fn detail_lines(entry: &WidgetEntry, selected: usize, width: usize) -> (Vec<Line
             truncate_to_width(&section.heading, width),
             Style::default().add_modifier(Modifier::BOLD),
         ));
+        lines.extend(render_blocks(&section.display_blocks(), width));
         for item in &section.items {
             let is_selected = item_index == selected;
             if is_selected {
@@ -348,13 +344,6 @@ fn entry_title(entry: &WidgetEntry) -> String {
     }
 }
 
-fn flagged(flag: Option<Flag>, text: &str) -> String {
-    match flag {
-        Some(flag) => format!("{} {text}", flag.symbol()),
-        None => text.to_string(),
-    }
-}
-
 fn to_rect(origin: Rect, cell: CellRect) -> Rect {
     Rect::new(
         origin.x + cell.x,
@@ -384,27 +373,6 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn truncate_to_width(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_string();
-    }
-    let budget = width.saturating_sub(ELLIPSIS.width().unwrap_or(1));
-    let mut truncated = String::new();
-    let mut used = 0;
-    for character in text.chars() {
-        let character_width = character.width().unwrap_or(0);
-        if used + character_width > budget {
-            break;
-        }
-        truncated.push(character);
-        used += character_width;
-    }
-    if width > 0 {
-        truncated.push(ELLIPSIS);
-    }
-    truncated
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,7 +395,9 @@ mod tests {
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
         WidgetSnapshot {
+            alerts: vec![],
             summary: Summary {
+                blocks: vec![],
                 title: title.to_string(),
                 lines,
             },
@@ -454,6 +424,7 @@ mod tests {
     fn kanban_entry() -> WidgetEntry {
         let mut kanban = snapshot("Kanban", vec![plain_line("inbox 3")]);
         kanban.detail = Some(vec![DetailSection {
+            blocks: vec![],
             heading: "inbox".to_string(),
             items: vec![
                 DetailItem {
@@ -744,11 +715,14 @@ mod tests {
         let mut state = AppState::new(vec![entry(
             "ia",
             WidgetState::Ready(WidgetSnapshot {
+                alerts: vec![],
                 summary: Summary {
+                    blocks: vec![],
                     title: "IA".to_string(),
                     lines: vec![],
                 },
                 detail: Some(vec![DetailSection {
+                    blocks: vec![],
                     heading: "Recomendação".to_string(),
                     items: vec![DetailItem {
                         id: None,
@@ -788,6 +762,156 @@ mod tests {
             for height in 0..=14u16 {
                 draw(&modal, width, height);
             }
+        }
+    }
+
+    use crate::domain::card;
+
+    fn card_line(text: &str) -> card::CardLine {
+        card::CardLine {
+            text: text.to_string(),
+            tone: card::Tone::Normal,
+            flag: None,
+        }
+    }
+
+    fn card_cell(text: &str) -> card::Cell {
+        card::Cell {
+            text: text.to_string(),
+            tone: card::Tone::Normal,
+            flag: None,
+        }
+    }
+
+    fn entry_with_blocks(blocks: Vec<card::Block>) -> WidgetEntry {
+        let mut card = snapshot("Agenda", vec![]);
+        card.summary.blocks = blocks;
+        entry("agenda", WidgetState::Ready(card), true)
+    }
+
+    fn rows_and_stat_blocks() -> Vec<card::Block> {
+        vec![
+            card::Block::Rows(vec![card::Row {
+                time: Some("09:00".to_string()),
+                text: "Daily".to_string(),
+                tags: vec![card::Tag {
+                    text: "agora".to_string(),
+                    tone: card::Tone::Warn,
+                }],
+                tone: card::Tone::Normal,
+                marker: Some('▶'),
+                flag: None,
+            }]),
+            card::Block::Stat {
+                items: vec![card::StatItem {
+                    value: "3".to_string(),
+                    label: "reuniões".to_string(),
+                    tone: card::Tone::Ok,
+                }],
+                hint: Some("hoje".to_string()),
+            },
+        ]
+    }
+
+    #[test]
+    fn home_box_renders_rows_and_stat_blocks() {
+        let state = AppState::new(vec![entry_with_blocks(rows_and_stat_blocks())]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("▶ 09:00 Daily"), "{text}");
+        assert!(text.contains("[agora]"), "{text}");
+        assert!(text.contains("3 reuniões"), "{text}");
+        assert!(text.contains("hoje"), "{text}");
+    }
+
+    #[test]
+    fn home_box_renders_a_table() {
+        let table = card::Block::Table {
+            columns: vec![card::Column {
+                title: "Nome".to_string(),
+                align: card::Align::Left,
+            }],
+            rows: vec![vec![card_cell("ana")]],
+        };
+        let state = AppState::new(vec![entry_with_blocks(vec![table])]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("Nome"), "{text}");
+        assert!(text.contains("ana"), "{text}");
+    }
+
+    #[test]
+    fn legacy_lines_still_render_exactly_as_before() {
+        let state = AppState::new(vec![entry(
+            "kanban",
+            WidgetState::Ready(snapshot(
+                "Kanban",
+                vec![
+                    plain_line("inbox 3"),
+                    SummaryLine {
+                        text: "atenção".to_string(),
+                        flag: Some(Flag::Warning),
+                    },
+                ],
+            )),
+            false,
+        )]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("inbox 3"), "{text}");
+        assert!(text.contains("⚠ atenção"), "{text}");
+    }
+
+    #[test]
+    fn detail_section_shows_blocks_before_items() {
+        let mut entry = kanban_entry();
+        let WidgetState::Ready(snapshot) = &mut entry.state else {
+            panic!("esperava Ready");
+        };
+        let sections = snapshot.detail.as_mut().unwrap();
+        sections[0].blocks = vec![card::Block::Lines(vec![card_line("RESUMO DA SEÇÃO")])];
+        let mut state = AppState::new(vec![entry]);
+        press(&mut state, &[KeyInput::Tab]);
+        let rows = draw(&state, 100, 30);
+        let position = |needle: &str| rows.iter().position(|row| row.contains(needle)).unwrap();
+        assert!(position("inbox") < position("RESUMO DA SEÇÃO"));
+        assert!(position("RESUMO DA SEÇÃO") < position("Tarefa A"));
+    }
+
+    #[test]
+    fn selection_ignores_block_content() {
+        let mut entry = kanban_entry();
+        let WidgetState::Ready(snapshot) = &mut entry.state else {
+            panic!("esperava Ready");
+        };
+        snapshot.detail.as_mut().unwrap()[0].blocks =
+            vec![card::Block::Lines(vec![card_line("a"), card_line("b")])];
+        let mut state = AppState::new(vec![entry]);
+        press(&mut state, &[KeyInput::Tab, KeyInput::Down]);
+        assert_eq!(state.selected_item(), 1);
+        press(&mut state, &[KeyInput::Down]);
+        assert_eq!(state.selected_item(), 1);
+    }
+
+    #[test]
+    fn small_terminal_with_blocks_does_not_panic() {
+        let wide = "日本語".repeat(40);
+        let columns = (0..10)
+            .map(|_| card::Column {
+                title: wide.clone(),
+                align: card::Align::Right,
+            })
+            .collect();
+        let rows = (0..200)
+            .map(|_| (0..10).map(|_| card_cell(&wide)).collect())
+            .collect();
+        let mut blocks = rows_and_stat_blocks();
+        blocks.push(card::Block::Table { columns, rows });
+        blocks.push(card::Block::Lines(vec![card_line(&wide); 200]));
+        let mut state = AppState::new(vec![entry_with_blocks(blocks)]);
+        for size in 0..=14 {
+            draw(&state, size, size);
+        }
+        press(&mut state, &[KeyInput::Tab]);
+        for size in 0..=14 {
+            draw(&state, size, size);
         }
     }
 }

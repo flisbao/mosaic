@@ -6,6 +6,7 @@ pub mod plugin_protocol;
 pub mod plugin_runner;
 pub mod private_directory;
 pub mod process;
+pub mod protocol_report;
 pub mod recommendation_file;
 pub mod system_clock;
 pub mod terminal_capabilities;

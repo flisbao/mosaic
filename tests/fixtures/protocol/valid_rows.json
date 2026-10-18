@@ -1,0 +1,1 @@
+{"protocol":1,"summary":{"title":"Agenda","blocks":[{"type":"rows","rows":[{"time":"09:00","text":"Daily","tone":"muted"},{"time":"10:30","text":"Revisão de código","tone":"current","marker":"▶","tags":[{"text":"agora","tone":"ok"}]},{"time":"14:00","text":"1:1","flag":"updated","tags":[{"text":"sala 3"},{"text":"remoto","tone":"muted"}]}]}]}}

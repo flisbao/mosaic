@@ -5,11 +5,11 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use panel_tui::application::ports::{ActionExecutor, SourceError, WidgetSource};
-use panel_tui::domain::action::ProposedAction;
-use panel_tui::domain::widget::{ActionScope, ActionSpec, WidgetId, WidgetSnapshot};
-use panel_tui::infrastructure::config::WidgetSettings;
-use panel_tui::infrastructure::plugin_runner::PluginRunner;
+use mosaic::application::ports::{ActionExecutor, SourceError, WidgetSource};
+use mosaic::domain::action::ProposedAction;
+use mosaic::domain::widget::{ActionScope, ActionSpec, WidgetId, WidgetSnapshot};
+use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::plugin_runner::PluginRunner;
 
 const TOKEN: &str = "TOKEN-E2E-XYZ";
 const EMAIL: &str = "eu@empresa.com";
@@ -69,6 +69,7 @@ fn jira_runner(server: &FakeJira, state_dir: &Path, mode: &str, token: &str) -> 
             .map(|(name, value)| (name.to_string(), value.clone()))
             .collect(),
         interval_seconds: 120,
+        interval_adjusted: false,
         timeout_seconds: 30,
         span: 1,
         tab: true,

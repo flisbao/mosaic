@@ -38,7 +38,9 @@ fn snapshot(
     detail_lines: Vec<String>,
 ) -> WidgetSnapshot {
     WidgetSnapshot {
+        alerts: vec![],
         summary: Summary {
+            blocks: vec![],
             title: IA_TITLE.to_string(),
             lines: summary_lines
                 .into_iter()
@@ -46,6 +48,7 @@ fn snapshot(
                 .collect(),
         },
         detail: Some(vec![DetailSection {
+            blocks: vec![],
             heading,
             items: detail_lines
                 .into_iter()

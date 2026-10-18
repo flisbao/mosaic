@@ -6,17 +6,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::NaiveDate;
-use panel_tui::application::llm::{
+use mosaic::application::llm::{
     execute_recommendation, LlmError, RecommendationStore, StoredRecommendation,
 };
-use panel_tui::application::recommendation::{build_plan, LlmSelection, WidgetContext};
-use panel_tui::application::recommendation_view::recommendation_snapshot;
-use panel_tui::application::refresh::refresh_widget;
-use panel_tui::domain::widget::WidgetId;
-use panel_tui::infrastructure::config::WidgetSettings;
-use panel_tui::infrastructure::llm_cli::ClaudeCli;
-use panel_tui::infrastructure::plugin_runner::PluginRunner;
-use panel_tui::infrastructure::recommendation_file::FileRecommendationStore;
+use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContext};
+use mosaic::application::recommendation_view::recommendation_snapshot;
+use mosaic::application::refresh::refresh_widget;
+use mosaic::domain::widget::WidgetId;
+use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::llm_cli::ClaudeCli;
+use mosaic::infrastructure::plugin_runner::PluginRunner;
+use mosaic::infrastructure::recommendation_file::FileRecommendationStore;
 
 const FORK_RACE_RETRIES: usize = 20;
 
@@ -35,6 +35,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         args: vec![plugin.to_string_lossy().to_string()],
         env: vec![("KANBAN_DIR".to_string(), root.to_string_lossy().to_string())],
         interval_seconds: 30,
+        interval_adjusted: false,
         timeout_seconds: 10,
         span: 1,
         tab: true,

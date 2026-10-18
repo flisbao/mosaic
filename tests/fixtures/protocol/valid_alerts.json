@@ -1,0 +1,1 @@
+{"protocol":1,"summary":{"title":"Avisos"},"alerts":[{"id":"deploy-42","title":"Deploy falhou","body":"serviço api","level":"warn"},{"id":"nota-1","title":"Nova nota"}]}

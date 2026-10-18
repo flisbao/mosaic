@@ -1,0 +1,1 @@
+{"protocol":1,"summary":{"title":"Time","blocks":[{"type":"table","columns":[{"title":"Pessoa"},{"title":"Em andamento","align":"right"},{"title":"Estado"}],"rows":[["Ana","3",{"text":"ok","tone":"ok"}],["Bia","5",{"text":"parada","tone":"danger","flag":"warning"}]]}]}}

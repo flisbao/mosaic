@@ -8,7 +8,8 @@ use thiserror::Error;
 use crate::domain::pomodoro::PomodoroSettings;
 use crate::domain::widget::WidgetId;
 
-pub const DEFAULT_INTERVAL_SECONDS: u64 = 30;
+pub const MINIMUM_INTERVAL_SECONDS: u64 = 30;
+pub const DEFAULT_INTERVAL_SECONDS: u64 = MINIMUM_INTERVAL_SECONDS;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 5;
 pub const DEFAULT_SPAN: u16 = 1;
 pub const DEFAULT_LLM_MAX_ITEMS: usize = 20;
@@ -21,7 +22,7 @@ pub const DEFAULT_LLM_TIMEOUT_SECONDS: u64 = 120;
 pub const DEFAULT_PRIORITY_PROMPT: &str = "prompts/prioridade.md";
 pub const DEFAULT_SUGGESTIONS: [&str; 3] = ["Beber água", "Levantar e alongar", "Tomar um café"];
 
-const CONFIG_DIRECTORY_NAME: &str = "panel-tui";
+const CONFIG_DIRECTORY_NAME: &str = "mosaic";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const SECONDS_PER_MINUTE: u64 = 60;
 const POMODORO_SECTION: &str = "pomodoro";
@@ -34,6 +35,7 @@ pub struct WidgetSettings {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub interval_seconds: u64,
+    pub interval_adjusted: bool,
     pub timeout_seconds: u64,
     pub span: u16,
     pub tab: bool,
@@ -183,12 +185,13 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
 }
 
 fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
-    let interval_seconds = positive_or_default(
+    let configured_interval = positive_or_default(
         widget.interval_seconds,
         DEFAULT_INTERVAL_SECONDS,
         &widget.id,
         "interval_seconds",
     )?;
+    let interval_seconds = configured_interval.max(MINIMUM_INTERVAL_SECONDS);
     let timeout_seconds = positive_or_default(
         widget.timeout_seconds,
         DEFAULT_TIMEOUT_SECONDS,
@@ -213,6 +216,7 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
         args: widget.args,
         env: widget.env.into_iter().collect(),
         interval_seconds,
+        interval_adjusted: interval_seconds != configured_interval,
         timeout_seconds,
         span: widget.span.unwrap_or(DEFAULT_SPAN),
         tab: widget.tab,
@@ -345,7 +349,7 @@ mod tests {
             id = "kanban"
             command = "python3"
             args = ["plugins/kanban.py"]
-            interval_seconds = 10
+            interval_seconds = 60
             timeout_seconds = 3
             span = 2
             tab = true
@@ -365,7 +369,8 @@ mod tests {
             widget.env,
             vec![("KANBAN_DIR".to_string(), "/home/x/kanban".to_string())]
         );
-        assert_eq!(widget.interval_seconds, 10);
+        assert_eq!(widget.interval_seconds, 60);
+        assert!(!widget.interval_adjusted);
         assert_eq!(widget.timeout_seconds, 3);
         assert_eq!(widget.span, 2);
         assert!(widget.tab);
@@ -375,7 +380,8 @@ mod tests {
     fn applies_defaults_for_omitted_fields() {
         let config = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"echo\"\n").unwrap();
         let widget = &config.widgets[0];
-        assert_eq!(widget.interval_seconds, DEFAULT_INTERVAL_SECONDS);
+        assert_eq!(widget.interval_seconds, MINIMUM_INTERVAL_SECONDS);
+        assert!(!widget.interval_adjusted);
         assert_eq!(widget.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
         assert_eq!(widget.span, DEFAULT_SPAN);
         assert!(!widget.tab);
@@ -392,6 +398,37 @@ mod tests {
             result.unwrap_err(),
             ConfigError::DuplicateWidgetId("kanban".to_string())
         );
+    }
+
+    fn interval_settings(interval: i64) -> WidgetSettings {
+        let text =
+            format!("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ninterval_seconds = {interval}\n");
+        parse_config(&text).unwrap().widgets.remove(0)
+    }
+
+    #[test]
+    fn interval_below_minimum_is_raised_and_flagged() {
+        for interval in [1, 10, 29] {
+            let widget = interval_settings(interval);
+            assert_eq!(widget.interval_seconds, MINIMUM_INTERVAL_SECONDS);
+            assert!(widget.interval_adjusted, "{interval}");
+        }
+    }
+
+    #[test]
+    fn interval_at_or_above_minimum_is_kept() {
+        for interval in [30, 31, i64::MAX] {
+            let widget = interval_settings(interval);
+            assert_eq!(widget.interval_seconds, interval as u64);
+            assert!(!widget.interval_adjusted, "{interval}");
+        }
+    }
+
+    #[test]
+    fn omitted_interval_defaults_to_the_minimum_without_flag() {
+        let config = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\n").unwrap();
+        assert_eq!(config.widgets[0].interval_seconds, MINIMUM_INTERVAL_SECONDS);
+        assert!(!config.widgets[0].interval_adjusted);
     }
 
     #[test]

@@ -38,11 +38,15 @@ impl PluginRunner {
         run_process(command, stdin_text, &limits)
             .map_err(|error| SourceError::Failed(error.to_string()))
     }
+
+    pub fn raw_snapshot_output(&self) -> Result<String, SourceError> {
+        self.run(&["snapshot"], None)
+    }
 }
 
 impl WidgetSource for PluginRunner {
     fn snapshot(&self) -> Result<WidgetSnapshot, SourceError> {
-        let output = self.run(&["snapshot"], None)?;
+        let output = self.raw_snapshot_output()?;
         parse_snapshot(&output).map_err(|error| SourceError::Failed(error.to_string()))
     }
 }
@@ -75,6 +79,7 @@ mod tests {
             args: vec!["plugin.sh".to_string()],
             env: vec![("KANBAN_DIR".to_string(), "/tmp/kanban".to_string())],
             interval_seconds: 30,
+            interval_adjusted: false,
             timeout_seconds,
             span: 1,
             tab: false,
@@ -98,6 +103,29 @@ mod tests {
             5,
         );
         assert_eq!(runner.snapshot().unwrap().summary.title, "T");
+    }
+
+    #[test]
+    fn raw_snapshot_output_returns_the_plugin_text_unparsed() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = runner(directory.path(), r#"printf '{"summary":{"title":"T"}}'"#, 5);
+        assert_eq!(
+            valid.raw_snapshot_output().unwrap(),
+            r#"{"summary":{"title":"T"}}"#
+        );
+        let invalid = runner(directory.path(), "printf 'isto não é json'", 5);
+        assert_eq!(invalid.raw_snapshot_output().unwrap(), "isto não é json");
+    }
+
+    #[test]
+    fn raw_snapshot_output_reports_execution_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        let failing = runner(directory.path(), "echo boom >&2; exit 3", 5);
+        assert!(failing
+            .raw_snapshot_output()
+            .unwrap_err()
+            .to_string()
+            .contains("boom"));
     }
 
     #[test]

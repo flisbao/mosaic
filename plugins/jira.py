@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plugin do panel-tui: lê um Jira Cloud (somente leitura) nos modos manager e personal."""
+"""Plugin do mosaic: lê um Jira Cloud (somente leitura) nos modos manager e personal."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from pathlib import Path
 MODES = ("manager", "personal")
 DEFAULT_UNASSIGNED_HOURS = 2
 DEFAULT_BUDGET_SECONDS = 40
-DEFAULT_STATE_DIRECTORY = "~/.local/state/panel-tui/jira"
+DEFAULT_STATE_DIRECTORY = "~/.local/state/mosaic/jira"
 SITE_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
 PROJECT_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 MAXIMUM_SITE_LENGTH = 253
