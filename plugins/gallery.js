@@ -67,7 +67,7 @@ function buildSnapshot(now) {
           type: "lines",
           lines: [
             { text: "tudo em dia", tone: "ok" },
-            { text: "veja schema/protocol.schema.json", tone: "muted" },
+            { text: "veja PROTOCOL.md", tone: "muted" },
           ],
         },
       ],

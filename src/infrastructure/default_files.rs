@@ -83,7 +83,7 @@ priority_prompt = "prompts/prioridade.md"
 # JIRA_MODE = "personal"
 # JIRA_PROJECT = "CLI"
 
-# --- Galeria de blocos (descomente para ver todos os blocos) ---
+# --- Galeria de blocos (descomente para ver todos os blocos; veja PROTOCOL.md) ---
 # [[widgets]]
 # id = "gallery-python"
 # command = "python3"
