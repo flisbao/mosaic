@@ -149,6 +149,65 @@ mod tests {
         TerminalSize { width, height }
     }
 
+    fn right_edge(area: CellRect) -> u32 {
+        u32::from(area.x) + u32::from(area.width)
+    }
+
+    fn bottom_edge(area: CellRect) -> u32 {
+        u32::from(area.y) + u32::from(area.height)
+    }
+
+    fn assert_inside(area: CellRect, terminal: TerminalSize) {
+        assert!(area.width > 0 && area.height > 0, "{terminal:?} {area:?}");
+        assert!(
+            right_edge(area) <= u32::from(terminal.width),
+            "{terminal:?} {area:?}"
+        );
+        assert!(
+            bottom_edge(area) <= u32::from(terminal.height),
+            "{terminal:?} {area:?}"
+        );
+    }
+
+    fn overlaps(first: CellRect, second: CellRect) -> bool {
+        let shares_columns =
+            u32::from(first.x) < right_edge(second) && u32::from(second.x) < right_edge(first);
+        let shares_rows =
+            u32::from(first.y) < bottom_edge(second) && u32::from(second.y) < bottom_edge(first);
+        shares_columns && shares_rows
+    }
+
+    fn assert_grid_invariants(
+        placements: &[Placement],
+        widget_count: usize,
+        terminal: TerminalSize,
+    ) {
+        assert_eq!(placements.len(), widget_count, "{terminal:?}");
+        let mut indexes: Vec<usize> = placements.iter().map(|p| p.widget_index).collect();
+        indexes.sort_unstable();
+        assert_eq!(
+            indexes,
+            (0..widget_count).collect::<Vec<_>>(),
+            "{terminal:?}"
+        );
+        for placement in placements {
+            assert!(placement.area.height >= MINIMUM_BOX_HEIGHT, "{terminal:?}");
+            assert_inside(placement.area, terminal);
+        }
+        for (position, first) in placements.iter().enumerate() {
+            for second in &placements[position + 1..] {
+                assert!(!overlaps(first.area, second.area), "{terminal:?}");
+            }
+        }
+        let left_column_height: u32 = placements
+            .iter()
+            .filter(|placement| placement.area.x == 0)
+            .map(|placement| u32::from(placement.area.height))
+            .sum();
+        let usable_height = u32::from(terminal.height) - u32::from(TOP_BAR_HEIGHT);
+        assert_eq!(left_column_height, usable_height, "{terminal:?}");
+    }
+
     fn placements(layout: GridLayout) -> Vec<Placement> {
         match layout {
             GridLayout::Grid(placements) => placements,
@@ -231,12 +290,59 @@ mod tests {
     }
 
     #[test]
-    fn no_underflow_on_tiny_terminals() {
-        for width in 0..=70u16 {
-            for height in 0..=70u16 {
-                for widget_count in [0usize, 1, 5] {
-                    let spans = vec![1u16; widget_count];
-                    let _ = arrange(&spans, size(width, height));
+    fn exact_floor_boundary_keeps_grid() {
+        let result = placements(arrange(&[1; 7], size(70, 22)));
+        assert_eq!(result.len(), 7);
+        assert!(result
+            .iter()
+            .all(|placement| placement.area.height == MINIMUM_BOX_HEIGHT));
+    }
+
+    #[test]
+    fn one_row_past_the_floor_boundary_falls_back_to_compact() {
+        assert!(matches!(
+            arrange(&[1; 7], size(70, 21)),
+            GridLayout::Compact(_)
+        ));
+    }
+
+    #[test]
+    fn below_full_height_is_compact_even_when_rows_would_fit() {
+        assert!(matches!(
+            arrange(&[1; 6], size(70, 19)),
+            GridLayout::Compact(_)
+        ));
+    }
+
+    #[test]
+    fn tiny_and_odd_terminals_satisfy_layout_invariants() {
+        const SPAN_SAMPLE: [u16; 5] = [0, 2, u16::MAX, 3, 1];
+        let span_sources: [&[u16]; 2] = [&[1], &SPAN_SAMPLE];
+        for span_source in span_sources {
+            for widget_count in [0usize, 1, 5] {
+                let spans: Vec<u16> = span_source
+                    .iter()
+                    .cycle()
+                    .take(widget_count)
+                    .copied()
+                    .collect();
+                for width in 0..=70u16 {
+                    for height in 0..=70u16 {
+                        let terminal = size(width, height);
+                        let expected_empty =
+                            widget_count == 0 || width == 0 || height <= TOP_BAR_HEIGHT;
+                        match arrange(&spans, terminal) {
+                            GridLayout::Empty => assert!(expected_empty, "{terminal:?}"),
+                            GridLayout::Grid(placements) => {
+                                assert!(!expected_empty, "{terminal:?}");
+                                assert_grid_invariants(&placements, widget_count, terminal);
+                            }
+                            GridLayout::Compact(placement) => {
+                                assert!(!expected_empty, "{terminal:?}");
+                                assert_inside(placement.area, terminal);
+                            }
+                        }
+                    }
                 }
             }
         }
