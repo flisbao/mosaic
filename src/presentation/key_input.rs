@@ -8,6 +8,12 @@ pub enum KeyInput {
     Down,
     Enter,
     Escape,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+    Home,
+    End,
     Character(char),
 }
 
@@ -22,11 +28,19 @@ pub fn from_crossterm(event: KeyEvent) -> Option<KeyInput> {
         KeyCode::Down => Some(KeyInput::Down),
         KeyCode::Enter => Some(KeyInput::Enter),
         KeyCode::Esc => Some(KeyInput::Escape),
+        KeyCode::Left => Some(KeyInput::Left),
+        KeyCode::Right => Some(KeyInput::Right),
+        KeyCode::PageUp => Some(KeyInput::PageUp),
+        KeyCode::PageDown => Some(KeyInput::PageDown),
+        KeyCode::Home => Some(KeyInput::Home),
+        KeyCode::End => Some(KeyInput::End),
         KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(KeyInput::Character('q'))
         }
         KeyCode::Char('j') => Some(KeyInput::Down),
         KeyCode::Char('k') => Some(KeyInput::Up),
+        KeyCode::Char('h') => Some(KeyInput::Left),
+        KeyCode::Char('l') => Some(KeyInput::Right),
         KeyCode::Char(character) => Some(KeyInput::Character(character)),
         _ => None,
     }
@@ -63,6 +77,34 @@ mod tests {
         assert_eq!(
             from_crossterm(press(KeyCode::Char('k'))),
             Some(KeyInput::Up)
+        );
+    }
+
+    #[test]
+    fn arrow_page_home_end_keys_are_mapped() {
+        assert_eq!(from_crossterm(press(KeyCode::Left)), Some(KeyInput::Left));
+        assert_eq!(from_crossterm(press(KeyCode::Right)), Some(KeyInput::Right));
+        assert_eq!(
+            from_crossterm(press(KeyCode::PageUp)),
+            Some(KeyInput::PageUp)
+        );
+        assert_eq!(
+            from_crossterm(press(KeyCode::PageDown)),
+            Some(KeyInput::PageDown)
+        );
+        assert_eq!(from_crossterm(press(KeyCode::Home)), Some(KeyInput::Home));
+        assert_eq!(from_crossterm(press(KeyCode::End)), Some(KeyInput::End));
+    }
+
+    #[test]
+    fn h_and_l_move_horizontally() {
+        assert_eq!(
+            from_crossterm(press(KeyCode::Char('h'))),
+            Some(KeyInput::Left)
+        );
+        assert_eq!(
+            from_crossterm(press(KeyCode::Char('l'))),
+            Some(KeyInput::Right)
         );
     }
 

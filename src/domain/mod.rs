@@ -3,6 +3,7 @@ pub mod blocks;
 pub mod error;
 pub mod layout;
 pub mod pomodoro;
+pub mod shortcuts;
 pub mod snapshot_report;
 pub mod widget;
 pub mod widget_content;
