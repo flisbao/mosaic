@@ -1,6 +1,8 @@
 use serde_json::{Map, Value};
 
-use crate::domain::card::{clean_text, clean_text_limited, Alert, AlertLevel};
+use crate::domain::card::{
+    clean_text, clean_text_limited, Alert, AlertLevel, Block, CardLine, Row, Tag, Tone,
+};
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetSnapshot,
 };
@@ -10,6 +12,9 @@ pub const SUPPORTED_PROTOCOL_VERSION: u64 = 1;
 pub const MAXIMUM_TEXT_CHARACTERS: usize = 500;
 pub const MAXIMUM_ALERT_ID_CHARACTERS: usize = 100;
 pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
+pub const MAXIMUM_BLOCKS_PER_CARD: usize = 20;
+pub const MAXIMUM_LINES_PER_BLOCK: usize = 200;
+pub const MAXIMUM_TAGS_PER_ROW: usize = 3;
 
 const EMPTY_PARAMS_JSON: &str = "{}";
 const UNKNOWN_FIELD_MESSAGE: &str = "campo desconhecido";
@@ -69,7 +74,7 @@ pub fn parse_snapshot_report(json: &str) -> Result<ParsedSnapshot, ProtocolError
     let summary = Summary {
         title,
         lines: reader.legacy_lines(summary_object),
-        blocks: vec![],
+        blocks: reader.blocks(summary_object, "summary"),
     };
     let snapshot = WidgetSnapshot {
         summary,
@@ -249,6 +254,185 @@ impl Reader {
         object
     }
 
+    fn error_count(&self) -> usize {
+        self.problems
+            .iter()
+            .filter(|problem| problem.severity == Severity::Error)
+            .count()
+    }
+
+    fn capped<'a>(&mut self, entries: &'a [Value], limit: usize, path: &str) -> &'a [Value] {
+        if entries.len() <= limit {
+            return entries;
+        }
+        self.warning(path, &format!("apenas {limit} itens são lidos"));
+        &entries[..limit]
+    }
+
+    fn required_list<'a>(
+        &mut self,
+        object: &'a Map<String, Value>,
+        key: &str,
+        path: &str,
+    ) -> &'a [Value] {
+        match object.get(key) {
+            Some(Value::Array(entries)) => entries,
+            Some(_) => {
+                self.error(&child_path(path, key), "precisa ser uma lista");
+                &[]
+            }
+            None => {
+                self.error(&child_path(path, key), "campo obrigatório ausente");
+                &[]
+            }
+        }
+    }
+
+    fn tone(&mut self, object: &Map<String, Value>, path: &str) -> Tone {
+        let tone_path = child_path(path, "tone");
+        match object.get("tone") {
+            Some(Value::String(name)) => Tone::parse(name).unwrap_or_else(|| {
+                self.warning(
+                    &tone_path,
+                    &format!("tom desconhecido: {}", clean_text(name)),
+                );
+                Tone::Normal
+            }),
+            Some(Value::Null) | None => Tone::Normal,
+            Some(_) => {
+                self.warning(&tone_path, "precisa ser texto; ignorado");
+                Tone::Normal
+            }
+        }
+    }
+
+    fn blocks(&mut self, object: &Map<String, Value>, path: &str) -> Vec<Block> {
+        let blocks_path = child_path(path, "blocks");
+        let Some(entries) = self.list(object, "blocks", path) else {
+            return vec![];
+        };
+        let entries = self.capped(entries, MAXIMUM_BLOCKS_PER_CARD, &blocks_path);
+        let mut blocks = vec![];
+        for (index, entry) in entries.iter().enumerate() {
+            if let Some(block) = self.block(entry, &indexed_path(&blocks_path, index)) {
+                blocks.push(block);
+            }
+        }
+        blocks
+    }
+
+    fn block(&mut self, entry: &Value, path: &str) -> Option<Block> {
+        let Some(object) = entry.as_object() else {
+            self.error(path, "bloco precisa ser um objeto");
+            return None;
+        };
+        let Some(kind) = object.get("type").and_then(Value::as_str) else {
+            self.error(&child_path(path, "type"), "type ausente");
+            return None;
+        };
+        let errors_before = self.error_count();
+        let block = match kind {
+            "lines" => self.lines_block(object, path),
+            "rows" => self.rows_block(object, path),
+            other => {
+                let message = format!("tipo de bloco desconhecido: {}", clean_text(other));
+                self.warning(path, &message);
+                return None;
+            }
+        };
+        (self.error_count() == errors_before).then_some(block)
+    }
+
+    fn lines_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
+        let lines_path = child_path(path, "lines");
+        let entries = self.required_list(object, "lines", path);
+        let entries = self.capped(entries, MAXIMUM_LINES_PER_BLOCK, &lines_path);
+        let mut lines = vec![];
+        for (index, entry) in entries.iter().enumerate() {
+            let line_path = indexed_path(&lines_path, index);
+            let Some(line) = self.object_entry(entry, &line_path) else {
+                continue;
+            };
+            let Some(text) = self.required_text(line, "text", &line_path) else {
+                continue;
+            };
+            let tone = self.tone(line, &line_path);
+            let flag = self.flag(line, &line_path);
+            lines.push(CardLine { text, tone, flag });
+        }
+        Block::Lines(lines)
+    }
+
+    fn rows_block(&mut self, object: &Map<String, Value>, path: &str) -> Block {
+        let rows_path = child_path(path, "rows");
+        let entries = self.required_list(object, "rows", path);
+        let entries = self.capped(entries, MAXIMUM_LINES_PER_BLOCK, &rows_path);
+        let mut rows = vec![];
+        for (index, entry) in entries.iter().enumerate() {
+            let row_path = indexed_path(&rows_path, index);
+            if let Some(row) = self.row(entry, &row_path) {
+                rows.push(row);
+            }
+        }
+        Block::Rows(rows)
+    }
+
+    fn row(&mut self, entry: &Value, path: &str) -> Option<Row> {
+        let object = self.object_entry(entry, path)?;
+        let text = self.required_text(object, "text", path)?;
+        Some(Row {
+            text,
+            time: self.optional_text(object, "time", path),
+            tags: self.tags(object, path),
+            tone: self.tone(object, path),
+            marker: self.marker(object, path),
+            flag: self.flag(object, path),
+        })
+    }
+
+    fn marker(&mut self, object: &Map<String, Value>, path: &str) -> Option<char> {
+        let text = self.optional_text(object, "marker", path)?;
+        let mut characters = text.chars();
+        match (characters.next(), characters.next()) {
+            (Some(marker), None) => Some(marker),
+            _ => {
+                self.warning(
+                    &child_path(path, "marker"),
+                    "precisa ter exatamente um caractere; ignorado",
+                );
+                None
+            }
+        }
+    }
+
+    fn tags(&mut self, row: &Map<String, Value>, path: &str) -> Vec<Tag> {
+        let tags_path = child_path(path, "tags");
+        let entries = match row.get("tags") {
+            Some(Value::Array(entries)) => entries,
+            Some(Value::Null) | None => return vec![],
+            Some(_) => {
+                self.warning(&tags_path, "precisa ser uma lista; ignorado");
+                return vec![];
+            }
+        };
+        let entries = self.capped(entries, MAXIMUM_TAGS_PER_ROW, &tags_path);
+        let mut tags = vec![];
+        for (index, entry) in entries.iter().enumerate() {
+            let tag_path = indexed_path(&tags_path, index);
+            let Some(tag) = entry.as_object() else {
+                self.warning(&tag_path, "precisa ser um objeto; ignorado");
+                continue;
+            };
+            let Some(text) = self.optional_text(tag, "text", &tag_path) else {
+                self.warning(&tag_path, "etiqueta sem texto; ignorada");
+                continue;
+            };
+            let tone = self.tone(tag, &tag_path);
+            tags.push(Tag { text, tone });
+        }
+        tags
+    }
+
     fn legacy_lines(&mut self, summary: &Map<String, Value>) -> Vec<SummaryLine> {
         let Some(entries) = self.list(summary, "lines", "summary") else {
             return vec![];
@@ -289,6 +473,7 @@ impl Reader {
         let object = self.object_entry(entry, path)?;
         self.unknown_fields(object, &SECTION_KEYS, path);
         let heading = self.required_text(object, "heading", path)?;
+        let blocks = self.blocks(object, path);
         let items_path = child_path(path, "items");
         let mut items = vec![];
         for (index, item) in self
@@ -304,7 +489,7 @@ impl Reader {
         Some(DetailSection {
             heading,
             items,
-            blocks: vec![],
+            blocks,
         })
     }
 
@@ -469,7 +654,7 @@ fn parse_flag(name: &str) -> Option<Flag> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::AlertLevel;
+    use crate::domain::card::{AlertLevel, Block, CardLine, Row, Tag, Tone};
     use crate::domain::widget::Flag;
 
     fn report(json: &str) -> ParsedSnapshot {
@@ -642,5 +827,227 @@ mod tests {
             ]
         );
         assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+    }
+
+    fn summary_with_blocks(blocks: &str) -> ParsedSnapshot {
+        report(&format!(
+            r#"{{"summary":{{"title":"K","blocks":{blocks}}}}}"#
+        ))
+    }
+
+    fn first_block(parsed: &ParsedSnapshot) -> &Block {
+        &parsed.snapshot.summary.blocks[0]
+    }
+
+    #[test]
+    fn lines_block_parses_text_tone_and_flag() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"lines","lines":[
+                {"text":"a","tone":"ok","flag":"updated"},{"text":"b"}]}]"#,
+        );
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let expected = Block::Lines(vec![
+            CardLine {
+                text: "a".to_string(),
+                tone: Tone::Ok,
+                flag: Some(Flag::Updated),
+            },
+            CardLine {
+                text: "b".to_string(),
+                tone: Tone::Normal,
+                flag: None,
+            },
+        ]);
+        assert_eq!(first_block(&parsed), &expected);
+    }
+
+    #[test]
+    fn rows_block_parses_all_fields() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"rows","rows":[{"time":"09:00","text":"Daily","tone":"current",
+                "marker":"▶","flag":"warning","tags":[{"text":"agora","tone":"danger"}]}]}]"#,
+        );
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let expected = Block::Rows(vec![Row {
+            time: Some("09:00".to_string()),
+            text: "Daily".to_string(),
+            tags: vec![Tag {
+                text: "agora".to_string(),
+                tone: Tone::Danger,
+            }],
+            tone: Tone::Current,
+            marker: Some('▶'),
+            flag: Some(Flag::Warning),
+        }]);
+        assert_eq!(first_block(&parsed), &expected);
+    }
+
+    #[test]
+    fn rows_tags_are_limited_to_three_with_a_warning() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"rows","rows":[{"text":"x","tags":[
+                {"text":"1"},{"text":"2"},{"text":"3"},{"text":"4"}]}]}]"#,
+        );
+        let Block::Rows(rows) = first_block(&parsed) else {
+            panic!("esperava rows");
+        };
+        assert_eq!(rows[0].tags.len(), 3);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].rows[0].tags"]
+        );
+    }
+
+    #[test]
+    fn marker_must_be_a_single_character() {
+        for marker in ["", "ab", "  "] {
+            let parsed = summary_with_blocks(&format!(
+                r#"[{{"type":"rows","rows":[{{"text":"x","marker":"{marker}"}}]}}]"#
+            ));
+            let Block::Rows(rows) = first_block(&parsed) else {
+                panic!("esperava rows");
+            };
+            assert_eq!(rows[0].marker, None, "{marker:?}");
+            assert_eq!(
+                paths(&parsed, Severity::Warning),
+                vec!["summary.blocks[0].rows[0].marker"]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_block_type_is_a_warning_and_ignored() {
+        let parsed = summary_with_blocks(r#"[{"type":"grafico"},{"type":"lines","lines":[]}]"#);
+        assert_eq!(parsed.snapshot.summary.blocks.len(), 1);
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["summary.blocks[0]"]);
+        assert_eq!(
+            parsed.problems[0].message,
+            "tipo de bloco desconhecido: grafico"
+        );
+    }
+
+    #[test]
+    fn block_that_is_not_an_object_is_an_error_with_path() {
+        let parsed = summary_with_blocks(r#"[{"type":"lines","lines":[]},"texto",null,[],{}]"#);
+        assert_eq!(parsed.snapshot.summary.blocks.len(), 1);
+        assert_eq!(
+            paths(&parsed, Severity::Error),
+            vec![
+                "summary.blocks[1]",
+                "summary.blocks[2]",
+                "summary.blocks[3]",
+                "summary.blocks[4].type"
+            ]
+        );
+        assert_eq!(parsed.problems[0].message, "bloco precisa ser um objeto");
+    }
+
+    #[test]
+    fn rows_that_is_not_a_list_discards_only_that_block() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"rows","rows":"x"},{"type":"lines","lines":[{"text":"fica"}]}]"#,
+        );
+        assert_eq!(parsed.snapshot.summary.blocks.len(), 1);
+        assert!(matches!(first_block(&parsed), Block::Lines(_)));
+        assert_eq!(
+            paths(&parsed, Severity::Error),
+            vec!["summary.blocks[0].rows"]
+        );
+    }
+
+    #[test]
+    fn row_without_text_is_an_error_with_path() {
+        let parsed = summary_with_blocks(
+            r#"[{"type":"rows","rows":[{"text":"a"},{"text":"b"},{"time":"1"}]}]"#,
+        );
+        assert!(parsed.snapshot.summary.blocks.is_empty());
+        assert_eq!(
+            paths(&parsed, Severity::Error),
+            vec!["summary.blocks[0].rows[2].text"]
+        );
+    }
+
+    #[test]
+    fn unknown_tone_becomes_normal_with_a_warning() {
+        let parsed =
+            summary_with_blocks(r#"[{"type":"lines","lines":[{"text":"a","tone":"rosa"}]}]"#);
+        let Block::Lines(lines) = first_block(&parsed) else {
+            panic!("esperava lines");
+        };
+        assert_eq!(lines[0].tone, Tone::Normal);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].lines[0].tone"]
+        );
+    }
+
+    #[test]
+    fn limits_are_enforced() {
+        let many_blocks = vec![r#"{"type":"lines","lines":[]}"#; 21].join(",");
+        let parsed = summary_with_blocks(&format!("[{many_blocks}]"));
+        assert_eq!(parsed.snapshot.summary.blocks.len(), 20);
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["summary.blocks"]);
+
+        let many_lines = vec![r#"{"text":"x"}"#; 201].join(",");
+        let parsed =
+            summary_with_blocks(&format!(r#"[{{"type":"lines","lines":[{many_lines}]}}]"#));
+        let Block::Lines(lines) = first_block(&parsed) else {
+            panic!("esperava lines");
+        };
+        assert_eq!(lines.len(), 200);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].lines"]
+        );
+
+        let long_text = "y".repeat(600);
+        let parsed = summary_with_blocks(&format!(
+            r#"[{{"type":"lines","lines":[{{"text":"{long_text}"}}]}}]"#
+        ));
+        let Block::Lines(lines) = first_block(&parsed) else {
+            panic!("esperava lines");
+        };
+        assert_eq!(lines[0].text.chars().count(), 500);
+        assert!(lines[0].text.ends_with('…'));
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].lines[0].text"]
+        );
+    }
+
+    #[test]
+    fn blocks_in_detail_sections_are_parsed() {
+        let parsed = report(
+            r#"{"summary":{"title":"K"},"detail":{"sections":[{"heading":"h",
+                "blocks":[{"type":"lines","lines":[{"text":"x"}]}]}]}}"#,
+        );
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let section = &parsed.snapshot.detail.unwrap()[0];
+        assert_eq!(section.blocks.len(), 1);
+    }
+
+    #[test]
+    fn blocks_and_items_coexist_in_a_section() {
+        let parsed = report(
+            r#"{"summary":{"title":"K"},"detail":{"sections":[{"heading":"h",
+                "blocks":[{"type":"lines","lines":[{"text":"x"}]}],
+                "items":[{"text":"i"}]}]}}"#,
+        );
+        let section = &parsed.snapshot.detail.unwrap()[0];
+        assert_eq!(section.blocks.len(), 1);
+        assert_eq!(section.items.len(), 1);
+    }
+
+    #[test]
+    fn blocks_take_precedence_over_summary_lines() {
+        let parsed = report(
+            r#"{"summary":{"title":"K","lines":[{"text":"velho"}],
+                "blocks":[{"type":"lines","lines":[{"text":"novo"}]}]}}"#,
+        );
+        let displayed = parsed.snapshot.summary.display_blocks();
+        let Block::Lines(lines) = &displayed[0] else {
+            panic!("esperava lines");
+        };
+        assert_eq!(lines[0].text, "novo");
     }
 }
