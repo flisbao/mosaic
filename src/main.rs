@@ -25,6 +25,8 @@ use mosaic::application::recommendation_view::{
     idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
 };
 use mosaic::application::refresh::refresh_widget;
+use mosaic::application::reload::{apply_plan, WidgetGenerations, WidgetLifecycle};
+use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::application::widget_notices::with_interval_notice;
 use mosaic::domain::action::ConfirmedAction;
@@ -33,9 +35,10 @@ use mosaic::domain::widget::WidgetSnapshot;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
-    config_directory, config_file_path, parse_config, AppConfig, ConfigError, Harness, LlmConfig,
-    WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
-    DEFAULT_LLM_MAX_ITEMS, DEFAULT_SPAN,
+    config_directory, config_file_path, load_config, parse_config, prepare_reload,
+    read_config_file, AppConfig, ConfigError, Harness, LlmConfig, PreparedReload, WidgetSettings,
+    DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM, DEFAULT_LLM_MAX_ITEMS,
+    DEFAULT_SPAN,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
@@ -52,7 +55,7 @@ use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::from_crossterm;
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
-    build_tab_views, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
+    build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
 };
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
@@ -72,6 +75,11 @@ const CHECK_TIMEOUT_SECONDS: u64 = 10;
 const CHECK_PREVIEW_WIDTH: usize = 60;
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
+const CHECK_CONFIG_FLAG: &str = "--config";
+const CHECK_CONFIG_USAGE: &str = "uso: mosaic check --config [caminho]";
+const LLM_SHUTDOWN_KEY: &str = "llm";
+const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
+const RELOAD_DONE_NOTICE: &str = "Configuração recarregada";
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -82,14 +90,94 @@ enum AppError {
 }
 
 enum AppEvent {
-    WidgetUpdated(WidgetId, Result<WidgetSnapshot, SourceError>),
-    ActionFinished(WidgetId, ActionNotice, Result<WidgetSnapshot, SourceError>),
+    WidgetUpdated(WidgetId, u64, Result<WidgetSnapshot, SourceError>),
+    ActionFinished(
+        WidgetId,
+        u64,
+        ActionNotice,
+        Result<WidgetSnapshot, SourceError>,
+    ),
     RecommendationFinished(Result<StoredRecommendation, LlmError>),
 }
 
 struct WidgetRuntime {
-    runners: HashMap<String, Arc<PluginRunner>>,
-    refresh_triggers: Vec<Sender<()>>,
+    working_directory: PathBuf,
+    sender: Sender<AppEvent>,
+    shutdown: Arc<ShutdownCoordinator>,
+    settings: HashMap<WidgetId, WidgetSettings>,
+    runners: HashMap<WidgetId, Arc<PluginRunner>>,
+    refresh_triggers: HashMap<WidgetId, Sender<()>>,
+}
+
+impl WidgetRuntime {
+    fn new(
+        working_directory: PathBuf,
+        sender: Sender<AppEvent>,
+        shutdown: Arc<ShutdownCoordinator>,
+    ) -> Self {
+        Self {
+            working_directory,
+            sender,
+            shutdown,
+            settings: HashMap::new(),
+            runners: HashMap::new(),
+            refresh_triggers: HashMap::new(),
+        }
+    }
+
+    fn replace_settings(&mut self, widgets: &[WidgetSettings]) {
+        self.settings = widgets
+            .iter()
+            .map(|widget| (widget.id.clone(), widget.clone()))
+            .collect();
+    }
+
+    fn runner(&self, id: &WidgetId) -> Option<&Arc<PluginRunner>> {
+        self.runners.get(id)
+    }
+
+    fn trigger_all(&self) {
+        for trigger in self.refresh_triggers.values() {
+            let _ = trigger.send(());
+        }
+    }
+}
+
+fn shutdown_key(id: &WidgetId) -> String {
+    format!("{WIDGET_SHUTDOWN_KEY_PREFIX}{}", id.as_str())
+}
+
+impl WidgetLifecycle for WidgetRuntime {
+    fn start(&mut self, id: &WidgetId, generation: u64) {
+        let Some(settings) = self.settings.get(id).cloned() else {
+            return;
+        };
+        let interval = Duration::from_secs(settings.interval_seconds);
+        let interval_notice = settings
+            .interval_adjusted
+            .then_some(settings.interval_seconds);
+        let runner = Arc::new(PluginRunner::new(settings, self.working_directory.clone()));
+        self.shutdown.register(
+            &shutdown_key(id),
+            Arc::clone(&runner) as Arc<dyn Cancellable>,
+        );
+        let trigger = spawn_refresher(
+            id.clone(),
+            generation,
+            Arc::clone(&runner),
+            interval,
+            interval_notice,
+            self.sender.clone(),
+        );
+        self.runners.insert(id.clone(), runner);
+        self.refresh_triggers.insert(id.clone(), trigger);
+    }
+
+    fn retire(&mut self, id: &WidgetId) {
+        self.shutdown.retire(&shutdown_key(id));
+        self.runners.remove(id);
+        self.refresh_triggers.remove(id);
+    }
 }
 
 struct LlmServices {
@@ -102,11 +190,13 @@ struct LlmServices {
 
 struct Services {
     runtime: WidgetRuntime,
-    shutdown: ShutdownCoordinator,
+    generations: WidgetGenerations,
+    shutdown: Arc<ShutdownCoordinator>,
     termination: Arc<AtomicBool>,
     llm: Option<LlmServices>,
     notifier: CompositeNotifier,
     config_directory: PathBuf,
+    widgets: Vec<WidgetSettings>,
 }
 
 struct CheckInvocation {
@@ -148,6 +238,9 @@ fn check_preview(snapshot: &WidgetSnapshot) -> Vec<String> {
 }
 
 fn run_check(arguments: &[String]) -> ExitCode {
+    if arguments.first().map(String::as_str) == Some(CHECK_CONFIG_FLAG) {
+        return run_check_config(&arguments[1..]);
+    }
     let invocation = match parse_check_arguments(arguments) {
         Ok(invocation) => invocation,
         Err(message) => {
@@ -177,6 +270,39 @@ fn run_check(arguments: &[String]) -> ExitCode {
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(EXIT_CODE_FAILURE))
 }
 
+fn run_check_config(arguments: &[String]) -> ExitCode {
+    let path = match config_path_argument(arguments) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(EXIT_CODE_USAGE);
+        }
+    };
+    match read_config_file(&path).and_then(|text| parse_config(&text)) {
+        Ok(config) => {
+            for warning in &config.warnings {
+                println!("aviso: {warning}");
+            }
+            println!("configuração válida: {}", path.display());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("mosaic: {error}");
+            ExitCode::from(EXIT_CODE_FAILURE)
+        }
+    }
+}
+
+fn config_path_argument(arguments: &[String]) -> Result<PathBuf, String> {
+    match arguments {
+        [] => config_directory()
+            .map(|directory| config_file_path(&directory))
+            .map_err(|error| error.to_string()),
+        [path] => Ok(PathBuf::from(path)),
+        _ => Err(CHECK_CONFIG_USAGE.to_string()),
+    }
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().map(String::as_str) == Some(CHECK_SUBCOMMAND) {
@@ -194,14 +320,12 @@ fn main() -> ExitCode {
 fn run() -> Result<(), AppError> {
     let directory = config_directory()?;
     install_defaults_if_missing(&directory)?;
-    let config_text = fs::read_to_string(config_file_path(&directory))
-        .map_err(|error| ConfigError::Io(error.to_string()))?;
-    let config = parse_config(&config_text)?;
+    let config = load_config(&directory)?;
     let _graphics_support = detect_graphics_support(&|name| std::env::var(name).ok());
 
     let termination = termination_requested()?;
     let (sender, receiver) = mpsc::channel();
-    let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
+    let mut services = build_services(&config, &directory, &sender, Arc::clone(&termination));
     let clock = SystemClock;
     let ia_record = services
         .llm
@@ -210,7 +334,7 @@ fn run() -> Result<(), AppError> {
     let TabLayout {
         entries,
         tabs,
-        spans,
+        mut spans,
     } = build_tab_views(
         &widget_placements(&config),
         &tab_placements(&config),
@@ -228,9 +352,9 @@ fn run() -> Result<(), AppError> {
     let result = event_loop(
         &mut terminal,
         &mut state,
-        &spans,
+        &mut spans,
         &clock,
-        &services,
+        &mut services,
         &sender,
         &receiver,
     );
@@ -269,27 +393,42 @@ fn build_services(
     sender: &Sender<AppEvent>,
     termination: Arc<AtomicBool>,
 ) -> Services {
-    let runtime = start_widgets(&config.widgets, directory, sender);
+    let shutdown = Arc::new(ShutdownCoordinator::new());
+    let mut runtime = WidgetRuntime::new(
+        directory.to_path_buf(),
+        sender.clone(),
+        Arc::clone(&shutdown),
+    );
+    runtime.replace_settings(&config.widgets);
+    let mut generations = WidgetGenerations::default();
+    apply_plan(
+        &startup_plan(&config.widgets),
+        &mut runtime,
+        &mut generations,
+    );
     let llm = config.llm.enabled.then(|| build_llm_services(config));
-    let shutdown = ShutdownCoordinator::new(cancellables(&runtime, llm.as_ref()));
+    if let Some(llm) = &llm {
+        shutdown.register(LLM_SHUTDOWN_KEY, Arc::clone(&llm.cancellable));
+    }
     Services {
         runtime,
+        generations,
         shutdown,
         termination,
         llm,
         notifier: build_notifier(config),
         config_directory: directory.to_path_buf(),
+        widgets: config.widgets.clone(),
     }
 }
 
-fn cancellables(runtime: &WidgetRuntime, llm: Option<&LlmServices>) -> Vec<Arc<dyn Cancellable>> {
-    let widgets = runtime
-        .runners
-        .values()
-        .map(|runner| Arc::clone(runner) as Arc<dyn Cancellable>);
-    widgets
-        .chain(llm.map(|services| Arc::clone(&services.cancellable)))
-        .collect()
+fn startup_plan(widgets: &[WidgetSettings]) -> ReloadPlan {
+    ReloadPlan {
+        changes: widgets
+            .iter()
+            .map(|widget| (widget.id.clone(), WidgetChange::Add))
+            .collect(),
+    }
 }
 
 fn share_llm_runner<T: LlmRunner + Cancellable + 'static>(
@@ -324,8 +463,17 @@ fn build_llm_services(config: &AppConfig) -> LlmServices {
     };
     let store_path = default_recommendation_path()
         .unwrap_or_else(|| std::env::temp_dir().join(FALLBACK_STORE_FILE_NAME));
-    let selections = config
-        .widgets
+    LlmServices {
+        runner,
+        cancellable,
+        store: Arc::new(FileRecommendationStore::new(store_path)),
+        config: config.llm.clone(),
+        selections: llm_selections(&config.widgets),
+    }
+}
+
+fn llm_selections(widgets: &[WidgetSettings]) -> HashMap<String, LlmSelection> {
+    widgets
         .iter()
         .map(|widget| {
             (
@@ -337,14 +485,7 @@ fn build_llm_services(config: &AppConfig) -> LlmServices {
                 },
             )
         })
-        .collect();
-    LlmServices {
-        runner,
-        cancellable,
-        store: Arc::new(FileRecommendationStore::new(store_path)),
-        config: config.llm.clone(),
-        selections,
-    }
+        .collect()
 }
 
 fn build_notifier(config: &AppConfig) -> CompositeNotifier {
@@ -358,37 +499,9 @@ fn build_notifier(config: &AppConfig) -> CompositeNotifier {
     CompositeNotifier::new(notifiers)
 }
 
-fn start_widgets(
-    widgets: &[WidgetSettings],
-    working_directory: &Path,
-    sender: &Sender<AppEvent>,
-) -> WidgetRuntime {
-    let mut runners = HashMap::new();
-    let mut refresh_triggers = Vec::new();
-    for settings in widgets {
-        let runner = Arc::new(PluginRunner::new(
-            settings.clone(),
-            working_directory.to_path_buf(),
-        ));
-        runners.insert(settings.id.as_str().to_string(), Arc::clone(&runner));
-        refresh_triggers.push(spawn_refresher(
-            settings.id.clone(),
-            runner,
-            Duration::from_secs(settings.interval_seconds),
-            settings
-                .interval_adjusted
-                .then_some(settings.interval_seconds),
-            sender.clone(),
-        ));
-    }
-    WidgetRuntime {
-        runners,
-        refresh_triggers,
-    }
-}
-
 fn spawn_refresher(
     id: WidgetId,
+    generation: u64,
     runner: Arc<PluginRunner>,
     interval: Duration,
     interval_notice: Option<u64>,
@@ -402,7 +515,7 @@ fn spawn_refresher(
             None => refreshed,
         };
         if sender
-            .send(AppEvent::WidgetUpdated(id.clone(), state))
+            .send(AppEvent::WidgetUpdated(id.clone(), generation, state))
             .is_err()
         {
             break;
@@ -417,9 +530,9 @@ fn spawn_refresher(
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     state: &mut AppState,
-    spans: &[u16],
+    spans: &mut Vec<u16>,
     clock: &dyn Clock,
-    services: &Services,
+    services: &mut Services,
     sender: &Sender<AppEvent>,
     receiver: &mpsc::Receiver<AppEvent>,
 ) -> Result<(), AppError> {
@@ -437,7 +550,7 @@ fn event_loop(
         if let Some(alert) = state.advance_pomodoro(elapsed) {
             services.notifier.notify(&alert);
         }
-        terminal.draw(|frame| render(frame, state, spans, clock.now()))?;
+        terminal.draw(|frame| render(frame, state, spans.as_slice(), clock.now()))?;
         if !event::poll(INPUT_POLL_INTERVAL)? {
             continue;
         }
@@ -449,9 +562,9 @@ fn event_loop(
         };
         match state.handle_key(input) {
             Some(Command::Quit) => return Ok(()),
-            Some(Command::RefreshAll) => trigger_refresh(&services.runtime),
-            Some(Command::ReloadConfig) => {}
-            Some(Command::Execute(action)) => spawn_action(action, &services.runtime, sender),
+            Some(Command::RefreshAll) => services.runtime.trigger_all(),
+            Some(Command::ReloadConfig) => reload_config(state, services, spans),
+            Some(Command::Execute(action)) => spawn_action(action, services, sender),
             Some(Command::RequestRecommendation) => {
                 request_recommendation(state, services, clock, sender)
             }
@@ -493,13 +606,17 @@ fn apply_event(
     now: NaiveDateTime,
 ) {
     match app_event {
-        AppEvent::WidgetUpdated(id, result) => {
-            announce_widget_alerts(state, services, tracker, &id, &result);
-            state.update_widget(&id, result, now)
+        AppEvent::WidgetUpdated(id, generation, result) => {
+            if services.generations.accepts(&id, generation) {
+                announce_widget_alerts(state, services, tracker, &id, &result);
+                state.update_widget(&id, result, now);
+            }
         }
-        AppEvent::ActionFinished(id, notice, result) => {
-            announce_widget_alerts(state, services, tracker, &id, &result);
-            state.update_widget(&id, result, now);
+        AppEvent::ActionFinished(id, generation, notice, result) => {
+            if services.generations.accepts(&id, generation) {
+                announce_widget_alerts(state, services, tracker, &id, &result);
+                state.update_widget(&id, result, now);
+            }
             state.show_notice(describe_notice(notice));
         }
         AppEvent::RecommendationFinished(result) => {
@@ -555,22 +672,70 @@ fn describe_notice(notice: ActionNotice) -> String {
     }
 }
 
-fn trigger_refresh(runtime: &WidgetRuntime) {
-    for trigger in &runtime.refresh_triggers {
-        let _ = trigger.send(());
-    }
+fn reload_config(state: &mut AppState, services: &mut Services, spans: &mut Vec<u16>) {
+    let prepared = match read_config_file(&config_file_path(&services.config_directory))
+        .and_then(|text| prepare_reload(&services.widgets, &text))
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            state.show_notice(error.to_string());
+            return;
+        }
+    };
+    let PreparedReload { config, plan } = prepared;
+    let TabLayout {
+        entries,
+        tabs,
+        spans: reloaded_spans,
+    } = rebuilt_layout(state, &config, &plan);
+    state.replace_tabs(entries, tabs);
+    *spans = reloaded_spans;
+    services.runtime.replace_settings(&config.widgets);
+    apply_plan(&plan, &mut services.runtime, &mut services.generations);
+    let notice = startup_notice(&config.warnings).unwrap_or_else(|| RELOAD_DONE_NOTICE.to_string());
+    adopt_widgets(services, config.widgets);
+    state.show_notice(notice);
 }
 
-fn spawn_action(action: ConfirmedAction, runtime: &WidgetRuntime, sender: &Sender<AppEvent>) {
-    let Some(runner) = runtime.runners.get(action.widget().as_str()) else {
+fn rebuilt_layout(state: &AppState, config: &AppConfig, plan: &ReloadPlan) -> TabLayout {
+    let ia_record = state
+        .entries()
+        .iter()
+        .find(|entry| entry.id.as_str() == IA_WIDGET_ID)
+        .map(|entry| entry.record.clone());
+    let mut layout = build_tab_views(
+        &widget_placements(config),
+        &tab_placements(config),
+        ia_record,
+    );
+    carry_over_records(
+        &mut layout.entries,
+        state.entries(),
+        &plan.kept_widget_ids(),
+    );
+    layout
+}
+
+fn adopt_widgets(services: &mut Services, widgets: Vec<WidgetSettings>) {
+    if let Some(llm) = services.llm.as_mut() {
+        llm.selections = llm_selections(&widgets);
+    }
+    services.widgets = widgets;
+}
+
+fn spawn_action(action: ConfirmedAction, services: &Services, sender: &Sender<AppEvent>) {
+    let widget = action.widget().clone();
+    let (Some(runner), Some(generation)) = (
+        services.runtime.runner(&widget),
+        services.generations.current(&widget),
+    ) else {
         return;
     };
     let runner = Arc::clone(runner);
     let sender = sender.clone();
     thread::spawn(move || {
-        let widget = action.widget().clone();
         let (notice, result) = execute_confirmed(runner.as_ref(), runner.as_ref(), action);
-        let _ = sender.send(AppEvent::ActionFinished(widget, notice, result));
+        let _ = sender.send(AppEvent::ActionFinished(widget, generation, notice, result));
     });
 }
 

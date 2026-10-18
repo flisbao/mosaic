@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::application::reload_plan::{plan_reload, ReloadPlan, WidgetIdentity};
 use crate::domain::pomodoro::PomodoroSettings;
 use crate::domain::widget::WidgetId;
 
@@ -195,8 +196,8 @@ struct RawLlm {
 }
 
 pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
-    let raw: RawConfig =
-        toml::from_str(text).map_err(|error| ConfigError::Parse(error.to_string()))?;
+    let raw: RawConfig = toml::from_str(text)
+        .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error)))?;
     let mut seen = HashSet::new();
     let mut widgets = Vec::new();
     let mut tab_assignments = Vec::new();
@@ -449,6 +450,70 @@ pub fn config_directory() -> Result<PathBuf, ConfigError> {
 
 pub fn config_file_path(directory: &Path) -> PathBuf {
     directory.join(CONFIG_FILE_NAME)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedReload {
+    pub config: AppConfig,
+    pub plan: ReloadPlan,
+}
+
+pub fn read_config_file(path: &Path) -> Result<String, ConfigError> {
+    std::fs::read_to_string(path).map_err(|error| ConfigError::Io(error.to_string()))
+}
+
+pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
+    parse_config(&read_config_file(&config_file_path(directory))?)
+}
+
+pub fn prepare_reload(
+    current: &[WidgetSettings],
+    text: &str,
+) -> Result<PreparedReload, ConfigError> {
+    let config = parse_config(text)?;
+    let current_identities: Vec<WidgetIdentity> =
+        current.iter().map(WidgetIdentity::from).collect();
+    let next_identities: Vec<WidgetIdentity> =
+        config.widgets.iter().map(WidgetIdentity::from).collect();
+    Ok(PreparedReload {
+        plan: plan_reload(&current_identities, &next_identities),
+        config,
+    })
+}
+
+impl From<&WidgetSettings> for WidgetIdentity {
+    fn from(settings: &WidgetSettings) -> Self {
+        Self {
+            id: settings.id.clone(),
+            command: settings.command.clone(),
+            args: settings.args.clone(),
+            env: settings.env.clone(),
+            interval_seconds: settings.interval_seconds,
+            interval_adjusted: settings.interval_adjusted,
+            timeout_seconds: settings.timeout_seconds,
+        }
+    }
+}
+
+fn describe_parse_error(text: &str, error: &toml::de::Error) -> String {
+    match error.span() {
+        Some(span) => {
+            let (line, column) = line_and_column(text, span.start);
+            format!("linha {line}, coluna {column}: {}", error.message())
+        }
+        None => error.message().to_string(),
+    }
+}
+
+fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
+    let before = text.get(..offset).unwrap_or(text);
+    let line = before.matches('\n').count() + 1;
+    let column = before
+        .rsplit('\n')
+        .next()
+        .map_or(0, |text| text.chars().count())
+        + 1;
+    (line, column)
 }
 
 #[cfg(test)]
@@ -888,6 +953,137 @@ mod tests {
         let config =
             parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\nmax_items = 5\n").unwrap();
         assert_eq!(config.widgets[0].max_items, Some(5));
+    }
+
+    const RELOAD_BASE: &str = r#"
+[[widgets]]
+id = "jira"
+command = "python3"
+args = ["jira.py", "my-tasks"]
+interval_seconds = 60
+
+[[widgets]]
+id = "clima"
+command = "sh"
+"#;
+
+    fn reload_base_widgets() -> Vec<WidgetSettings> {
+        parse_config(RELOAD_BASE).unwrap().widgets
+    }
+
+    #[test]
+    fn invalid_toml_reports_line_and_column_in_portuguese() {
+        let error = parse_config("[[widgets]]\nid = \"jira\"\ncommand = \n").unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("linha 3"), "{message}");
+        assert!(message.contains("coluna "), "{message}");
+    }
+
+    #[test]
+    fn reload_with_invalid_toml_reports_line_and_keeps_current() {
+        let current = reload_base_widgets();
+
+        let result = prepare_reload(&current, "[[widgets]]\nid = \"jira\"\ncommand = \n");
+
+        assert!(
+            matches!(&result, Err(ConfigError::Parse(message)) if message.contains("linha 3")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn reload_with_duplicate_ids_is_rejected_before_planning() {
+        let current = reload_base_widgets();
+        let duplicated = format!("{RELOAD_BASE}\n[[widgets]]\nid = \"jira\"\ncommand = \"sh\"\n");
+
+        let result = prepare_reload(&current, &duplicated);
+
+        assert_eq!(
+            result,
+            Err(ConfigError::DuplicateWidgetId("jira".to_string()))
+        );
+    }
+
+    #[test]
+    fn changed_only_max_items_tab_span_or_order_keeps() {
+        let current = reload_base_widgets();
+        let variants = [
+            RELOAD_BASE.replace(
+                "interval_seconds = 60",
+                "interval_seconds = 60\nmax_items = 3",
+            ),
+            format!(
+                "[[tabs]]\nname = \"Trabalho\"\n{}",
+                RELOAD_BASE.replace(
+                    "interval_seconds = 60",
+                    "interval_seconds = 60\ntab = \"Trabalho\"\nspan = 2",
+                )
+            ),
+            RELOAD_BASE.replace(
+                "[[widgets]]\nid = \"jira\"",
+                "[[tabs]]\nname = \"Trabalho\"\n\n[[widgets]]\nid = \"jira\"",
+            ),
+            RELOAD_BASE.replace(
+                "id = \"clima\"\ncommand = \"sh\"",
+                "id = \"clima\"\ncommand = \"sh\"\nllm_max_items = 5\nllm_sections = [\"Tarefas\"]",
+            ),
+            swap_widget_order(RELOAD_BASE),
+        ];
+        for variant in variants {
+            let prepared = prepare_reload(&current, &variant).unwrap();
+
+            assert_eq!(prepared.plan.changes.len(), 2, "{variant}");
+            assert!(
+                prepared
+                    .plan
+                    .changes
+                    .iter()
+                    .all(|(_, change)| *change
+                        == crate::application::reload_plan::WidgetChange::Keep),
+                "{variant}"
+            );
+        }
+    }
+
+    fn swap_widget_order(text: &str) -> String {
+        let (head, tail) = text.split_once("[[widgets]]\nid = \"jira\"").unwrap();
+        let (jira_body, clima_block) = tail.split_once("[[widgets]]").unwrap();
+        format!("{head}[[widgets]]{clima_block}\n[[widgets]]\nid = \"jira\"{jira_body}")
+    }
+
+    #[test]
+    fn changed_command_restarts_only_that_widget() {
+        let current = reload_base_widgets();
+        let changed = RELOAD_BASE.replace("command = \"sh\"", "command = \"bash\"");
+
+        let prepared = prepare_reload(&current, &changed).unwrap();
+
+        let changes: Vec<(&str, crate::application::reload_plan::WidgetChange)> = prepared
+            .plan
+            .changes
+            .iter()
+            .map(|(id, change)| (id.as_str(), *change))
+            .collect();
+        assert_eq!(
+            changes,
+            vec![
+                ("jira", crate::application::reload_plan::WidgetChange::Keep),
+                (
+                    "clima",
+                    crate::application::reload_plan::WidgetChange::Restart
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_config_file_is_io_error() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let result = load_config(directory.path());
+
+        assert!(matches!(result, Err(ConfigError::Io(_))), "{result:?}");
     }
 
     #[test]

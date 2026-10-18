@@ -134,3 +134,74 @@ fn check_never_opens_the_terminal() {
     assert_eq!(output.status.code(), Some(0));
     assert!(!stdout(&output).contains('\u{1b}'));
 }
+
+fn run_mosaic(working_directory: &Path, arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(arguments)
+        .current_dir(working_directory)
+        .env("HOME", working_directory)
+        .env("XDG_CONFIG_HOME", working_directory)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+#[test]
+fn check_config_flag_exits_zero_on_valid_and_one_on_invalid() {
+    let directory = tempfile::tempdir().unwrap();
+    let valid = directory.path().join("valid.toml");
+    fs::write(
+        &valid,
+        "[[widgets]]\nid = \"jira\"\ncommand = \"python3\"\ntab = true\n",
+    )
+    .unwrap();
+    let invalid = directory.path().join("invalid.toml");
+    fs::write(&invalid, "[[widgets]]\nid = \"jira\"\ncommand = \n").unwrap();
+
+    let valid_output = run_mosaic(
+        directory.path(),
+        &["check", "--config", valid.to_str().unwrap()],
+    );
+    let invalid_output = run_mosaic(
+        directory.path(),
+        &["check", "--config", invalid.to_str().unwrap()],
+    );
+
+    assert_eq!(
+        valid_output.status.code(),
+        Some(0),
+        "{}",
+        stderr(&valid_output)
+    );
+    assert!(
+        stdout(&valid_output).contains("aviso"),
+        "{}",
+        stdout(&valid_output)
+    );
+    assert_eq!(invalid_output.status.code(), Some(EXIT_INVALID));
+    assert!(
+        stderr(&invalid_output).contains("linha 3"),
+        "{}",
+        stderr(&invalid_output)
+    );
+}
+
+#[test]
+fn check_config_without_path_reads_the_default_config_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_directory = directory.path().join("mosaic");
+    fs::create_dir_all(&config_directory).unwrap();
+    fs::write(
+        config_directory.join("config.toml"),
+        "[[widgets]]\nid = \"jira\"\ncommand = \"python3\"\n",
+    )
+    .unwrap();
+
+    let output = run_mosaic(directory.path(), &["check", "--config"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+}

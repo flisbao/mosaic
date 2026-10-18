@@ -904,6 +904,15 @@ mod tests {
     }
 
     #[test]
+    fn replace_tabs_after_rename_keeps_focus_on_the_same_widget() {
+        let mut app = AppState::new(plain_entries(2), vec![tab("Antiga", &[0, 1])]);
+        press(&mut app, &[KeyInput::Down]);
+        app.replace_tabs(plain_entries(2), vec![tab("Nova", &[0, 1])]);
+        assert_eq!(app.tabs()[0].name, "Nova");
+        assert_eq!(app.focused_entry(), Some(1));
+    }
+
+    #[test]
     fn switching_tabs_resets_focus_and_selected_item() {
         let mut app = AppState::new(
             vec![

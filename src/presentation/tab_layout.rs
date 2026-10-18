@@ -68,6 +68,18 @@ pub fn startup_notice(warnings: &[String]) -> Option<String> {
     Some(warnings.join(WARNING_SEPARATOR))
 }
 
+pub fn carry_over_records(
+    entries: &mut [WidgetEntry],
+    previous: &[WidgetEntry],
+    kept: &[WidgetId],
+) {
+    for entry in entries.iter_mut().filter(|entry| kept.contains(&entry.id)) {
+        if let Some(earlier) = previous.iter().find(|earlier| earlier.id == entry.id) {
+            entry.record = earlier.record.clone();
+        }
+    }
+}
+
 fn loading_entry(placement: &WidgetPlacement) -> WidgetEntry {
     WidgetEntry {
         id: placement.id.clone(),
@@ -88,6 +100,8 @@ fn entry_indexes_of(entries: &[WidgetEntry], widget_ids: &[WidgetId]) -> Vec<usi
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDate;
+
     use super::*;
 
     fn widget(id: &str, span: u16) -> WidgetPlacement {
@@ -112,6 +126,49 @@ mod tests {
 
     fn names(tabs: &[TabView]) -> Vec<&str> {
         tabs.iter().map(|tab| tab.name.as_str()).collect()
+    }
+
+    fn widget_with_data(id: &str, title: &str) -> WidgetEntry {
+        let mut record = WidgetRecord::loading();
+        record.apply(
+            Ok::<_, String>(crate::application::refresh::fakes::snapshot_titled(title)),
+            NaiveDate::from_ymd_opt(2026, 10, 18)
+                .and_then(|date| date.and_hms_opt(12, 0, 0))
+                .unwrap(),
+        );
+        WidgetEntry {
+            id: WidgetId::new(id),
+            record,
+            interval: Duration::from_secs(30),
+            max_items: None,
+        }
+    }
+
+    #[test]
+    fn kept_widget_keeps_its_last_record_and_restarted_widget_loads_again() {
+        let previous = vec![
+            widget_with_data("jira", "Jira"),
+            widget_with_data("clima", "Clima"),
+        ];
+        let mut fresh = build_tab_views(
+            &[widget("clima", 1), widget("jira", 1)],
+            &[tab("A", &["clima", "jira"])],
+            None,
+        )
+        .entries;
+
+        carry_over_records(&mut fresh, &previous, &[WidgetId::new("jira")]);
+
+        let jira = fresh
+            .iter()
+            .find(|entry| entry.id.as_str() == "jira")
+            .unwrap();
+        let clima = fresh
+            .iter()
+            .find(|entry| entry.id.as_str() == "clima")
+            .unwrap();
+        assert_eq!(jira.record, previous[0].record);
+        assert!(clima.record.snapshot().is_none());
     }
 
     #[test]
