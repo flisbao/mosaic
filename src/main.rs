@@ -32,7 +32,7 @@ use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, parse_config, AppConfig, ConfigError, Harness, LlmConfig,
-    TabSettings, WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+    WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
     DEFAULT_LLM_MAX_ITEMS, DEFAULT_SPAN,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
@@ -45,9 +45,12 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
-use mosaic::presentation::app_state::{AppState, Command, TabView, WidgetEntry};
+use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::from_crossterm;
 use mosaic::presentation::render::render;
+use mosaic::presentation::tab_layout::{
+    build_tab_views, startup_notice, TabPlacement, WidgetPlacement,
+};
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
 
@@ -55,12 +58,10 @@ const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
-const IA_TAB_NAME: &str = "IA";
 const APP_DIRECTORY_NAME: &str = "mosaic";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const FALLBACK_STORE_FILE_NAME: &str = "mosaic-recommendation.json";
 const IA_WIDGET_SPAN: u16 = 1;
-const IA_INTERVAL_SECONDS: u64 = 3600;
 const CHECK_SUBCOMMAND: &str = "check";
 const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
 const CHECK_ENV_FLAG: &str = "--env";
@@ -197,35 +198,22 @@ fn run() -> Result<(), AppError> {
     let services = build_services(&config, &directory, &sender);
     let mut spans: Vec<u16> = config.widgets.iter().map(|widget| widget.span).collect();
     let clock = SystemClock;
-    let mut entries: Vec<WidgetEntry> = config
-        .widgets
-        .iter()
-        .map(|widget| WidgetEntry {
-            id: widget.id.clone(),
-            record: WidgetRecord::loading(),
-            interval: Duration::from_secs(widget.interval_seconds),
-            max_items: widget.max_items,
-        })
-        .collect();
-    let mut ia_entry_index = None;
-    if let Some(llm) = &services.llm {
+    let ia_record = services
+        .llm
+        .as_ref()
+        .map(|llm| stored_ia_record(llm.store.as_ref(), clock.now()));
+    if services.llm.is_some() {
         spans.push(IA_WIDGET_SPAN);
-        entries.push(WidgetEntry {
-            id: WidgetId::new(IA_WIDGET_ID),
-            record: stored_ia_record(llm.store.as_ref(), clock.now()),
-            interval: Duration::from_secs(IA_INTERVAL_SECONDS),
-            max_items: None,
-        });
-        ia_entry_index = Some(entries.len() - 1);
     }
-    let mut tabs = build_tab_views(&config.tabs, &entries);
-    if let Some(index) = ia_entry_index {
-        tabs.push(TabView {
-            name: IA_TAB_NAME.to_string(),
-            entry_indexes: vec![index],
-        });
-    }
+    let (entries, tabs) = build_tab_views(
+        &widget_placements(&config),
+        &tab_placements(&config),
+        ia_record,
+    );
     let mut state = AppState::new(entries, tabs);
+    if let Some(notice) = startup_notice(&config.warnings) {
+        state.show_notice(notice);
+    }
     if config.pomodoro.enabled {
         state = state.with_pomodoro(PomodoroTimer::new(config.pomodoro.settings()));
     }
@@ -244,16 +232,25 @@ fn run() -> Result<(), AppError> {
     result
 }
 
-fn build_tab_views(tabs: &[TabSettings], entries: &[WidgetEntry]) -> Vec<TabView> {
-    tabs.iter()
-        .map(|tab| TabView {
+fn widget_placements(config: &AppConfig) -> Vec<WidgetPlacement> {
+    config
+        .widgets
+        .iter()
+        .map(|widget| WidgetPlacement {
+            id: widget.id.clone(),
+            interval: Duration::from_secs(widget.interval_seconds),
+            max_items: widget.max_items,
+        })
+        .collect()
+}
+
+fn tab_placements(config: &AppConfig) -> Vec<TabPlacement> {
+    config
+        .tabs
+        .iter()
+        .map(|tab| TabPlacement {
             name: tab.name.clone(),
-            entry_indexes: entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| tab.widget_ids.contains(&entry.id))
-                .map(|(index, _)| index)
-                .collect(),
+            widget_ids: tab.widget_ids.clone(),
         })
         .collect()
 }
