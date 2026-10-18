@@ -369,9 +369,39 @@ mod tests {
         let interval = TimeDelta::seconds(30);
         let mut record = WidgetRecord::loading();
         record.apply(succeed("Kanban"), now);
-        assert!(!record.is_stale(seconds_after(now, 150), interval));
-        assert!(record.is_stale(seconds_after(now, 151), interval));
+        let limit = seconds_after(now, 150);
+        assert!(!record.is_stale(limit, interval));
+        assert!(record.is_stale(limit + TimeDelta::milliseconds(1), interval));
         assert!(!record.is_failing());
+    }
+
+    #[test]
+    fn age_keeps_counting_from_last_success_after_failure() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.apply(succeed("Kanban"), now);
+        record.apply(fail("fora do ar"), seconds_after(now, 1));
+        assert_eq!(
+            record.age(seconds_after(now, 5)),
+            Some(TimeDelta::seconds(5))
+        );
+    }
+
+    #[test]
+    fn failed_apply_clears_refreshing_flag() {
+        let mut record = WidgetRecord::loading();
+        record.begin_refresh();
+        record.apply(fail("fora do ar"), base_time());
+        assert!(!record.is_refreshing());
+    }
+
+    #[test]
+    fn zero_interval_makes_any_positive_age_stale() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        record.apply(succeed("Kanban"), now);
+        assert!(!record.is_stale(now, TimeDelta::zero()));
+        assert!(record.is_stale(seconds_after(now, 1), TimeDelta::zero()));
     }
 
     #[test]

@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-
-use chrono::NaiveDateTime;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -9,6 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chrono::NaiveDateTime;
 use crossterm::event::{self, Event};
 use mosaic::application::alert_tracker::AlertTracker;
 use mosaic::application::check_report::build_check_report;

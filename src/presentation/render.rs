@@ -158,18 +158,25 @@ fn box_lines(entry: &WidgetEntry, width: usize) -> Vec<Line<'static>> {
         return vec![Line::from(LOADING_TEXT)];
     }
     match (record.snapshot(), record.last_error()) {
-        (Some(snapshot), _) => render_blocks(&snapshot.summary.display_blocks(), width),
+        (Some(snapshot), Some(message)) => {
+            let mut lines = vec![failure_line(&format!("⚠ falha: {message}"), width)];
+            lines.extend(render_blocks(&snapshot.summary.display_blocks(), width));
+            lines
+        }
+        (Some(snapshot), None) => render_blocks(&snapshot.summary.display_blocks(), width),
         (None, Some(message)) => message
             .lines()
-            .map(|line| {
-                Line::styled(
-                    truncate_to_width(line, width),
-                    Style::default().fg(Color::Red),
-                )
-            })
+            .map(|line| failure_line(line, width))
             .collect(),
         (None, None) => vec![Line::from(LOADING_TEXT)],
     }
+}
+
+fn failure_line(text: &str, width: usize) -> Line<'static> {
+    Line::styled(
+        truncate_to_width(text, width),
+        Style::default().fg(Color::Red),
+    )
 }
 
 fn render_detail(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -517,6 +524,32 @@ mod tests {
         for title in ["Kanban", "Agenda", "Time"] {
             assert!(text.contains(title), "{title}");
         }
+    }
+
+    #[test]
+    fn failure_after_success_shows_error_line_above_old_snapshot() {
+        let mut record = ready(snapshot("Kanban", vec![plain_line("inbox 3")]));
+        record.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let state = AppState::new(vec![entry("kanban", record, false)]);
+        let rows = draw(&state, 100, 30);
+        let failure = rows
+            .iter()
+            .position(|row| row.contains("⚠ falha: fora do ar"));
+        let old_data = rows.iter().position(|row| row.contains("inbox 3"));
+        assert!(failure.is_some(), "{rows:?}");
+        assert!(old_data.is_some(), "{rows:?}");
+        assert!(failure < old_data, "{rows:?}");
+    }
+
+    #[test]
+    fn ia_failure_after_idle_snapshot_is_shown() {
+        let mut record = ready(snapshot("IA", vec![plain_line("Sem recomendação ainda")]));
+        record.apply(
+            Err::<WidgetSnapshot, _>("modelo indisponível".to_string()),
+            now(),
+        );
+        let state = AppState::new(vec![entry("ia", record, true)]);
+        assert!(screen(&state, 100, 30).contains("falha: modelo indisponível"));
     }
 
     #[test]

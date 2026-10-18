@@ -107,6 +107,9 @@ pub fn build_plan(
 }
 
 fn selected_lines(context: &WidgetContext) -> Vec<String> {
+    if context.state.is_failing() {
+        return Vec::new();
+    }
     let Some(snapshot) = context.state.snapshot() else {
         return Vec::new();
     };
@@ -330,6 +333,14 @@ mod tests {
     #[test]
     fn selected_sections_without_items_is_an_error() {
         let widget = state(vec![("inbox", vec![])]);
+        let result = plan_for("kanban", &selection(&["inbox"], 20), &widget);
+        assert_eq!(result.unwrap_err(), RecommendationError::NoItems);
+    }
+
+    #[test]
+    fn widget_failing_after_success_is_skipped() {
+        let mut widget = state(vec![("inbox", vec![item(Some("a"), "Tarefa A", &[])])]);
+        widget.apply::<String>(Err("fora do ar".to_string()), now());
         let result = plan_for("kanban", &selection(&["inbox"], 20), &widget);
         assert_eq!(result.unwrap_err(), RecommendationError::NoItems);
     }

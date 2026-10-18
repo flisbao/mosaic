@@ -173,7 +173,11 @@ impl AppState {
         let Some(index) = self.active_entry_index() else {
             return Vec::new();
         };
-        let Some(snapshot) = self.entries[index].record.snapshot() else {
+        let record = &self.entries[index].record;
+        if record.is_failing() {
+            return Vec::new();
+        }
+        let Some(snapshot) = record.snapshot() else {
             return Vec::new();
         };
         snapshot
@@ -188,7 +192,11 @@ impl AppState {
         let Some(index) = self.active_entry_index() else {
             return Vec::new();
         };
-        let Some(snapshot) = self.entries[index].record.snapshot() else {
+        let record = &self.entries[index].record;
+        if record.is_failing() {
+            return Vec::new();
+        }
+        let Some(snapshot) = record.snapshot() else {
             return Vec::new();
         };
         let item_selected = self.selected_detail_item_id().is_some();
@@ -628,6 +636,30 @@ mod tests {
         press(&mut app, &[KeyInput::Tab, KeyInput::Tab]);
         assert_eq!(app.active_tab(), 2);
         assert!(app.notice().is_some());
+    }
+
+    #[test]
+    fn failing_widget_exposes_no_detail_items_or_actions() {
+        let mut app = app();
+        press(&mut app, &[KeyInput::Tab]);
+        assert!(!app.detail_items().is_empty());
+        assert!(!app.available_actions().is_empty());
+        app.update_widget(
+            &WidgetId::new("kanban"),
+            Err(SourceError::Failed("fora do ar".to_string())),
+            now(),
+        );
+        assert!(app.detail_items().is_empty());
+        assert!(app.available_actions().is_empty());
+    }
+
+    #[test]
+    fn begin_widget_refresh_closes_the_action_menu() {
+        let mut app = app();
+        press(&mut app, &[KeyInput::Tab, KeyInput::Down, character('a')]);
+        assert!(matches!(app.mode(), Mode::ChoosingAction { .. }));
+        app.begin_widget_refresh(&WidgetId::new("kanban"));
+        assert_eq!(app.mode(), &Mode::Browsing);
     }
 
     #[test]
