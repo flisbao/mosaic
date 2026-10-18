@@ -1,11 +1,11 @@
 use serde_json::{Map, Value};
 
-use crate::domain::card::{
-    clean_text, clean_text_limited, Alert, AlertLevel, Align, Block, CardLine, Cell, Column, Row,
-    StatItem, Tag, Tone,
-};
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetSnapshot,
+};
+use crate::domain::widget_content::{
+    clean_text, clean_text_limited, Alert, AlertLevel, Align, Block, Cell, Column, Row, StatItem,
+    Tag, Tone, WidgetLine,
 };
 use crate::infrastructure::plugin_protocol::ProtocolError;
 
@@ -15,7 +15,7 @@ pub const SUPPORTED_PROTOCOL_VERSION: u64 = 1;
 pub const MAXIMUM_TEXT_CHARACTERS: usize = 500;
 pub const MAXIMUM_ALERT_ID_CHARACTERS: usize = 100;
 pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
-pub const MAXIMUM_BLOCKS_PER_CARD: usize = 20;
+pub const MAXIMUM_BLOCKS_PER_WIDGET: usize = 20;
 pub const MAXIMUM_LINES_PER_BLOCK: usize = 200;
 pub const MAXIMUM_TAGS_PER_ROW: usize = 3;
 pub const MAXIMUM_LEGACY_LINES: usize = 200;
@@ -306,7 +306,7 @@ impl Reader {
         let Some(entries) = self.list(object, "blocks", path) else {
             return vec![];
         };
-        let entries = self.capped(entries, MAXIMUM_BLOCKS_PER_CARD, &blocks_path);
+        let entries = self.capped(entries, MAXIMUM_BLOCKS_PER_WIDGET, &blocks_path);
         let mut blocks = vec![];
         for (index, entry) in entries.iter().enumerate() {
             if let Some(block) = self.block(entry, &indexed_path(&blocks_path, index)) {
@@ -355,7 +355,7 @@ impl Reader {
             };
             let tone = self.tone(line, &line_path);
             let flag = self.flag(line, &line_path);
-            lines.push(CardLine { text, tone, flag });
+            lines.push(WidgetLine { text, tone, flag });
         }
         Block::Lines(lines)
     }
@@ -776,10 +776,10 @@ fn parse_flag(name: &str) -> Option<Flag> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::{
-        AlertLevel, Align, Block, CardLine, Cell, Column, Row, StatItem, Tag, Tone,
-    };
     use crate::domain::widget::Flag;
+    use crate::domain::widget_content::{
+        AlertLevel, Align, Block, Cell, Column, Row, StatItem, Tag, Tone, WidgetLine,
+    };
 
     fn report(json: &str) -> ParsedSnapshot {
         parse_snapshot_report(json).unwrap()
@@ -971,12 +971,12 @@ mod tests {
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
         let expected = Block::Lines(vec![
-            CardLine {
+            WidgetLine {
                 text: "a".to_string(),
                 tone: Tone::Ok,
                 flag: Some(Flag::Updated),
             },
-            CardLine {
+            WidgetLine {
                 text: "b".to_string(),
                 tone: Tone::Normal,
                 flag: None,

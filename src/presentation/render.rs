@@ -11,7 +11,7 @@ use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
 use crate::domain::widget::WidgetState;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
-use crate::presentation::card_view::{flagged, render_blocks, truncate_to_width};
+use crate::presentation::widget_view::{flagged, render_blocks, truncate_to_width};
 
 const HOME_TAB_NAME: &str = "Home";
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
@@ -765,48 +765,48 @@ mod tests {
         }
     }
 
-    use crate::domain::card;
+    use crate::domain::widget_content;
 
-    fn card_line(text: &str) -> card::CardLine {
-        card::CardLine {
+    fn widget_line(text: &str) -> widget_content::WidgetLine {
+        widget_content::WidgetLine {
             text: text.to_string(),
-            tone: card::Tone::Normal,
+            tone: widget_content::Tone::Normal,
             flag: None,
         }
     }
 
-    fn card_cell(text: &str) -> card::Cell {
-        card::Cell {
+    fn widget_cell(text: &str) -> widget_content::Cell {
+        widget_content::Cell {
             text: text.to_string(),
-            tone: card::Tone::Normal,
+            tone: widget_content::Tone::Normal,
             flag: None,
         }
     }
 
-    fn entry_with_blocks(blocks: Vec<card::Block>) -> WidgetEntry {
-        let mut card = snapshot("Agenda", vec![]);
-        card.summary.blocks = blocks;
-        entry("agenda", WidgetState::Ready(card), true)
+    fn entry_with_blocks(blocks: Vec<widget_content::Block>) -> WidgetEntry {
+        let mut widget_snapshot = snapshot("Agenda", vec![]);
+        widget_snapshot.summary.blocks = blocks;
+        entry("agenda", WidgetState::Ready(widget_snapshot), true)
     }
 
-    fn rows_and_stat_blocks() -> Vec<card::Block> {
+    fn rows_and_stat_blocks() -> Vec<widget_content::Block> {
         vec![
-            card::Block::Rows(vec![card::Row {
+            widget_content::Block::Rows(vec![widget_content::Row {
                 time: Some("09:00".to_string()),
                 text: "Daily".to_string(),
-                tags: vec![card::Tag {
+                tags: vec![widget_content::Tag {
                     text: "agora".to_string(),
-                    tone: card::Tone::Warn,
+                    tone: widget_content::Tone::Warn,
                 }],
-                tone: card::Tone::Normal,
+                tone: widget_content::Tone::Normal,
                 marker: Some('▶'),
                 flag: None,
             }]),
-            card::Block::Stat {
-                items: vec![card::StatItem {
+            widget_content::Block::Stat {
+                items: vec![widget_content::StatItem {
                     value: "3".to_string(),
                     label: "reuniões".to_string(),
-                    tone: card::Tone::Ok,
+                    tone: widget_content::Tone::Ok,
                 }],
                 hint: Some("hoje".to_string()),
             },
@@ -825,12 +825,12 @@ mod tests {
 
     #[test]
     fn home_box_renders_a_table() {
-        let table = card::Block::Table {
-            columns: vec![card::Column {
+        let table = widget_content::Block::Table {
+            columns: vec![widget_content::Column {
                 title: "Nome".to_string(),
-                align: card::Align::Left,
+                align: widget_content::Align::Left,
             }],
-            rows: vec![vec![card_cell("ana")]],
+            rows: vec![vec![widget_cell("ana")]],
         };
         let state = AppState::new(vec![entry_with_blocks(vec![table])]);
         let text = screen(&state, 100, 30);
@@ -866,7 +866,9 @@ mod tests {
             panic!("esperava Ready");
         };
         let sections = snapshot.detail.as_mut().unwrap();
-        sections[0].blocks = vec![card::Block::Lines(vec![card_line("RESUMO DA SEÇÃO")])];
+        sections[0].blocks = vec![widget_content::Block::Lines(vec![widget_line(
+            "RESUMO DA SEÇÃO",
+        )])];
         let mut state = AppState::new(vec![entry]);
         press(&mut state, &[KeyInput::Tab]);
         let rows = draw(&state, 100, 30);
@@ -881,8 +883,10 @@ mod tests {
         let WidgetState::Ready(snapshot) = &mut entry.state else {
             panic!("esperava Ready");
         };
-        snapshot.detail.as_mut().unwrap()[0].blocks =
-            vec![card::Block::Lines(vec![card_line("a"), card_line("b")])];
+        snapshot.detail.as_mut().unwrap()[0].blocks = vec![widget_content::Block::Lines(vec![
+            widget_line("a"),
+            widget_line("b"),
+        ])];
         let mut state = AppState::new(vec![entry]);
         press(&mut state, &[KeyInput::Tab, KeyInput::Down]);
         assert_eq!(state.selected_item(), 1);
@@ -894,17 +898,17 @@ mod tests {
     fn small_terminal_with_blocks_does_not_panic() {
         let wide = "日本語".repeat(40);
         let columns = (0..10)
-            .map(|_| card::Column {
+            .map(|_| widget_content::Column {
                 title: wide.clone(),
-                align: card::Align::Right,
+                align: widget_content::Align::Right,
             })
             .collect();
         let rows = (0..200)
-            .map(|_| (0..10).map(|_| card_cell(&wide)).collect())
+            .map(|_| (0..10).map(|_| widget_cell(&wide)).collect())
             .collect();
         let mut blocks = rows_and_stat_blocks();
-        blocks.push(card::Block::Table { columns, rows });
-        blocks.push(card::Block::Lines(vec![card_line(&wide); 200]));
+        blocks.push(widget_content::Block::Table { columns, rows });
+        blocks.push(widget_content::Block::Lines(vec![widget_line(&wide); 200]));
         let mut state = AppState::new(vec![entry_with_blocks(blocks)]);
         for size in 0..=14 {
             draw(&state, size, size);

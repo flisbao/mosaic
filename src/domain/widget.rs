@@ -1,4 +1,4 @@
-use crate::domain::card::{Alert, Block, CardLine, Tone};
+use crate::domain::widget_content::{Alert, Block, Tone, WidgetLine};
 
 pub const FLAG_NAMES: [&str; 2] = ["updated", "warning"];
 
@@ -48,7 +48,7 @@ impl Summary {
         if self.blocks.is_empty() {
             self.lines.insert(0, SummaryLine { text, flag });
         } else {
-            let line = CardLine { text, tone, flag };
+            let line = WidgetLine { text, tone, flag };
             self.blocks.insert(0, Block::Lines(vec![line]));
         }
     }
@@ -63,7 +63,7 @@ impl Summary {
         let lines = self
             .lines
             .iter()
-            .map(|line| CardLine {
+            .map(|line| WidgetLine {
                 text: line.text.clone(),
                 tone: Tone::Normal,
                 flag: line.flag,
@@ -127,10 +127,10 @@ pub enum WidgetState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::{Block, CardLine, Tone};
+    use crate::domain::widget_content::{Block, Tone, WidgetLine};
 
-    fn card_line(text: &str) -> CardLine {
-        CardLine {
+    fn widget_line(text: &str) -> WidgetLine {
+        WidgetLine {
             text: text.to_string(),
             tone: Tone::Ok,
             flag: None,
@@ -155,9 +155,9 @@ mod tests {
 
     #[test]
     fn notice_becomes_the_first_block_when_blocks_exist() {
-        let mut target = summary(vec![], vec![Block::Lines(vec![card_line("x")])]);
+        let mut target = summary(vec![], vec![Block::Lines(vec![widget_line("x")])]);
         target.put_notice_first("aviso".to_string(), Tone::Warn, Some(Flag::Warning));
-        let expected = Block::Lines(vec![CardLine {
+        let expected = Block::Lines(vec![WidgetLine {
             text: "aviso".to_string(),
             tone: Tone::Warn,
             flag: Some(Flag::Warning),
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn display_blocks_prefers_blocks_over_lines() {
-        let blocks = vec![Block::Lines(vec![card_line("novo")])];
+        let blocks = vec![Block::Lines(vec![widget_line("novo")])];
         let legacy = vec![SummaryLine {
             text: "velho".to_string(),
             flag: None,
@@ -182,7 +182,7 @@ mod tests {
             text: "velho".to_string(),
             flag: Some(Flag::Warning),
         }];
-        let expected = Block::Lines(vec![CardLine {
+        let expected = Block::Lines(vec![WidgetLine {
             text: "velho".to_string(),
             tone: Tone::Normal,
             flag: Some(Flag::Warning),

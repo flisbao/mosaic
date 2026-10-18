@@ -1,8 +1,8 @@
 use thiserror::Error;
 
-use crate::domain::card::Tone;
 use crate::domain::snapshot_report::Problem;
 use crate::domain::widget::{Flag, WidgetSnapshot};
+use crate::domain::widget_content::Tone;
 use crate::infrastructure::protocol_report::{parse_snapshot_report, Severity};
 
 #[derive(Debug, Error)]

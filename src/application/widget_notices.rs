@@ -1,5 +1,5 @@
-use crate::domain::card::Tone;
 use crate::domain::widget::WidgetState;
+use crate::domain::widget_content::Tone;
 
 pub fn with_interval_notice(state: WidgetState, seconds: u64) -> WidgetState {
     let WidgetState::Ready(mut snapshot) = state else {
@@ -16,8 +16,8 @@ pub fn with_interval_notice(state: WidgetState, seconds: u64) -> WidgetState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::{Block, Tone};
     use crate::domain::widget::{Summary, WidgetSnapshot};
+    use crate::domain::widget_content::{Block, Tone};
 
     fn ready(blocks: Vec<Block>) -> WidgetState {
         WidgetState::Ready(WidgetSnapshot {
@@ -44,7 +44,7 @@ mod tests {
     }
 
     #[test]
-    fn notice_is_a_muted_block_when_the_card_uses_blocks() {
+    fn notice_is_a_muted_block_when_the_widget_uses_blocks() {
         let WidgetState::Ready(snapshot) =
             with_interval_notice(ready(vec![Block::Lines(vec![])]), 30)
         else {

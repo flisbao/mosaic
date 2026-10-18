@@ -2,8 +2,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-use crate::domain::card::{Align, Block, CardLine, Cell, Column, Row, StatItem, Tag, Tone};
 use crate::domain::widget::Flag;
+use crate::domain::widget_content::{
+    Align, Block, Cell, Column, Row, StatItem, Tag, Tone, WidgetLine,
+};
 
 const ELLIPSIS: char = '…';
 const MARKER_COLUMN_WIDTH: usize = 2;
@@ -92,7 +94,7 @@ fn render_block(block: &Block, width: usize) -> Vec<Line<'static>> {
     match block {
         Block::Lines(lines) => lines
             .iter()
-            .map(|line| render_card_line(line, width))
+            .map(|line| render_widget_line(line, width))
             .collect(),
         Block::Rows(rows) => render_rows(rows, width),
         Block::Stat { items, hint } => render_stat(items, hint.as_deref(), width),
@@ -100,7 +102,7 @@ fn render_block(block: &Block, width: usize) -> Vec<Line<'static>> {
     }
 }
 
-fn render_card_line(line: &CardLine, width: usize) -> Line<'static> {
+fn render_widget_line(line: &WidgetLine, width: usize) -> Line<'static> {
     let text = truncate_to_width(&flagged(line.flag, &line.text), width);
     Line::from(Span::styled(text, tone_style(line.tone)))
 }
@@ -348,12 +350,12 @@ fn fit_pieces(pieces: Vec<Piece>, budget: usize) -> Vec<Piece> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::{Align, CardLine, Cell, Column, Row, StatItem, Tag};
     use crate::domain::widget::Flag;
+    use crate::domain::widget_content::{Align, Cell, Column, Row, StatItem, Tag, WidgetLine};
     use ratatui::style::{Color, Modifier};
 
-    fn line(text: &str, flag: Option<Flag>) -> CardLine {
-        CardLine {
+    fn line(text: &str, flag: Option<Flag>) -> WidgetLine {
+        WidgetLine {
             text: text.to_string(),
             tone: Tone::Normal,
             flag,

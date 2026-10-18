@@ -25,10 +25,10 @@ use mosaic::application::recommendation_view::{
 use mosaic::application::refresh::refresh_widget;
 use mosaic::application::widget_notices::with_interval_notice;
 use mosaic::domain::action::ConfirmedAction;
-use mosaic::domain::card::AlertLevel;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::WidgetSnapshot;
 use mosaic::domain::widget::{WidgetId, WidgetState};
+use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, parse_config, AppConfig, ConfigError, Harness, LlmConfig,
     WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
@@ -45,9 +45,9 @@ use mosaic::infrastructure::recommendation_file::{
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
 use mosaic::presentation::app_state::{AppState, Command, WidgetEntry};
-use mosaic::presentation::card_view::{lines_to_plain_text, render_blocks};
 use mosaic::presentation::key_input::from_crossterm;
 use mosaic::presentation::render::render;
+use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
 
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);

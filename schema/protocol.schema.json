@@ -19,7 +19,7 @@
     },
     "flag": { "enum": ["updated", "warning"] },
     "text": { "type": "string", "maxLength": 500 },
-    "cardLine": {
+    "widgetLine": {
       "type": "object",
       "required": ["text"],
       "properties": {
@@ -86,7 +86,7 @@
           "required": ["type", "lines"],
           "properties": {
             "type": { "const": "lines" },
-            "lines": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/cardLine" } }
+            "lines": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/widgetLine" } }
           }
         },
         {

@@ -58,7 +58,7 @@ pub enum Align {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CardLine {
+pub struct WidgetLine {
     pub text: String,
     pub tone: Tone,
     pub flag: Option<Flag>,
@@ -102,7 +102,7 @@ pub struct Cell {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
-    Lines(Vec<CardLine>),
+    Lines(Vec<WidgetLine>),
     Rows(Vec<Row>),
     Stat {
         items: Vec<StatItem>,

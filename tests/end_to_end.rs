@@ -31,7 +31,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
     PluginRunner::new(settings, root.to_path_buf())
 }
 
-fn kanban_with_one_card() -> (tempfile::TempDir, PathBuf) {
+fn kanban_with_one_item() -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("kanban");
     fs::create_dir_all(root.join("inbox")).unwrap();
@@ -64,8 +64,8 @@ fn choose_move_to_done(app: &mut AppState) {
 }
 
 #[test]
-fn confirmed_move_renames_the_card_and_refreshes_the_widget() {
-    let (_directory, root) = kanban_with_one_card();
+fn confirmed_move_renames_the_item_and_refreshes_the_widget() {
+    let (_directory, root) = kanban_with_one_item();
     let runner = kanban_runner(&root);
     let mut app = app_for(&runner);
     choose_move_to_done(&mut app);
@@ -93,7 +93,7 @@ fn confirmed_move_renames_the_card_and_refreshes_the_widget() {
 
 #[test]
 fn cancel_leaves_files_untouched() {
-    let (_directory, root) = kanban_with_one_card();
+    let (_directory, root) = kanban_with_one_item();
     let runner = kanban_runner(&root);
     let mut app = app_for(&runner);
     choose_move_to_done(&mut app);
