@@ -34,19 +34,36 @@ fn error_notices(problems: &[Problem]) -> Vec<String> {
         .filter(|problem| problem.severity == Severity::Error)
         .collect();
     if errors.len() <= MAXIMUM_ERROR_NOTICES {
-        return errors.into_iter().map(invalid_block_notice).collect();
+        return errors.into_iter().map(problem_notice).collect();
     }
     let shown = MAXIMUM_ERROR_NOTICES - 1;
     let mut notices: Vec<String> = errors[..shown]
         .iter()
-        .map(|problem| invalid_block_notice(problem))
+        .map(|problem| problem_notice(problem))
         .collect();
     notices.push(format!("… e mais {} erros", errors.len() - shown));
     notices
 }
 
-fn invalid_block_notice(problem: &Problem) -> String {
-    format!("bloco inválido: {}: {}", problem.path, problem.message)
+const INVALID_BLOCK_LABEL: &str = "bloco inválido";
+const INVALID_MINI_LABEL: &str = "mini inválido";
+const MINI_PATH_ROOT: &str = "mini";
+
+fn problem_notice(problem: &Problem) -> String {
+    format!(
+        "{}: {}: {}",
+        notice_label(&problem.path),
+        problem.path,
+        problem.message
+    )
+}
+
+fn notice_label(path: &str) -> &'static str {
+    if path.split(['.', '[']).next() == Some(MINI_PATH_ROOT) {
+        INVALID_MINI_LABEL
+    } else {
+        INVALID_BLOCK_LABEL
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +190,20 @@ mod tests {
         );
         assert_eq!(first.flag, Some(Flag::Warning));
         assert_eq!(snapshot.summary.lines[1].text, "ok");
+    }
+
+    #[test]
+    fn mini_errors_are_labelled_as_mini_not_as_block() {
+        let snapshot = parse_snapshot(
+            r#"{"summary":{"title":"K","lines":[{"text":"ok"}]},"mini":{"value":" ","text":"t"}}"#,
+        )
+        .unwrap();
+        let first = &snapshot.summary.lines[0];
+        assert_eq!(
+            first.text,
+            "mini inválido: mini.value: precisa ter conteúdo"
+        );
+        assert_eq!(first.flag, Some(Flag::Warning));
     }
 
     #[test]

@@ -360,15 +360,28 @@ impl Reader {
             Some(value) => self.object_entry(value, "mini")?,
         };
         self.unknown_fields(object, &MINI_KEYS, "mini");
-        let value =
-            self.required_text_within(object, "value", "mini", MAXIMUM_MINI_VALUE_CHARACTERS);
-        let text = self.required_text_within(object, "text", "mini", MAXIMUM_MINI_TEXT_CHARACTERS);
+        let value = self.mini_content(object, "value", MAXIMUM_MINI_VALUE_CHARACTERS);
+        let text = self.mini_content(object, "text", MAXIMUM_MINI_TEXT_CHARACTERS);
         let tone = self.tone(object, "mini");
         Some(Mini {
             value: value?,
             text: text?,
             tone,
         })
+    }
+
+    fn mini_content(
+        &mut self,
+        object: &Map<String, Value>,
+        key: &str,
+        limit: usize,
+    ) -> Option<String> {
+        let text = self.required_text_within(object, key, "mini", limit)?;
+        if text.is_empty() {
+            self.error(&child_path("mini", key), "precisa ter conteúdo");
+            return None;
+        }
+        Some(text)
     }
 
     fn legacy_lines(&mut self, summary: &Map<String, Value>) -> Vec<SummaryLine> {
@@ -849,6 +862,85 @@ mod tests {
         let mini = parsed.snapshot.mini.as_ref().unwrap();
         assert_eq!(mini.text.chars().count(), MAXIMUM_MINI_TEXT_CHARACTERS);
         assert_eq!(paths(&parsed, Severity::Warning), vec!["mini.text"]);
+    }
+
+    #[test]
+    fn mini_value_at_exact_limit_has_no_warning() {
+        let value = "1".repeat(MAXIMUM_MINI_VALUE_CHARACTERS);
+        let parsed = mini_report(&format!(r#"{{"value":"{value}","text":"t"}}"#));
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        assert_eq!(parsed.snapshot.mini.as_ref().unwrap().value, value);
+    }
+
+    #[test]
+    fn mini_text_truncates_cjk_by_characters() {
+        let text = "漢".repeat(MAXIMUM_MINI_TEXT_CHARACTERS + 1);
+        let parsed = mini_report(&format!(r#"{{"value":"1","text":"{text}"}}"#));
+        let mini = parsed.snapshot.mini.as_ref().unwrap();
+        assert_eq!(mini.text.chars().count(), MAXIMUM_MINI_TEXT_CHARACTERS);
+        assert!(mini.text.ends_with('…'));
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["mini.text"]);
+    }
+
+    #[test]
+    fn mini_null_is_absent_without_problems() {
+        let parsed = report(r#"{"summary":{"title":"K"},"mini":null}"#);
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        assert_eq!(parsed.snapshot.mini, None);
+    }
+
+    #[test]
+    fn mini_as_array_is_a_type_error_and_summary_survives() {
+        let parsed = report(
+            r#"{"summary":{"title":"K","lines":[{"text":"x"}]},"mini":[{"value":"1","text":"t"}]}"#,
+        );
+        assert_eq!(parsed.snapshot.mini, None);
+        assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+        assert_eq!(paths(&parsed, Severity::Error), vec!["mini"]);
+    }
+
+    #[test]
+    fn mini_with_unknown_tone_warns_and_uses_normal() {
+        let parsed = mini_report(r#"{"value":"1","text":"t","tone":"roxo"}"#);
+        assert_eq!(
+            parsed.snapshot.mini.as_ref().map(|mini| mini.tone),
+            Some(Tone::Normal)
+        );
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["mini.tone"]);
+        assert!(paths(&parsed, Severity::Error).is_empty());
+    }
+
+    #[test]
+    fn mini_unknown_field_is_a_warning_and_mini_is_kept() {
+        let parsed = mini_report(r#"{"value":"1","text":"t","extra":true}"#);
+        assert!(parsed.snapshot.mini.is_some());
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["mini.extra"]);
+    }
+
+    #[test]
+    fn mini_empty_or_blank_value_is_an_error_and_is_dropped() {
+        for value in ["", "   "] {
+            let parsed = mini_report(&format!(r#"{{"value":"{value}","text":"t"}}"#));
+            assert_eq!(parsed.snapshot.mini, None, "{value:?}");
+            assert_eq!(
+                paths(&parsed, Severity::Error),
+                vec!["mini.value"],
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mini_empty_or_blank_text_is_an_error_and_is_dropped() {
+        for text in ["", "   "] {
+            let parsed = mini_report(&format!(r#"{{"value":"1","text":"{text}"}}"#));
+            assert_eq!(parsed.snapshot.mini, None, "{text:?}");
+            assert_eq!(
+                paths(&parsed, Severity::Error),
+                vec!["mini.text"],
+                "{text:?}"
+            );
+        }
     }
 
     fn summary_with_blocks(blocks: &str) -> ParsedSnapshot {

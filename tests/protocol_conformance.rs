@@ -112,4 +112,6 @@ fn schema_matches_the_code() {
         mini["properties"]["text"]["maxLength"].as_u64(),
         Some(u64::try_from(MAXIMUM_MINI_TEXT_CHARACTERS).unwrap())
     );
+    assert_eq!(mini["properties"]["value"]["minLength"].as_u64(), Some(1));
+    assert_eq!(mini["properties"]["text"]["minLength"].as_u64(), Some(1));
 }

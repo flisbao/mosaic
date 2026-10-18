@@ -23,8 +23,8 @@
       "type": "object",
       "required": ["value", "text"],
       "properties": {
-        "value": { "type": "string", "maxLength": 8 },
-        "text": { "type": "string", "maxLength": 24 },
+        "value": { "type": "string", "minLength": 1, "maxLength": 8 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 24 },
         "tone": { "$ref": "#/$defs/tone" }
       }
     },
