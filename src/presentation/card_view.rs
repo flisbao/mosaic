@@ -2,13 +2,15 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::domain::card::{Block, CardLine, Row, Tag, Tone};
+use crate::domain::card::{Align, Block, CardLine, Cell, Column, Row, StatItem, Tag, Tone};
 use crate::domain::widget::Flag;
 
 const ELLIPSIS: char = '…';
 const MARKER_COLUMN_WIDTH: usize = 2;
 const BLANK_MARKER: &str = "  ";
 const TAG_SEPARATOR: &str = " ";
+const STAT_SEPARATOR: &str = "   ";
+const COLUMN_SEPARATOR: &str = "  ";
 
 type Piece = (String, Style);
 
@@ -87,7 +89,8 @@ fn render_block(block: &Block, width: usize) -> Vec<Line<'static>> {
             .map(|line| render_card_line(line, width))
             .collect(),
         Block::Rows(rows) => render_rows(rows, width),
-        Block::Stat { .. } | Block::Table { .. } => vec![],
+        Block::Stat { items, hint } => render_stat(items, hint.as_deref(), width),
+        Block::Table { columns, rows } => render_table(columns, rows, width),
     }
 }
 
@@ -173,6 +176,141 @@ fn render_row(row: &Row, time_width: usize, width: usize) -> Line<'static> {
     clip_pieces(pieces, width)
 }
 
+fn take_line(pieces: &mut Vec<Piece>, lines: &mut Vec<Line<'static>>) {
+    if pieces.is_empty() {
+        return;
+    }
+    let spans = pieces
+        .drain(..)
+        .map(|(text, style)| Span::styled(text, style))
+        .collect::<Vec<_>>();
+    lines.push(Line::from(spans));
+}
+
+fn stat_item_pieces(item: &StatItem) -> Vec<Piece> {
+    let value_style = tone_style(item.tone).add_modifier(Modifier::BOLD);
+    vec![
+        (item.value.clone(), value_style),
+        (TAG_SEPARATOR.to_string(), Style::default()),
+        (item.label.clone(), Style::default()),
+    ]
+}
+
+fn render_stat(items: &[StatItem], hint: Option<&str>, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![];
+    let mut current: Vec<Piece> = vec![];
+    for item in items {
+        let pieces = stat_item_pieces(item);
+        let item_width = pieces_width(&pieces);
+        if item_width > width {
+            take_line(&mut current, &mut lines);
+            lines.push(clip_pieces(fit_pieces(pieces, width), width));
+            continue;
+        }
+        let separator_width = STAT_SEPARATOR.width();
+        if !current.is_empty() && pieces_width(&current) + separator_width + item_width > width {
+            take_line(&mut current, &mut lines);
+        }
+        if !current.is_empty() {
+            current.push((STAT_SEPARATOR.to_string(), Style::default()));
+        }
+        current.extend(pieces);
+    }
+    take_line(&mut current, &mut lines);
+    if let Some(hint) = hint {
+        let text = truncate_to_width(hint, width);
+        lines.push(Line::from(Span::styled(text, tone_style(Tone::Muted))));
+    }
+    lines
+}
+
+fn cell_text(cell: &Cell) -> String {
+    flagged(cell.flag, &cell.text)
+}
+
+fn column_widths(columns: &[Column], rows: &[Vec<Cell>]) -> Vec<usize> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let widest_cell = rows
+                .iter()
+                .filter_map(|row| row.get(index))
+                .map(|cell| cell_text(cell).width())
+                .max()
+                .unwrap_or(0);
+            column.title.width().max(widest_cell)
+        })
+        .collect()
+}
+
+fn shrink_to_fit(widths: &mut [usize], width: usize) {
+    let separators = COLUMN_SEPARATOR.width() * widths.len().saturating_sub(1);
+    while widths.iter().sum::<usize>() + separators > width {
+        let Some((widest, &size)) = widths
+            .iter()
+            .enumerate()
+            .rev()
+            .max_by_key(|(_, size)| **size)
+        else {
+            return;
+        };
+        if size <= 1 {
+            return;
+        }
+        widths[widest] -= 1;
+    }
+}
+
+fn render_table(columns: &[Column], rows: &[Vec<Cell>], width: usize) -> Vec<Line<'static>> {
+    let separator_width = COLUMN_SEPARATOR.width();
+    let visible = columns
+        .len()
+        .min((width + separator_width) / (1 + separator_width));
+    let columns = &columns[..visible];
+    let mut widths = column_widths(columns, rows);
+    shrink_to_fit(&mut widths, width);
+    let header_style = Style::default().add_modifier(Modifier::BOLD);
+    let header = columns
+        .iter()
+        .map(|column| (column.title.clone(), header_style))
+        .collect::<Vec<_>>();
+    let mut lines = vec![table_line(&header, columns, &widths, width)];
+    for row in rows {
+        let cells = (0..visible)
+            .map(|index| match row.get(index) {
+                Some(cell) => (cell_text(cell), tone_style(cell.tone)),
+                None => (String::new(), Style::default()),
+            })
+            .collect::<Vec<_>>();
+        lines.push(table_line(&cells, columns, &widths, width));
+    }
+    lines
+}
+
+fn table_line(
+    cells: &[Piece],
+    columns: &[Column],
+    widths: &[usize],
+    width: usize,
+) -> Line<'static> {
+    let mut pieces: Vec<Piece> = vec![];
+    let last = cells.len().saturating_sub(1);
+    for (index, (text, style)) in cells.iter().enumerate() {
+        if index > 0 {
+            pieces.push((COLUMN_SEPARATOR.to_string(), Style::default()));
+        }
+        let shown = truncate_to_width(text, widths[index]);
+        let padding = " ".repeat(widths[index] - shown.width());
+        match columns[index].align {
+            Align::Right => pieces.push((format!("{padding}{shown}"), *style)),
+            Align::Left if index == last => pieces.push((shown, *style)),
+            Align::Left => pieces.push((format!("{shown}{padding}"), *style)),
+        }
+    }
+    clip_pieces(pieces, width)
+}
+
 fn tag_pieces(tags: &[Tag]) -> Vec<Piece> {
     let mut pieces = vec![];
     for (index, tag) in tags.iter().enumerate() {
@@ -204,7 +342,7 @@ fn fit_pieces(pieces: Vec<Piece>, budget: usize) -> Vec<Piece> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::{CardLine, Row, Tag};
+    use crate::domain::card::{Align, CardLine, Cell, Column, Row, StatItem, Tag};
     use crate::domain::widget::Flag;
     use ratatui::style::{Color, Modifier};
 
@@ -366,5 +504,193 @@ mod tests {
         let style = tone_style(Tone::Current);
         assert_eq!(style.fg, Some(Color::Cyan));
         assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    fn stat_item(value: &str, label: &str) -> StatItem {
+        StatItem {
+            value: value.to_string(),
+            label: label.to_string(),
+            tone: Tone::Ok,
+        }
+    }
+
+    fn stat(items: Vec<StatItem>, hint: Option<&str>) -> Block {
+        Block::Stat {
+            items,
+            hint: hint.map(str::to_string),
+        }
+    }
+
+    fn column(title: &str, align: Align) -> Column {
+        Column {
+            title: title.to_string(),
+            align,
+        }
+    }
+
+    fn cell(text: &str) -> Cell {
+        Cell {
+            text: text.to_string(),
+            tone: Tone::Normal,
+            flag: None,
+        }
+    }
+
+    fn table(columns: Vec<Column>, rows: Vec<Vec<Cell>>) -> Block {
+        Block::Table { columns, rows }
+    }
+
+    #[test]
+    fn stat_items_render_side_by_side_when_they_fit() {
+        let blocks = [stat(
+            vec![stat_item("3", "reuniões"), stat_item("2h", "livre")],
+            None,
+        )];
+        assert_eq!(plain(&blocks, 40), vec!["3 reuniões   2h livre"]);
+    }
+
+    #[test]
+    fn stat_items_wrap_when_narrow_without_splitting_an_item() {
+        let blocks = [stat(
+            vec![stat_item("3", "reuniões"), stat_item("2h", "livre")],
+            None,
+        )];
+        assert_eq!(plain(&blocks, 12), vec!["3 reuniões", "2h livre"]);
+    }
+
+    #[test]
+    fn stat_value_is_bold_in_the_item_tone() {
+        let blocks = [stat(vec![stat_item("3", "x")], None)];
+        let lines = render_blocks(&blocks, 20);
+        let value = &lines[0].spans[0];
+        assert_eq!(value.content, "3");
+        assert_eq!(value.style.fg, Some(Color::Green));
+        assert!(value.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn stat_hint_is_a_muted_line_below() {
+        let blocks = [stat(vec![stat_item("3", "x")], Some("hoje"))];
+        let lines = render_blocks(&blocks, 20);
+        assert_eq!(lines_to_plain_text(&lines), vec!["3 x", "hoje"]);
+        assert_eq!(lines[1].spans[0].style.fg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn stat_item_wider_than_width_is_truncated() {
+        let blocks = [stat(vec![stat_item("100", "muitíssimo-longo")], None)];
+        assert_eq!(plain(&blocks, 8), vec!["100 mui…"]);
+    }
+
+    #[test]
+    fn table_renders_header_and_aligned_columns() {
+        let blocks = [table(
+            vec![column("Nome", Align::Left), column("Qtd", Align::Right)],
+            vec![vec![cell("ana"), cell("3")], vec![cell("bia"), cell("10")]],
+        )];
+        assert_eq!(
+            plain(&blocks, 30),
+            vec!["Nome  Qtd", "ana     3", "bia    10"]
+        );
+    }
+
+    #[test]
+    fn table_right_alignment() {
+        let blocks = [table(
+            vec![column("Qtd", Align::Right)],
+            vec![vec![cell("1000")]],
+        )];
+        assert_eq!(plain(&blocks, 30), vec![" Qtd", "1000"]);
+    }
+
+    #[test]
+    fn table_header_is_bold() {
+        let blocks = [table(vec![column("A", Align::Left)], vec![])];
+        let lines = render_blocks(&blocks, 10);
+        assert!(lines[0].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn table_shrinks_widest_column_to_fit() {
+        let blocks = [table(
+            vec![column("A", Align::Left), column("B", Align::Left)],
+            vec![vec![cell("aaaaaaaaaa"), cell("bb")]],
+        )];
+        assert_eq!(plain(&blocks, 10), vec!["A       B", "aaaaa…  bb"]);
+    }
+
+    #[test]
+    fn table_drops_rightmost_columns_when_nothing_fits() {
+        let columns = ["A", "B", "C", "D"]
+            .iter()
+            .map(|title| column(title, Align::Left))
+            .collect();
+        let row = ["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd"]
+            .iter()
+            .map(|text| cell(text))
+            .collect();
+        let lines = plain(&[table(columns, vec![row])], 5);
+        assert!(widest(&lines) <= 5, "{lines:?}");
+        let joined = lines.join("\n");
+        assert!(joined.contains('A') || joined.contains('a'));
+        assert!(!joined.contains(['C', 'D', 'c', 'd']), "{lines:?}");
+    }
+
+    #[test]
+    fn table_cells_show_flags_and_tones() {
+        let flagged_cell = Cell {
+            text: "x".to_string(),
+            tone: Tone::Danger,
+            flag: Some(Flag::Warning),
+        };
+        let blocks = [table(
+            vec![column("A", Align::Left)],
+            vec![vec![flagged_cell]],
+        )];
+        let lines = render_blocks(&blocks, 10);
+        assert_eq!(lines_to_plain_text(&lines)[1], "⚠ x");
+        assert_eq!(lines[1].spans[0].style.fg, Some(Color::Red));
+    }
+
+    fn pathological_blocks() -> Vec<Block> {
+        let wide = "日本語のとても長いセル".repeat(5);
+        let columns = (0..10)
+            .map(|index| {
+                column(
+                    &format!("列{index}"),
+                    if index % 2 == 0 {
+                        Align::Left
+                    } else {
+                        Align::Right
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let rows = (0..200)
+            .map(|_| (0..10).map(|_| cell(&wide)).collect())
+            .collect::<Vec<Vec<Cell>>>();
+        let items = (0..8).map(|_| stat_item(&wide, &wide)).collect();
+        vec![table(columns, rows), stat(items, Some(&wide))]
+    }
+
+    #[test]
+    fn no_line_is_ever_wider_than_the_width_for_stat_and_table() {
+        let blocks = pathological_blocks();
+        for width in 0..=40 {
+            let lines = plain(&blocks, width);
+            assert!(widest(&lines) <= width, "largura {width}");
+        }
+    }
+
+    #[test]
+    fn extreme_block_counts_are_bounded() {
+        let blocks: Vec<Block> = (0..20).flat_map(|_| pathological_blocks()).collect();
+        let started = std::time::Instant::now();
+        let lines = render_blocks(&blocks, 10);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(!lines.is_empty());
     }
 }
