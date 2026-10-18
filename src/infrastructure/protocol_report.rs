@@ -248,7 +248,7 @@ impl Reader {
         object
     }
 
-    pub(super) fn error_count(&self) -> usize {
+    fn error_count(&self) -> usize {
         self.problems
             .iter()
             .filter(|problem| problem.severity == Severity::Error)
