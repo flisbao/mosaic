@@ -48,6 +48,8 @@ fn app_for(runner: &PluginRunner) -> AppState {
         vec![WidgetEntry {
             id: WidgetId::new("kanban"),
             record,
+            interval: std::time::Duration::from_secs(30),
+            max_items: None,
         }],
         vec![TabView {
             name: "Principal".to_string(),

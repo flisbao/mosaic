@@ -10,12 +10,16 @@ use crate::application::pomodoro_notifications::AlertMessage;
 use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
+use crate::presentation::focus_column::focus_column_lines;
 use crate::presentation::text_fit::{flagged, truncate_to_width};
+use crate::presentation::widget_box::{
+    box_body_lines, entry_title, render_widget_box, BoxContext, BORDER_COLUMNS,
+};
 use crate::presentation::widget_view::render_blocks;
 
 const FALLBACK_SPAN: u16 = 1;
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
-const LOADING_TEXT: &str = "carregando…";
+const FOCUS_COLUMN_WIDTH: u16 = 22;
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
 const MODAL_FRAME_THICKNESS: u16 = 2;
 const MINIMUM_DRAWABLE_SIDE: u16 = 3;
@@ -32,9 +36,9 @@ pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDate
     }
     render_top_bar(frame, state, now, area);
     if state.is_expanded() {
-        render_detail(frame, state, area);
+        render_focus_mode(frame, state, now, area);
     } else {
-        render_home(frame, state, spans, area);
+        render_home(frame, state, spans, now, area);
     }
     render_notice(frame, state, area);
     render_modal(frame, state, area);
@@ -88,7 +92,7 @@ fn pomodoro_text(timer: &PomodoroTimer) -> String {
     )
 }
 
-fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], area: Rect) {
+fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDateTime, area: Rect) {
     let size = TerminalSize {
         width: area.width,
         height: area.height,
@@ -104,94 +108,75 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], area: Rect) {
                 let Some(&entry_index) = entry_indexes.get(placement.widget_index) else {
                     continue;
                 };
-                let selected = Some(entry_index) == state.focused_entry();
+                let context = BoxContext {
+                    shortcut: state.shortcut_of(entry_index),
+                    selected: Some(entry_index) == state.focused_entry(),
+                    now,
+                    warning: None,
+                };
                 if let Some(entry) = state.entries().get(entry_index) {
-                    render_box(frame, entry, to_rect(area, placement.area), selected, None);
+                    render_widget_box(frame, entry, to_rect(area, placement.area), &context);
                 }
             }
         }
         GridLayout::Compact(placement) => {
-            let first = entry_indexes
-                .first()
-                .and_then(|&index| state.entries().get(index));
-            if let Some(entry) = first {
-                let warning = Some(ENLARGE_WARNING);
-                render_box(frame, entry, to_rect(area, placement.area), true, warning);
+            let first = entry_indexes.first().copied();
+            if let Some(entry) = first.and_then(|index| state.entries().get(index)) {
+                let context = BoxContext {
+                    shortcut: first.and_then(|index| state.shortcut_of(index)),
+                    selected: true,
+                    now,
+                    warning: Some(ENLARGE_WARNING),
+                };
+                render_widget_box(frame, entry, to_rect(area, placement.area), &context);
             }
         }
         GridLayout::Empty => {}
     }
 }
 
-fn render_box(
-    frame: &mut Frame,
-    entry: &WidgetEntry,
-    area: Rect,
-    selected: bool,
-    warning: Option<&str>,
-) {
-    if area.width < MINIMUM_DRAWABLE_SIDE || area.height < MINIMUM_DRAWABLE_SIDE {
+fn render_focus_mode(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
+    let content = content_area(area);
+    if content.width < FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWABLE_SIDE) {
+        render_detail(frame, state, now, content);
         return;
     }
-    let border = if selected {
-        Color::Cyan
-    } else {
-        Color::DarkGray
-    };
-    let block = Block::bordered()
-        .title(truncate_to_width(
-            &entry_title(entry),
-            area.width as usize - 2,
-        ))
-        .border_style(Style::default().fg(border));
-    let inner = block.inner(area);
-    let width = inner.width as usize;
-    let mut lines: Vec<Line> = Vec::new();
-    if let Some(warning) = warning {
-        lines.push(Line::styled(
-            truncate_to_width(warning, width),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    lines.extend(box_lines(entry, width));
-    frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(lines), inner);
+    let column = Rect::new(content.x, content.y, FOCUS_COLUMN_WIDTH, content.height);
+    let detail = Rect::new(
+        content.x.saturating_add(FOCUS_COLUMN_WIDTH),
+        content.y,
+        content.width.saturating_sub(FOCUS_COLUMN_WIDTH),
+        content.height,
+    );
+    render_focus_column(frame, state, column);
+    render_detail(frame, state, now, detail);
 }
 
-fn box_lines(entry: &WidgetEntry, width: usize) -> Vec<Line<'static>> {
-    let record = &entry.record;
-    if record.is_refreshing() {
-        return vec![Line::from(LOADING_TEXT)];
-    }
-    match (record.snapshot(), record.last_error()) {
-        (Some(snapshot), Some(message)) => {
-            let mut lines = vec![failure_line(&format!("⚠ falha: {message}"), width)];
-            lines.extend(render_blocks(&snapshot.summary.display_blocks(), width));
-            lines
-        }
-        (Some(snapshot), None) => render_blocks(&snapshot.summary.display_blocks(), width),
-        (None, Some(message)) => message
-            .lines()
-            .map(|line| failure_line(line, width))
-            .collect(),
-        (None, None) => vec![Line::from(LOADING_TEXT)],
-    }
+fn render_focus_column(frame: &mut Frame, state: &AppState, area: Rect) {
+    let entries: Vec<&WidgetEntry> = state
+        .active_entry_indexes()
+        .iter()
+        .filter_map(|&index| state.entries().get(index))
+        .collect();
+    let focused = state
+        .active_entry_indexes()
+        .iter()
+        .position(|&index| Some(index) == state.focused_entry());
+    let lines = focus_column_lines(&entries, focused, usize::from(area.width));
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn failure_line(text: &str, width: usize) -> Line<'static> {
-    Line::styled(
-        truncate_to_width(text, width),
-        Style::default().fg(Color::Red),
+fn content_area(area: Rect) -> Rect {
+    let top = TOP_BAR_HEIGHT.min(area.height);
+    Rect::new(
+        area.x,
+        area.y.saturating_add(top),
+        area.width,
+        area.height.saturating_sub(top),
     )
 }
 
-fn render_detail(frame: &mut Frame, state: &AppState, area: Rect) {
-    let content = Rect::new(
-        area.x,
-        area.y + TOP_BAR_HEIGHT.min(area.height),
-        area.width,
-        area.height.saturating_sub(TOP_BAR_HEIGHT),
-    );
+fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, content: Rect) {
     if content.width < MINIMUM_DRAWABLE_SIDE || content.height < MINIMUM_DRAWABLE_SIDE {
         return;
     }
@@ -203,19 +188,27 @@ fn render_detail(frame: &mut Frame, state: &AppState, area: Rect) {
     };
     let block = Block::bordered().title(truncate_to_width(
         &entry_title(entry),
-        content.width as usize - 2,
+        usize::from(content.width.saturating_sub(BORDER_COLUMNS)),
     ));
     let inner = block.inner(content);
-    let width = inner.width as usize;
-    let (lines, selected_row) = detail_lines(entry, state.selected_item(), width);
-    let scroll = selected_row.saturating_sub(inner.height.saturating_sub(1) as usize);
+    let width = usize::from(inner.width);
+    let (lines, selected_row) = detail_lines(entry, state.selected_item(), width, now);
+    let scroll = selected_row.saturating_sub(usize::from(inner.height.saturating_sub(1)));
     frame.render_widget(block, content);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)),
+        inner,
+    );
 }
 
-fn detail_lines(entry: &WidgetEntry, selected: usize, width: usize) -> (Vec<Line<'static>>, usize) {
+fn detail_lines(
+    entry: &WidgetEntry,
+    selected: usize,
+    width: usize,
+    now: NaiveDateTime,
+) -> (Vec<Line<'static>>, usize) {
     let Some(snapshot) = entry.record.snapshot() else {
-        return (box_lines(entry, width), 0);
+        return (box_body_lines(entry, width, now, true), 0);
     };
     let Some(sections) = &snapshot.detail else {
         return (Vec::new(), 0);
@@ -356,17 +349,10 @@ fn action_menu_lines(state: &AppState, selected: usize) -> Vec<String> {
         .collect()
 }
 
-fn entry_title(entry: &WidgetEntry) -> String {
-    match entry.record.snapshot() {
-        Some(snapshot) => snapshot.summary.title.clone(),
-        None => entry.id.as_str().to_string(),
-    }
-}
-
 fn to_rect(origin: Rect, cell: CellRect) -> Rect {
     Rect::new(
-        origin.x + cell.x,
-        origin.y + cell.y,
+        origin.x.saturating_add(cell.x),
+        origin.y.saturating_add(cell.y),
         cell.width,
         cell.height,
     )
@@ -396,13 +382,16 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::domain::widget::{
-        ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetId,
-        WidgetRecord, WidgetSnapshot,
+        ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, SummaryLine,
+        WidgetId, WidgetRecord, WidgetSnapshot,
     };
     use crate::presentation::app_state::{AppState, TabView, WidgetEntry};
     use crate::presentation::key_input::KeyInput;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeDelta};
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Style};
     use ratatui::Terminal;
 
     fn now() -> NaiveDateTime {
@@ -449,6 +438,8 @@ mod tests {
         WidgetEntry {
             id: WidgetId::new(id),
             record,
+            interval: std::time::Duration::from_secs(30),
+            max_items: None,
         }
     }
 
@@ -520,6 +511,148 @@ mod tests {
     fn press(state: &mut AppState, keys: &[KeyInput]) {
         for key in keys {
             state.handle_key(*key);
+        }
+    }
+
+    fn buffer_of(state: &AppState, width: u16, height: u16, at: NaiveDateTime) -> Buffer {
+        let spans = vec![1; state.entries().len()];
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render(frame, state, &spans, at))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn ready_at(snapshot: WidgetSnapshot, at: NaiveDateTime) -> WidgetRecord {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(Ok(snapshot), at);
+        record
+    }
+
+    fn border_colors(buffer: &Buffer) -> Vec<Option<Color>> {
+        let area = buffer.area;
+        (0..area.height)
+            .flat_map(|row| (0..area.width).map(move |column| (column, row)))
+            .filter(|&(column, row)| buffer[(column, row)].symbol() == "┌")
+            .map(|(column, row)| buffer[(column, row)].fg.into())
+            .collect()
+    }
+
+    fn style_of_text(buffer: &Buffer, needle: &str) -> Option<Style> {
+        let area = buffer.area;
+        for row in 0..area.height {
+            let symbols: Vec<&str> = (0..area.width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect();
+            for start in 0..symbols.len() {
+                if symbols[start..].concat().starts_with(needle) {
+                    let column = u16::try_from(start).unwrap();
+                    return Some(buffer[(column, row)].style());
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn failing_widget_with_old_data_has_red_border_and_age_line() {
+        let old = ready_at(
+            snapshot("Agenda", vec![plain_line("reuniões 2")]),
+            now() - TimeDelta::minutes(45),
+        );
+        let mut failing = old;
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let state = state_with(vec![kanban_entry(), entry("agenda", failing)]);
+        let buffer = buffer_of(&state, 100, 30, now());
+        let colors = border_colors(&buffer);
+        assert!(colors.contains(&Some(Color::Red)), "{colors:?}");
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
+        assert!(text.contains("reuniões 2"), "{text}");
+        assert!(!text.contains("⚠ falha: fora do ar"), "{text}");
+    }
+
+    #[test]
+    fn first_load_failure_shows_only_red_message() {
+        let state = state_with(vec![entry("kanban", failed("plugin quebrou"))]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("plugin quebrou"), "{text}");
+        assert!(!text.contains("sem atualizar"), "{text}");
+        assert!(!text.contains("carregando"), "{text}");
+        let style = style_of_text(&buffer_of(&state, 100, 30, now()), "plugin quebrou");
+        assert_eq!(style.and_then(|style| style.fg), Some(Color::Red));
+    }
+
+    #[test]
+    fn refreshing_keeps_border_color_and_adds_indicator() {
+        let mut refreshing = ready(snapshot("Kanban", vec![plain_line("inbox 3")]));
+        refreshing.begin_refresh();
+        let idle = state_with(vec![kanban_entry()]);
+        let busy = state_with(vec![entry("kanban", refreshing)]);
+        assert_eq!(
+            border_colors(&buffer_of(&busy, 100, 30, now())),
+            border_colors(&buffer_of(&idle, 100, 30, now())),
+        );
+        let text = screen(&busy, 100, 30);
+        assert!(text.contains("[A] Kanban ⟳"), "{text}");
+        assert!(text.contains("inbox 3"), "{text}");
+    }
+
+    #[test]
+    fn stale_data_is_dimmed() {
+        let interval_periods = 10;
+        let stale_at = now() - TimeDelta::seconds(30 * interval_periods);
+        let stale = state_with(vec![entry(
+            "kanban",
+            ready_at(snapshot("Kanban", vec![plain_line("inbox 3")]), stale_at),
+        )]);
+        let fresh = state_with(vec![kanban_entry()]);
+        let stale_style = style_of_text(&buffer_of(&stale, 100, 30, now()), "inbox 3");
+        let fresh_style = style_of_text(&buffer_of(&fresh, 100, 30, now()), "Tarefa");
+        assert!(stale_style.is_some_and(|style| style.add_modifier.contains(Modifier::DIM)));
+        assert!(!fresh_style.is_some_and(|style| style.add_modifier.contains(Modifier::DIM)));
+    }
+
+    #[test]
+    fn widget_max_items_cuts_overflow_inside_box() {
+        let lines = (1..=10)
+            .map(|number| plain_line(&format!("linha {number}")))
+            .collect();
+        let mut capped = entry("agenda", ready(snapshot("Agenda", lines)));
+        capped.max_items = Some(3);
+        let text = screen(&state_with(vec![capped]), 100, 30);
+        assert!(text.contains("linha 2"), "{text}");
+        assert!(text.contains("+8 itens"), "{text}");
+        assert!(!text.contains("linha 3"), "{text}");
+    }
+
+    #[test]
+    fn focus_mode_lists_every_widget_of_the_tab_in_a_column() {
+        let mut agenda = snapshot("Agenda", vec![]);
+        agenda.mini = Some(Mini {
+            value: "3".to_string(),
+            text: "reuniões".to_string(),
+            tone: widget_content::Tone::Ok,
+        });
+        let mut state = state_with(vec![kanban_entry(), entry("agenda", ready(agenda))]);
+        press(&mut state, &[KeyInput::Enter]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("Kanban 2 itens"), "{text}");
+        assert!(text.contains("Agenda 3 reuniões"), "{text}");
+    }
+
+    #[test]
+    fn render_never_panics_on_zero_sized_frames() {
+        let mut state = state_with(vec![kanban_entry()]);
+        assert!(draw(&state, 0, 0).is_empty());
+        assert_eq!(draw(&state, 1, 1).len(), 1);
+        let rows = draw(&state, 59, 19);
+        assert_eq!(rows.len(), 19);
+        assert!(rows.iter().any(|row| row.contains("Amplie")), "{rows:?}");
+        assert!(border_colors(&buffer_of(&state, 59, 19, now())).contains(&Some(Color::Cyan)));
+        press(&mut state, &[KeyInput::Enter]);
+        for (width, height) in [(0, 0), (1, 1), (59, 19)] {
+            assert_eq!(draw(&state, width, height).len(), usize::from(height));
         }
     }
 

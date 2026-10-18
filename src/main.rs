@@ -60,6 +60,7 @@ const APP_DIRECTORY_NAME: &str = "mosaic";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const FALLBACK_STORE_FILE_NAME: &str = "mosaic-recommendation.json";
 const IA_WIDGET_SPAN: u16 = 1;
+const IA_INTERVAL_SECONDS: u64 = 3600;
 const CHECK_SUBCOMMAND: &str = "check";
 const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
 const CHECK_ENV_FLAG: &str = "--env";
@@ -202,6 +203,8 @@ fn run() -> Result<(), AppError> {
         .map(|widget| WidgetEntry {
             id: widget.id.clone(),
             record: WidgetRecord::loading(),
+            interval: Duration::from_secs(widget.interval_seconds),
+            max_items: widget.max_items,
         })
         .collect();
     let mut ia_entry_index = None;
@@ -210,6 +213,8 @@ fn run() -> Result<(), AppError> {
         entries.push(WidgetEntry {
             id: WidgetId::new(IA_WIDGET_ID),
             record: stored_ia_record(llm.store.as_ref(), clock.now()),
+            interval: Duration::from_secs(IA_INTERVAL_SECONDS),
+            max_items: None,
         });
         ia_entry_index = Some(entries.len() - 1);
     }

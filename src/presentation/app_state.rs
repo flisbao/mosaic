@@ -28,6 +28,8 @@ const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar"
 pub struct WidgetEntry {
     pub id: WidgetId,
     pub record: WidgetRecord,
+    pub interval: Duration,
+    pub max_items: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -535,6 +537,8 @@ mod tests {
         WidgetEntry {
             id: WidgetId::new(id),
             record,
+            interval: Duration::from_secs(30),
+            max_items: None,
         }
     }
 
