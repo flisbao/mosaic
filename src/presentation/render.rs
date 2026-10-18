@@ -9,17 +9,19 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
+use crate::domain::widget::DetailSection;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
-    box_body_lines, entry_title, render_widget_box, BoxContext, BORDER_COLUMNS,
+    box_block, box_body, dim_if_stale, render_widget_box, BoxContext,
 };
 use crate::presentation::widget_view::render_blocks;
 
 const FALLBACK_SPAN: u16 = 1;
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
 const FOCUS_COLUMN_WIDTH: u16 = 22;
+const FOCUS_MINIMUM_WIDTH: u16 = FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWABLE_SIDE);
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
 const MODAL_FRAME_THICKNESS: u16 = 2;
 const MINIMUM_DRAWABLE_SIDE: u16 = 3;
@@ -137,7 +139,7 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
 
 fn render_focus_mode(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
     let content = content_area(area);
-    if content.width < FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWABLE_SIDE) {
+    if content.width < FOCUS_MINIMUM_WIDTH {
         render_detail(frame, state, now, content);
         return;
     }
@@ -180,16 +182,13 @@ fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, conten
     if content.width < MINIMUM_DRAWABLE_SIDE || content.height < MINIMUM_DRAWABLE_SIDE {
         return;
     }
-    let Some(entry) = state
-        .focused_entry()
-        .and_then(|index| state.entries().get(index))
-    else {
+    let Some(index) = state.focused_entry() else {
         return;
     };
-    let block = Block::bordered().title(truncate_to_width(
-        &entry_title(entry),
-        usize::from(content.width.saturating_sub(BORDER_COLUMNS)),
-    ));
+    let Some(entry) = state.entries().get(index) else {
+        return;
+    };
+    let block = box_block(entry, state.shortcut_of(index), true, content.width);
     let inner = block.inner(content);
     let width = usize::from(inner.width);
     let (lines, selected_row) = detail_lines(entry, state.selected_item(), width, now);
@@ -207,12 +206,26 @@ fn detail_lines(
     width: usize,
     now: NaiveDateTime,
 ) -> (Vec<Line<'static>>, usize) {
-    let Some(snapshot) = entry.record.snapshot() else {
-        return (box_body_lines(entry, width, now, true), 0);
+    let header = box_body(entry, width, now, true).header;
+    let header_height = header.len();
+    let Some(sections) = entry
+        .record
+        .snapshot()
+        .and_then(|snapshot| snapshot.detail.as_ref())
+    else {
+        return (header, 0);
     };
-    let Some(sections) = &snapshot.detail else {
-        return (Vec::new(), 0);
-    };
+    let (lines, selected_row) = section_lines(sections, selected, width);
+    let mut all = header;
+    all.extend(dim_if_stale(lines, entry, now));
+    (all, selected_row.saturating_add(header_height))
+}
+
+fn section_lines(
+    sections: &[DetailSection],
+    selected: usize,
+    width: usize,
+) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::new();
     let mut item_index = 0;
     let mut selected_row = 0;
@@ -538,6 +551,20 @@ mod tests {
             .collect()
     }
 
+    fn border_cells(buffer: &Buffer) -> Vec<(Option<Color>, Modifier)> {
+        let area = buffer.area;
+        (0..area.height)
+            .flat_map(|row| (0..area.width).map(move |column| (column, row)))
+            .filter(|&(column, row)| buffer[(column, row)].symbol() == "┌")
+            .map(|(column, row)| {
+                (
+                    buffer[(column, row)].fg.into(),
+                    buffer[(column, row)].modifier,
+                )
+            })
+            .collect()
+    }
+
     fn style_of_text(buffer: &Buffer, needle: &str) -> Option<Style> {
         let area = buffer.area;
         for row in 0..area.height {
@@ -577,6 +604,7 @@ mod tests {
         let state = state_with(vec![entry("kanban", failed("plugin quebrou"))]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("plugin quebrou"), "{text}");
+        assert!(!text.contains("Kanban"), "{text}");
         assert!(!text.contains("sem atualizar"), "{text}");
         assert!(!text.contains("carregando"), "{text}");
         let style = style_of_text(&buffer_of(&state, 100, 30, now()), "plugin quebrou");
@@ -618,9 +646,12 @@ mod tests {
         let lines = (1..=10)
             .map(|number| plain_line(&format!("linha {number}")))
             .collect();
-        let mut capped = entry("agenda", ready(snapshot("Agenda", lines)));
+        let mut failing = ready_at(snapshot("Agenda", lines), now() - TimeDelta::minutes(45));
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let mut capped = entry("agenda", failing);
         capped.max_items = Some(3);
         let text = screen(&state_with(vec![capped]), 100, 30);
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
         assert!(text.contains("linha 2"), "{text}");
         assert!(text.contains("+8 itens"), "{text}");
         assert!(!text.contains("linha 3"), "{text}");
@@ -678,35 +709,116 @@ mod tests {
     }
 
     #[test]
-    fn failure_after_success_shows_error_line_above_old_snapshot() {
-        let mut record = ready(snapshot("Kanban", vec![plain_line("inbox 3")]));
-        record.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
-        let state = state_with(vec![entry("kanban", record)]);
+    fn failure_after_success_shows_reason_and_age_in_focus_mode() {
+        let old = ready_at(kanban_snapshot(), now() - TimeDelta::minutes(45));
+        let mut failing = old;
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let mut state = state_with(vec![entry("kanban", failing)]);
+        press(&mut state, &[KeyInput::Enter]);
         let rows = draw(&state, 100, 30);
         let failure = rows
             .iter()
             .position(|row| row.contains("⚠ falha: fora do ar"));
-        let old_data = rows.iter().position(|row| row.contains("inbox 3"));
+        let age = rows
+            .iter()
+            .position(|row| row.contains("sem atualizar há 45 min"));
+        let old_data = rows.iter().position(|row| row.contains("Tarefa A"));
         assert!(failure.is_some(), "{rows:?}");
-        assert!(old_data.is_some(), "{rows:?}");
-        assert!(failure < old_data, "{rows:?}");
+        assert!(failure < age && age < old_data, "{rows:?}");
+        assert!(border_colors(&buffer_of(&state, 100, 30, now())).contains(&Some(Color::Red)));
     }
 
     #[test]
-    fn ia_failure_after_idle_snapshot_is_shown() {
+    fn home_hides_failure_reason_even_when_selected() {
+        let mut failing = ready_at(
+            snapshot("Kanban", vec![plain_line("inbox 3")]),
+            now() - TimeDelta::minutes(45),
+        );
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let state = state_with(vec![entry("kanban", failing)]);
+        let text = screen(&state, 100, 30);
+        assert!(!text.contains("falha:"), "{text}");
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
+        assert!(border_colors(&buffer_of(&state, 100, 30, now())).contains(&Some(Color::Red)));
+    }
+
+    #[test]
+    fn failing_border_is_bold_only_when_focused() {
+        let mut failing = ready(snapshot("Kanban", vec![plain_line("inbox 3")]));
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let focused = state_with(vec![entry("kanban", failing.clone())]);
+        assert_eq!(
+            border_cells(&buffer_of(&focused, 100, 30, now())),
+            vec![(Some(Color::Red), Modifier::BOLD)]
+        );
+        let unfocused = state_with(vec![kanban_entry(), entry("kanban", failing)]);
+        let cells = border_cells(&buffer_of(&unfocused, 100, 30, now()));
+        assert!(
+            cells.contains(&(Some(Color::Red), Modifier::empty())),
+            "{cells:?}"
+        );
+    }
+
+    #[test]
+    fn stale_dimming_skips_failure_line() {
+        let mut stale = ready_at(
+            snapshot("Kanban", vec![plain_line("inbox 3")]),
+            now() - TimeDelta::minutes(5),
+        );
+        stale.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let state = state_with(vec![entry("kanban", stale)]);
+        let buffer = buffer_of(&state, 100, 30, now());
+        let age = style_of_text(&buffer, "sem atualizar");
+        let data = style_of_text(&buffer, "inbox 3");
+        assert!(age.is_some_and(|style| !style.add_modifier.contains(Modifier::DIM)));
+        assert!(data.is_some_and(|style| style.add_modifier.contains(Modifier::DIM)));
+    }
+
+    #[test]
+    fn ia_failure_after_idle_snapshot_is_shown_in_focus_mode() {
         let mut record = ready(snapshot("IA", vec![plain_line("Sem recomendação ainda")]));
         record.apply(
             Err::<WidgetSnapshot, _>("modelo indisponível".to_string()),
             now(),
         );
-        let state = state_with(vec![entry("ia", record)]);
+        let mut state = state_with(vec![entry("ia", record)]);
+        press(&mut state, &[KeyInput::Enter]);
         assert!(screen(&state, 100, 30).contains("falha: modelo indisponível"));
     }
 
     #[test]
-    fn failed_widget_shows_error_inside_its_box() {
-        let state = state_with(vec![entry("kanban", failed("plugin quebrou"))]);
-        assert!(screen(&state, 100, 30).contains("plugin quebrou"));
+    fn focus_column_needs_at_least_minimum_width() {
+        let mut state = state_with(vec![kanban_entry()]);
+        press(&mut state, &[KeyInput::Enter]);
+        assert!(!screen(&state, 24, 30).contains("Kanban 2 itens"));
+        assert!(screen(&state, 25, 30).contains("Kanban 2 itens"));
+    }
+
+    #[test]
+    fn first_refresh_without_snapshot_shows_indicator_and_loading() {
+        let mut refreshing = WidgetRecord::loading();
+        refreshing.begin_refresh();
+        let state = state_with(vec![entry("kanban", refreshing)]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("[A] kanban ⟳"), "{text}");
+        assert!(text.contains("carregando…"), "{text}");
+    }
+
+    #[test]
+    fn max_items_counts_only_body_lines_below_failure_header() {
+        let lines = (1..=5)
+            .map(|number| plain_line(&format!("linha {number}")))
+            .collect();
+        let mut failing = ready_at(snapshot("Agenda", lines), now() - TimeDelta::minutes(45));
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let mut capped = entry("agenda", failing);
+        capped.max_items = Some(5);
+        let text = screen(&state_with(vec![capped]), 100, 30);
+        for number in 1..=5 {
+            assert!(text.contains(&format!("linha {number}")), "{text}");
+        }
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
+        assert!(!text.contains("+"), "{text}");
     }
 
     #[test]
