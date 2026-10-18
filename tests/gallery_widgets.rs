@@ -4,9 +4,9 @@ use std::path::Path;
 use std::process::Command;
 
 use mosaic::application::ports::SourceError;
+use mosaic::domain::blocks::{Block, BLOCK_TYPE_NAMES};
 use mosaic::domain::snapshot_report::Severity;
 use mosaic::domain::widget::WidgetId;
-use mosaic::domain::widget_content::{Block, BLOCK_TYPE_NAMES};
 use mosaic::infrastructure::config::WidgetSettings;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;

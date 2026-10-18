@@ -16,8 +16,9 @@ pub fn with_interval_notice(state: WidgetState, seconds: u64) -> WidgetState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::blocks::Block;
     use crate::domain::widget::{Summary, WidgetSnapshot};
-    use crate::domain::widget_content::{Block, Tone};
+    use crate::domain::widget_content::Tone;
 
     fn ready(blocks: Vec<Block>) -> WidgetState {
         WidgetState::Ready(WidgetSnapshot {

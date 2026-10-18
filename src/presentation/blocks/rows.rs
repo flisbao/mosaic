@@ -3,7 +3,10 @@ use ratatui::text::Line;
 use unicode_width::UnicodeWidthChar;
 
 use super::BlockRenderer;
-use crate::domain::widget_content::{Block, Row, Tag};
+use crate::domain::blocks::{
+    rows::{Row, Tag},
+    Block,
+};
 use crate::presentation::text_fit::{
     clip_pieces, display_width, fit_pieces, flagged, pieces_width, tone_style, truncate_to_width,
     Piece, TAG_SEPARATOR,

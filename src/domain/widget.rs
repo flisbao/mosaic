@@ -1,4 +1,5 @@
-use crate::domain::widget_content::{Alert, Block, Tone, WidgetLine};
+use crate::domain::blocks::{lines::WidgetLine, Block};
+use crate::domain::widget_content::{Alert, Tone};
 
 pub const FLAG_NAMES: [&str; 2] = ["updated", "warning"];
 
@@ -127,7 +128,8 @@ pub enum WidgetState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::widget_content::{Block, Tone, WidgetLine};
+    use crate::domain::blocks::{lines::WidgetLine, Block};
+    use crate::domain::widget_content::Tone;
 
     fn widget_line(text: &str) -> WidgetLine {
         WidgetLine {

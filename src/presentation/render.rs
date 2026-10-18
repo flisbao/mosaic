@@ -766,36 +766,37 @@ mod tests {
         }
     }
 
+    use crate::domain::blocks;
     use crate::domain::widget_content;
 
-    fn widget_line(text: &str) -> widget_content::WidgetLine {
-        widget_content::WidgetLine {
+    fn widget_line(text: &str) -> blocks::lines::WidgetLine {
+        blocks::lines::WidgetLine {
             text: text.to_string(),
             tone: widget_content::Tone::Normal,
             flag: None,
         }
     }
 
-    fn widget_cell(text: &str) -> widget_content::Cell {
-        widget_content::Cell {
+    fn widget_cell(text: &str) -> blocks::table::Cell {
+        blocks::table::Cell {
             text: text.to_string(),
             tone: widget_content::Tone::Normal,
             flag: None,
         }
     }
 
-    fn entry_with_blocks(blocks: Vec<widget_content::Block>) -> WidgetEntry {
+    fn entry_with_blocks(blocks: Vec<blocks::Block>) -> WidgetEntry {
         let mut widget_snapshot = snapshot("Agenda", vec![]);
         widget_snapshot.summary.blocks = blocks;
         entry("agenda", WidgetState::Ready(widget_snapshot), true)
     }
 
-    fn rows_and_stat_blocks() -> Vec<widget_content::Block> {
+    fn rows_and_stat_blocks() -> Vec<blocks::Block> {
         vec![
-            widget_content::Block::Rows(vec![widget_content::Row {
+            blocks::Block::Rows(vec![blocks::rows::Row {
                 time: Some("09:00".to_string()),
                 text: "Daily".to_string(),
-                tags: vec![widget_content::Tag {
+                tags: vec![blocks::rows::Tag {
                     text: "agora".to_string(),
                     tone: widget_content::Tone::Warn,
                 }],
@@ -803,8 +804,8 @@ mod tests {
                 marker: Some('▶'),
                 flag: None,
             }]),
-            widget_content::Block::Stat {
-                items: vec![widget_content::StatItem {
+            blocks::Block::Stat {
+                items: vec![blocks::stat::StatItem {
                     value: "3".to_string(),
                     label: "reuniões".to_string(),
                     tone: widget_content::Tone::Ok,
@@ -826,8 +827,8 @@ mod tests {
 
     #[test]
     fn home_box_renders_a_table() {
-        let table = widget_content::Block::Table {
-            columns: vec![widget_content::Column {
+        let table = blocks::Block::Table {
+            columns: vec![blocks::table::Column {
                 title: "Nome".to_string(),
                 align: widget_content::Align::Left,
             }],
@@ -867,9 +868,7 @@ mod tests {
             panic!("esperava Ready");
         };
         let sections = snapshot.detail.as_mut().unwrap();
-        sections[0].blocks = vec![widget_content::Block::Lines(vec![widget_line(
-            "RESUMO DA SEÇÃO",
-        )])];
+        sections[0].blocks = vec![blocks::Block::Lines(vec![widget_line("RESUMO DA SEÇÃO")])];
         let mut state = AppState::new(vec![entry]);
         press(&mut state, &[KeyInput::Tab]);
         let rows = draw(&state, 100, 30);
@@ -884,7 +883,7 @@ mod tests {
         let WidgetState::Ready(snapshot) = &mut entry.state else {
             panic!("esperava Ready");
         };
-        snapshot.detail.as_mut().unwrap()[0].blocks = vec![widget_content::Block::Lines(vec![
+        snapshot.detail.as_mut().unwrap()[0].blocks = vec![blocks::Block::Lines(vec![
             widget_line("a"),
             widget_line("b"),
         ])];
@@ -899,7 +898,7 @@ mod tests {
     fn small_terminal_with_blocks_does_not_panic() {
         let wide = "日本語".repeat(40);
         let columns = (0..10)
-            .map(|_| widget_content::Column {
+            .map(|_| blocks::table::Column {
                 title: wide.clone(),
                 align: widget_content::Align::Right,
             })
@@ -908,8 +907,8 @@ mod tests {
             .map(|_| (0..10).map(|_| widget_cell(&wide)).collect())
             .collect();
         let mut blocks = rows_and_stat_blocks();
-        blocks.push(widget_content::Block::Table { columns, rows });
-        blocks.push(widget_content::Block::Lines(vec![widget_line(&wide); 200]));
+        blocks.push(blocks::Block::Table { columns, rows });
+        blocks.push(blocks::Block::Lines(vec![widget_line(&wide); 200]));
         let mut state = AppState::new(vec![entry_with_blocks(blocks)]);
         for size in 0..=14 {
             draw(&state, size, size);

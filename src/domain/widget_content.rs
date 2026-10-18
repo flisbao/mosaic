@@ -1,9 +1,6 @@
-use crate::domain::widget::Flag;
-
 const ELLIPSIS: char = '…';
 
 pub const TONE_NAMES: [&str; 6] = ["normal", "muted", "ok", "warn", "danger", "current"];
-pub const BLOCK_TYPE_NAMES: [&str; 4] = ["lines", "rows", "stat", "table"];
 
 const FORMAT_CHARACTER_RANGES: [(u32, u32); 19] = [
     (0x00AD, 0x00AD),
@@ -55,63 +52,6 @@ impl Tone {
 pub enum Align {
     Left,
     Right,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct WidgetLine {
-    pub text: String,
-    pub tone: Tone,
-    pub flag: Option<Flag>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Tag {
-    pub text: String,
-    pub tone: Tone,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row {
-    pub time: Option<String>,
-    pub text: String,
-    pub tags: Vec<Tag>,
-    pub tone: Tone,
-    pub marker: Option<char>,
-    pub flag: Option<Flag>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StatItem {
-    pub value: String,
-    pub label: String,
-    pub tone: Tone,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Column {
-    pub title: String,
-    pub align: Align,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Cell {
-    pub text: String,
-    pub tone: Tone,
-    pub flag: Option<Flag>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Block {
-    Lines(Vec<WidgetLine>),
-    Rows(Vec<Row>),
-    Stat {
-        items: Vec<StatItem>,
-        hint: Option<String>,
-    },
-    Table {
-        columns: Vec<Column>,
-        rows: Vec<Vec<Cell>>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

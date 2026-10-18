@@ -1,6 +1,6 @@
 use ratatui::text::Line;
 
-use crate::domain::widget_content::Block;
+use crate::domain::blocks::Block;
 use crate::presentation::blocks::render_block;
 
 pub fn render_blocks(blocks: &[Block], width: usize) -> Vec<Line<'static>> {
@@ -28,10 +28,14 @@ pub fn lines_to_plain_text(lines: &[Line]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::widget::Flag;
-    use crate::domain::widget_content::{
-        Align, Cell, Column, Row, StatItem, Tag, Tone, WidgetLine,
+    use crate::domain::blocks::{
+        lines::WidgetLine,
+        rows::{Row, Tag},
+        stat::StatItem,
+        table::{Cell, Column},
     };
+    use crate::domain::widget::Flag;
+    use crate::domain::widget_content::{Align, Tone};
     use crate::presentation::text_fit::{display_width, tone_style};
     use ratatui::style::{Color, Modifier};
 

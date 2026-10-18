@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use mosaic::domain::blocks::BLOCK_TYPE_NAMES;
 use mosaic::domain::snapshot_report::Severity;
 use mosaic::domain::widget::FLAG_NAMES;
-use mosaic::domain::widget_content::{BLOCK_TYPE_NAMES, TONE_NAMES};
+use mosaic::domain::widget_content::TONE_NAMES;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use serde_json::Value;
 

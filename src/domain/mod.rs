@@ -1,4 +1,5 @@
 pub mod action;
+pub mod blocks;
 pub mod error;
 pub mod layout;
 pub mod pomodoro;

@@ -5,7 +5,7 @@ mod table;
 
 use ratatui::text::Line;
 
-use crate::domain::widget_content::Block;
+use crate::domain::blocks::Block;
 
 use lines::LinesRenderer;
 use rows::RowsRenderer;

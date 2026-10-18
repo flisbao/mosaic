@@ -1,7 +1,7 @@
 use ratatui::text::{Line, Span};
 
 use super::BlockRenderer;
-use crate::domain::widget_content::{Block, WidgetLine};
+use crate::domain::blocks::{lines::WidgetLine, Block};
 use crate::presentation::text_fit::{flagged, tone_style, truncate_to_width};
 
 pub struct LinesRenderer;

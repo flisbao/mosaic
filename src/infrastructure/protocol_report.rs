@@ -1,11 +1,17 @@
 use serde_json::{Map, Value};
 
+use crate::domain::blocks::{
+    lines::{WidgetLine, MAXIMUM_LINES_PER_BLOCK},
+    rows::{Row, Tag, MAXIMUM_TAGS_PER_ROW},
+    stat::{StatItem, MAXIMUM_STAT_ITEMS},
+    table::{Cell, Column, MAXIMUM_TABLE_COLUMNS},
+    Block,
+};
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetSnapshot,
 };
 use crate::domain::widget_content::{
-    clean_text, clean_text_limited, Alert, AlertLevel, Align, Block, Cell, Column, Row, StatItem,
-    Tag, Tone, WidgetLine,
+    clean_text, clean_text_limited, Alert, AlertLevel, Align, Tone,
 };
 use crate::infrastructure::plugin_protocol::ProtocolError;
 
@@ -16,15 +22,11 @@ pub const MAXIMUM_TEXT_CHARACTERS: usize = 500;
 pub const MAXIMUM_ALERT_ID_CHARACTERS: usize = 100;
 pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
 pub const MAXIMUM_BLOCKS_PER_WIDGET: usize = 20;
-pub const MAXIMUM_LINES_PER_BLOCK: usize = 200;
-pub const MAXIMUM_TAGS_PER_ROW: usize = 3;
 pub const MAXIMUM_LEGACY_LINES: usize = 200;
 pub const MAXIMUM_SECTIONS: usize = 100;
 pub const MAXIMUM_ITEMS_PER_SECTION: usize = 1000;
 pub const MAXIMUM_ACTIONS: usize = 100;
 pub const MAXIMUM_KEY_CHARACTERS: usize = 100;
-pub const MAXIMUM_STAT_ITEMS: usize = 8;
-pub const MAXIMUM_TABLE_COLUMNS: usize = 10;
 
 const EMPTY_PARAMS_JSON: &str = "{}";
 const UNKNOWN_FIELD_MESSAGE: &str = "campo desconhecido";
@@ -776,10 +778,15 @@ fn parse_flag(name: &str) -> Option<Flag> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::widget::Flag;
-    use crate::domain::widget_content::{
-        AlertLevel, Align, Block, Cell, Column, Row, StatItem, Tag, Tone, WidgetLine,
+    use crate::domain::blocks::{
+        lines::WidgetLine,
+        rows::{Row, Tag},
+        stat::StatItem,
+        table::{Cell, Column},
+        Block,
     };
+    use crate::domain::widget::Flag;
+    use crate::domain::widget_content::{AlertLevel, Align, Tone};
 
     fn report(json: &str) -> ParsedSnapshot {
         parse_snapshot_report(json).unwrap()

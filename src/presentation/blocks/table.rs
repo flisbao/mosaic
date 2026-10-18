@@ -2,7 +2,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
 use super::BlockRenderer;
-use crate::domain::widget_content::{Align, Block, Cell, Column};
+use crate::domain::blocks::{
+    table::{Cell, Column},
+    Block,
+};
+use crate::domain::widget_content::Align;
 use crate::presentation::text_fit::{
     clip_pieces, display_width, flagged, tone_style, truncate_to_width, Piece,
 };
