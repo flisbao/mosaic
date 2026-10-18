@@ -155,7 +155,7 @@ fn run_check(arguments: &[String]) -> ExitCode {
         interval_adjusted: false,
         timeout_seconds: CHECK_TIMEOUT_SECONDS,
         span: DEFAULT_SPAN,
-        tab: false,
+        max_items: None,
         llm_sections: vec![],
         llm_max_items: DEFAULT_LLM_MAX_ITEMS,
         llm_max_characters_per_item: DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
@@ -199,7 +199,7 @@ fn run() -> Result<(), AppError> {
         .map(|widget| WidgetEntry {
             id: widget.id.clone(),
             state: WidgetState::Loading,
-            has_tab: widget.tab,
+            has_tab: true,
         })
         .collect();
     if let Some(llm) = &services.llm {

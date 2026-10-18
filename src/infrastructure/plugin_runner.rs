@@ -82,7 +82,7 @@ mod tests {
             interval_adjusted: false,
             timeout_seconds,
             span: 1,
-            tab: false,
+            max_items: None,
             llm_sections: vec![],
             llm_max_items: 20,
             llm_max_characters_per_item: 120,

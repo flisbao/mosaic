@@ -21,12 +21,14 @@ pub const DEFAULT_CYCLES_BEFORE_LONG_BREAK: u32 = 4;
 pub const DEFAULT_LLM_TIMEOUT_SECONDS: u64 = 120;
 pub const DEFAULT_PRIORITY_PROMPT: &str = "prompts/prioridade.md";
 pub const DEFAULT_SUGGESTIONS: [&str; 3] = ["Beber água", "Levantar e alongar", "Tomar um café"];
+pub const IMPLICIT_TAB_NAME: &str = "Mosaic";
 
 const CONFIG_DIRECTORY_NAME: &str = "mosaic";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const SECONDS_PER_MINUTE: u64 = 60;
 const POMODORO_SECTION: &str = "pomodoro";
 const LLM_SECTION: &str = "llm";
+const FIRST_TAB_INDEX: usize = 0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WidgetSettings {
@@ -38,10 +40,16 @@ pub struct WidgetSettings {
     pub interval_adjusted: bool,
     pub timeout_seconds: u64,
     pub span: u16,
-    pub tab: bool,
+    pub max_items: Option<usize>,
     pub llm_sections: Vec<String>,
     pub llm_max_items: usize,
     pub llm_max_characters_per_item: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabSettings {
+    pub name: String,
+    pub widget_ids: Vec<WidgetId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,8 +97,10 @@ pub struct LlmConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub widgets: Vec<WidgetSettings>,
+    pub tabs: Vec<TabSettings>,
     pub pomodoro: PomodoroConfig,
     pub llm: LlmConfig,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -108,6 +118,10 @@ pub enum ConfigError {
         section: String,
         field: &'static str,
     },
+    #[error("widget '{widget}': aba '{tab}' não existe na configuração")]
+    UnknownTab { widget: String, tab: String },
+    #[error("nome de aba duplicado na configuração: '{0}'")]
+    DuplicateTabName(String),
     #[error("[llm]: harness desconhecido '{0}' (use \"claude\" ou \"opencode\")")]
     UnknownHarness(String),
     #[error("não foi possível descobrir o diretório de configuração")]
@@ -117,11 +131,25 @@ pub enum ConfigError {
 #[derive(Deserialize)]
 struct RawConfig {
     #[serde(default)]
+    tabs: Vec<RawTabSection>,
+    #[serde(default)]
     widgets: Vec<RawWidget>,
     #[serde(default)]
     pomodoro: RawPomodoro,
     #[serde(default)]
     llm: RawLlm,
+}
+
+#[derive(Deserialize)]
+struct RawTabSection {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawTab {
+    Legacy(bool),
+    Name(String),
 }
 
 #[derive(Deserialize)]
@@ -135,8 +163,8 @@ struct RawWidget {
     interval_seconds: Option<u64>,
     timeout_seconds: Option<u64>,
     span: Option<u16>,
-    #[serde(default)]
-    tab: bool,
+    tab: Option<RawTab>,
+    max_items: Option<usize>,
     #[serde(default)]
     llm_sections: Vec<String>,
     llm_max_items: Option<usize>,
@@ -171,17 +199,88 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         toml::from_str(text).map_err(|error| ConfigError::Parse(error.to_string()))?;
     let mut seen = HashSet::new();
     let mut widgets = Vec::new();
-    for widget in raw.widgets {
+    let mut tab_assignments = Vec::new();
+    let mut warnings = Vec::new();
+    for mut widget in raw.widgets {
         if !seen.insert(widget.id.clone()) {
             return Err(ConfigError::DuplicateWidgetId(widget.id));
         }
+        let tab_name = named_tab(&widget.id, widget.tab.take(), &mut warnings);
+        tab_assignments.push(TabAssignment {
+            widget_id: widget.id.clone(),
+            tab_name,
+        });
         widgets.push(convert_widget(widget)?);
     }
     Ok(AppConfig {
         widgets,
+        tabs: build_tabs(raw.tabs, &tab_assignments)?,
         pomodoro: convert_pomodoro(raw.pomodoro)?,
         llm: convert_llm(raw.llm)?,
+        warnings,
     })
+}
+
+struct TabAssignment {
+    widget_id: String,
+    tab_name: Option<String>,
+}
+
+fn named_tab(widget_id: &str, tab: Option<RawTab>, warnings: &mut Vec<String>) -> Option<String> {
+    match tab {
+        Some(RawTab::Name(name)) => Some(name),
+        Some(RawTab::Legacy(true)) => {
+            warnings.push(format!(
+                "widget '{widget_id}': 'tab = true' foi aposentado e é ignorado"
+            ));
+            None
+        }
+        Some(RawTab::Legacy(false)) | None => None,
+    }
+}
+
+fn build_tabs(
+    raw_tabs: Vec<RawTabSection>,
+    assignments: &[TabAssignment],
+) -> Result<Vec<TabSettings>, ConfigError> {
+    let mut tabs = if raw_tabs.is_empty() {
+        vec![TabSettings {
+            name: IMPLICIT_TAB_NAME.to_string(),
+            widget_ids: Vec::new(),
+        }]
+    } else {
+        unique_tabs(raw_tabs)?
+    };
+    for assignment in assignments {
+        let index = match &assignment.tab_name {
+            None => FIRST_TAB_INDEX,
+            Some(name) => tabs
+                .iter()
+                .position(|tab| &tab.name == name)
+                .ok_or_else(|| ConfigError::UnknownTab {
+                    widget: assignment.widget_id.clone(),
+                    tab: name.clone(),
+                })?,
+        };
+        tabs[index]
+            .widget_ids
+            .push(WidgetId::new(assignment.widget_id.clone()));
+    }
+    Ok(tabs)
+}
+
+fn unique_tabs(raw_tabs: Vec<RawTabSection>) -> Result<Vec<TabSettings>, ConfigError> {
+    let mut tabs: Vec<TabSettings> = Vec::with_capacity(raw_tabs.len());
+    for raw_tab in raw_tabs {
+        if tabs.iter().any(|tab| tab.name == raw_tab.name) {
+            return Err(ConfigError::DuplicateTabName(raw_tab.name));
+        }
+        tabs.push(TabSettings {
+            name: raw_tab.name,
+            widget_ids: Vec::new(),
+        });
+    }
+    Ok(tabs)
 }
 
 fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
@@ -198,6 +297,7 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
         &widget.id,
         "timeout_seconds",
     )?;
+    let max_items = positive_limit(widget.max_items, &widget.id, "max_items")?;
     let llm_max_items = positive_or_default(
         widget.llm_max_items.map(|value| value as u64),
         DEFAULT_LLM_MAX_ITEMS as u64,
@@ -219,7 +319,7 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
         interval_adjusted: interval_seconds != configured_interval,
         timeout_seconds,
         span: widget.span.unwrap_or(DEFAULT_SPAN),
-        tab: widget.tab,
+        max_items,
         llm_sections: widget.llm_sections,
         llm_max_items,
         llm_max_characters_per_item,
@@ -311,6 +411,20 @@ fn positive_or_default(
     }
 }
 
+fn positive_limit(
+    value: Option<usize>,
+    widget: &str,
+    field: &'static str,
+) -> Result<Option<usize>, ConfigError> {
+    match value {
+        Some(0) => Err(ConfigError::InvalidValue {
+            widget: widget.to_string(),
+            field,
+        }),
+        other => Ok(other),
+    }
+}
+
 fn positive_setting(
     value: Option<u64>,
     default: u64,
@@ -373,7 +487,7 @@ mod tests {
         assert!(!widget.interval_adjusted);
         assert_eq!(widget.timeout_seconds, 3);
         assert_eq!(widget.span, 2);
-        assert!(widget.tab);
+        assert_eq!(widget.max_items, None);
     }
 
     #[test]
@@ -384,7 +498,7 @@ mod tests {
         assert!(!widget.interval_adjusted);
         assert_eq!(widget.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
         assert_eq!(widget.span, DEFAULT_SPAN);
-        assert!(!widget.tab);
+        assert_eq!(widget.max_items, None);
         assert!(widget.args.is_empty());
         assert!(widget.env.is_empty());
     }
@@ -650,6 +764,130 @@ mod tests {
         .unwrap();
         let ids: Vec<&str> = config.widgets.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, vec!["b", "a"]);
+    }
+
+    fn tab_widget_ids(tab: &TabSettings) -> Vec<&str> {
+        tab.widget_ids.iter().map(WidgetId::as_str).collect()
+    }
+
+    #[test]
+    fn without_tabs_section_all_widgets_land_in_one_implicit_tab() {
+        let config = parse_config(
+            "[[widgets]]\nid = \"b\"\ncommand = \"x\"\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.tabs.len(), 1);
+        assert_eq!(config.tabs[0].name, IMPLICIT_TAB_NAME);
+        assert_eq!(tab_widget_ids(&config.tabs[0]), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn widget_goes_to_the_tab_it_names_and_unnamed_goes_to_first() {
+        let config = parse_config(
+            r#"
+            [[tabs]]
+            name = "Trabalho"
+
+            [[tabs]]
+            name = "Pessoal"
+
+            [[widgets]]
+            id = "a"
+            command = "x"
+            tab = "Pessoal"
+
+            [[widgets]]
+            id = "b"
+            command = "x"
+
+            [[widgets]]
+            id = "c"
+            command = "x"
+            tab = "Trabalho"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.tabs[0].name, "Trabalho");
+        assert_eq!(tab_widget_ids(&config.tabs[0]), vec!["b", "c"]);
+        assert_eq!(config.tabs[1].name, "Pessoal");
+        assert_eq!(tab_widget_ids(&config.tabs[1]), vec!["a"]);
+    }
+
+    #[test]
+    fn unknown_tab_name_is_an_error_naming_widget_and_tab() {
+        let result = parse_config(
+            "[[tabs]]\nname = \"Trabalho\"\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = \"Inexistente\"\n",
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::UnknownTab {
+                widget: "a".to_string(),
+                tab: "Inexistente".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn tab_name_without_tabs_section_is_unknown() {
+        let result = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = \"Trabalho\"\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::UnknownTab {
+                widget: "a".to_string(),
+                tab: "Trabalho".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn duplicate_tab_names_are_rejected() {
+        let result = parse_config("[[tabs]]\nname = \"A\"\n[[tabs]]\nname = \"A\"\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::DuplicateTabName("A".to_string())
+        );
+    }
+
+    #[test]
+    fn tab_without_widgets_is_kept_and_empty() {
+        let config = parse_config(
+            "[[tabs]]\nname = \"Vazia\"\n[[tabs]]\nname = \"Cheia\"\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = \"Cheia\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.tabs[0].name, "Vazia");
+        assert!(config.tabs[0].widget_ids.is_empty());
+        assert_eq!(tab_widget_ids(&config.tabs[1]), vec!["a"]);
+    }
+
+    #[test]
+    fn legacy_tab_true_is_ignored_with_warning() {
+        let config =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = true\n").unwrap();
+        assert_eq!(config.widgets.len(), 1);
+        assert_eq!(config.tabs.len(), 1);
+        assert_eq!(
+            config.warnings,
+            vec!["widget 'a': 'tab = true' foi aposentado e é ignorado".to_string()]
+        );
+    }
+
+    #[test]
+    fn max_items_zero_is_rejected() {
+        let result = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\nmax_items = 0\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::InvalidValue {
+                widget: "a".to_string(),
+                field: "max_items"
+            }
+        );
+    }
+
+    #[test]
+    fn max_items_is_parsed() {
+        let config =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\nmax_items = 5\n").unwrap();
+        assert_eq!(config.widgets[0].max_items, Some(5));
     }
 
     #[test]

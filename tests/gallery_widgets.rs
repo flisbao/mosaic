@@ -26,7 +26,7 @@ fn gallery_output(command: &str, script: &str) -> Result<String, SourceError> {
         interval_adjusted: false,
         timeout_seconds: 10,
         span: 1,
-        tab: false,
+        max_items: None,
         llm_sections: vec![],
         llm_max_items: 20,
         llm_max_characters_per_item: 120,

@@ -10,7 +10,6 @@ id = "kanban"
 command = "python3"
 args = ["plugins/kanban.py"]
 interval_seconds = 30
-tab = true
 llm_sections = ["inbox", "in progress", "acompanhar_jira"]
 
 [widgets.env]
@@ -54,7 +53,6 @@ priority_prompt = "prompts/prioridade.md"
 # args = ["plugins/jira.py"]
 # interval_seconds = 120
 # timeout_seconds = 45
-# tab = true
 # llm_sections = ["Sem dono", "Em andamento"]
 #
 # [widgets.env]
@@ -73,7 +71,6 @@ priority_prompt = "prompts/prioridade.md"
 # args = ["plugins/jira.py"]
 # interval_seconds = 120
 # timeout_seconds = 45
-# tab = true
 # llm_sections = ["Meus tickets"]
 #
 # [widgets.env]
@@ -153,7 +150,8 @@ mod tests {
         let config = parse_config(default_config_text()).unwrap();
         let ids: Vec<&str> = config.widgets.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, vec!["kanban", "example-python", "example-node"]);
-        assert!(config.widgets[0].tab);
+        assert!(config.warnings.is_empty());
+        assert_eq!(config.tabs.len(), 1);
     }
 
     #[test]

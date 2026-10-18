@@ -38,7 +38,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         interval_adjusted: false,
         timeout_seconds: 10,
         span: 1,
-        tab: true,
+        max_items: None,
         llm_sections: vec!["inbox".to_string()],
         llm_max_items: 20,
         llm_max_characters_per_item: 120,
