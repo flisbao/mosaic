@@ -2,8 +2,9 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -113,7 +114,7 @@ pub struct ProcessLimits {
 }
 
 struct CapturedOutput {
-    handle: JoinHandle<Vec<u8>>,
+    receiver: mpsc::Receiver<Vec<u8>>,
     overflowed: Arc<AtomicBool>,
 }
 
@@ -127,6 +128,7 @@ pub fn run_process(
         return Err(cancelled_error());
     }
     let program = command.get_program().to_string_lossy().to_string();
+    let deadline = Instant::now() + limits.timeout;
     isolate_process_group(&mut command);
     let mut child = command
         .stdin(Stdio::piped())
@@ -148,10 +150,10 @@ pub fn run_process(
     cancel.register_child(child.id());
     let stdout = capture(child.stdout.take(), limits.maximum_output_bytes, true);
     let stderr = capture(child.stderr.take(), limits.maximum_output_bytes, false);
-    let status = wait_for_exit(&mut child, &stdout, limits, cancel)?;
+    let status = wait_for_exit(&mut child, &stdout, limits, deadline, cancel)?;
 
-    let stdout_bytes = join_output(stdout, limits)?;
-    let stderr_bytes = join_output(stderr, limits)?;
+    let stdout_bytes = join_output(stdout, limits, deadline, cancel)?;
+    let stderr_bytes = join_output(stderr, limits, deadline, cancel)?;
     if !status.success() {
         let message = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
         return Err(ProcessError::new(if message.is_empty() {
@@ -168,9 +170,9 @@ fn wait_for_exit(
     child: &mut Child,
     stdout: &CapturedOutput,
     limits: &ProcessLimits,
+    deadline: Instant,
     cancel: &CancelFlag,
 ) -> Result<ExitStatus, ProcessError> {
-    let deadline = Instant::now() + limits.timeout;
     loop {
         if stdout.overflowed.load(Ordering::SeqCst) {
             cancel.terminate(child);
@@ -257,12 +259,14 @@ fn capture(
     maximum_bytes: usize,
     enforce_limit: bool,
 ) -> CapturedOutput {
+    let (sender, receiver) = mpsc::channel();
     let overflowed = Arc::new(AtomicBool::new(false));
     let overflow_flag = Arc::clone(&overflowed);
-    let handle = thread::spawn(move || {
+    thread::spawn(move || {
         let mut collected = Vec::new();
         let Some(mut stream) = stream else {
-            return collected;
+            let _ = sender.send(collected);
+            return;
         };
         let mut chunk = [0u8; READ_CHUNK_BYTES];
         loop {
@@ -280,16 +284,36 @@ fn capture(
                 }
             }
         }
-        collected
+        let _ = sender.send(collected);
     });
-    CapturedOutput { handle, overflowed }
+    CapturedOutput {
+        receiver,
+        overflowed,
+    }
 }
 
-fn join_output(output: CapturedOutput, limits: &ProcessLimits) -> Result<Vec<u8>, ProcessError> {
-    let bytes = output
-        .handle
-        .join()
-        .map_err(|_| ProcessError::new("falha ao ler a saída do processo".to_string()))?;
+fn join_output(
+    output: CapturedOutput,
+    limits: &ProcessLimits,
+    deadline: Instant,
+    cancel: &CancelFlag,
+) -> Result<Vec<u8>, ProcessError> {
+    let bytes = loop {
+        if cancel.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(timeout_error(limits));
+        }
+        match output.receiver.recv_timeout(remaining.min(POLL_INTERVAL)) {
+            Ok(bytes) => break bytes,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(ProcessError::new("falha ao ler a saída do processo"));
+            }
+        }
+    };
     if output.overflowed.load(Ordering::SeqCst) {
         return Err(overflow_error(limits));
     }
@@ -561,7 +585,7 @@ mod tests {
             elapsed < PIPE_HOLD_CANCEL_BUDGET,
             "cancel() esperou {elapsed:?} pelo neto que segura o pipe"
         );
-        assert!(runner.join().unwrap().is_ok());
+        assert!(runner.join().unwrap().is_err());
     }
 
     #[test]
@@ -685,5 +709,18 @@ mod tests {
     fn run_process_reports_stderr_on_failure() {
         let error = run(shell("echo boom >&2; exit 3"), None, &limits(5, 1024)).unwrap_err();
         assert!(error.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn descendant_holding_the_pipe_does_not_block_past_the_timeout() {
+        let started = Instant::now();
+        let error = run(
+            shell("setsid sleep 30 & echo pronto"),
+            None,
+            &limits(1, 1024),
+        )
+        .unwrap_err();
+        assert!(started.elapsed() < WAIT_LIMIT, "{:?}", started.elapsed());
+        assert!(error.to_string().contains("tempo"), "{error}");
     }
 }
