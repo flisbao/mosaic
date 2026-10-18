@@ -49,7 +49,7 @@ use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::from_crossterm;
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
-    build_tab_views, startup_notice, TabPlacement, WidgetPlacement,
+    build_tab_views, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
 };
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
@@ -61,7 +61,6 @@ const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
 const APP_DIRECTORY_NAME: &str = "mosaic";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const FALLBACK_STORE_FILE_NAME: &str = "mosaic-recommendation.json";
-const IA_WIDGET_SPAN: u16 = 1;
 const CHECK_SUBCOMMAND: &str = "check";
 const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
 const CHECK_ENV_FLAG: &str = "--env";
@@ -196,16 +195,16 @@ fn run() -> Result<(), AppError> {
 
     let (sender, receiver) = mpsc::channel();
     let services = build_services(&config, &directory, &sender);
-    let mut spans: Vec<u16> = config.widgets.iter().map(|widget| widget.span).collect();
     let clock = SystemClock;
     let ia_record = services
         .llm
         .as_ref()
         .map(|llm| stored_ia_record(llm.store.as_ref(), clock.now()));
-    if services.llm.is_some() {
-        spans.push(IA_WIDGET_SPAN);
-    }
-    let (entries, tabs) = build_tab_views(
+    let TabLayout {
+        entries,
+        tabs,
+        spans,
+    } = build_tab_views(
         &widget_placements(&config),
         &tab_placements(&config),
         ia_record,
@@ -240,6 +239,7 @@ fn widget_placements(config: &AppConfig) -> Vec<WidgetPlacement> {
             id: widget.id.clone(),
             interval: Duration::from_secs(widget.interval_seconds),
             max_items: widget.max_items,
+            span: widget.span,
         })
         .collect()
 }
