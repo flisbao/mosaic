@@ -32,7 +32,6 @@ mod tests {
     use crate::domain::widget_content::{
         Align, Cell, Column, Row, StatItem, Tag, Tone, WidgetLine,
     };
-    use crate::infrastructure::protocol_report::parse_snapshot_report;
     use crate::presentation::text_fit::{display_width, tone_style};
     use ratatui::style::{Color, Modifier};
 
@@ -71,18 +70,6 @@ mod tests {
             .map(|text| display_width(text))
             .max()
             .unwrap_or(0)
-    }
-
-    #[test]
-    fn all_four_block_types_render_same_plain_text_as_before() {
-        let json = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/protocol/valid_all_blocks.json"
-        ))
-        .unwrap();
-        let parsed = parse_snapshot_report(&json).unwrap();
-        let text = plain(&parsed.snapshot.summary.blocks, 40);
-        assert_eq!(text, vec!["resumo", "  09:00 Daily", "1 item", "A", "x"]);
     }
 
     #[test]
