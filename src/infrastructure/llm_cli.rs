@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -170,7 +170,7 @@ impl Cancellable for OpenCodeCli {
 
 fn run_cli(
     program: &str,
-    working_directory: &PathBuf,
+    working_directory: &Path,
     arguments: &[String],
     environment: &[(String, String)],
     stdin_text: Option<&str>,
