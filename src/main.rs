@@ -1,3 +1,5 @@
+mod check_command;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +13,6 @@ use std::time::{Duration, Instant};
 use chrono::NaiveDateTime;
 use crossterm::event::{self, Event};
 use mosaic::application::alert_tracker::AlertTracker;
-use mosaic::application::check_report::build_check_report;
 use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
 use mosaic::application::llm::{
     execute_recommendation, LlmError, LlmRunner, RecommendationOutcome, RecommendationStore,
@@ -37,16 +38,14 @@ use mosaic::domain::widget::WidgetSnapshot;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
-    config_directory, config_file_path, load_config, parse_config, prepare_reload,
-    read_config_file, reload_notice, retain_restart_sections, AppConfig, ConfigError, Harness,
-    LlmConfig, WidgetSettings, DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
-    DEFAULT_LLM_MAX_ITEMS, DEFAULT_SPAN,
+    config_directory, config_file_path, load_config, prepare_reload, read_config_file,
+    reload_notice, retain_restart_sections, AppConfig, ConfigError, Harness, LlmConfig,
+    WidgetSettings,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
 use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
-use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use mosaic::infrastructure::recommendation_file::{
     default_recommendation_path, FileRecommendationStore, NullRecommendationStore,
 };
@@ -60,7 +59,6 @@ use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
 };
-use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
 
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -73,15 +71,6 @@ const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório 
 const NO_STATE_DIRECTORY_STORE_WARNING: &str =
     "recomendações não serão salvas: não há diretório de estado do usuário";
 const CHECK_SUBCOMMAND: &str = "check";
-const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
-const CHECK_ENV_FLAG: &str = "--env";
-const CHECK_WIDGET_ID: &str = "check";
-const CHECK_TIMEOUT_SECONDS: u64 = 10;
-const CHECK_PREVIEW_WIDTH: usize = 60;
-const EXIT_CODE_USAGE: u8 = 2;
-const EXIT_CODE_FAILURE: u8 = 1;
-const CHECK_CONFIG_FLAG: &str = "--config";
-const CHECK_CONFIG_USAGE: &str = "uso: mosaic check --config [caminho]";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
@@ -199,114 +188,10 @@ struct Services {
     config: AppConfig,
 }
 
-struct CheckInvocation {
-    command: String,
-    args: Vec<String>,
-    env: Vec<(String, String)>,
-}
-
-fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, String> {
-    let mut command = None;
-    let mut args = Vec::new();
-    let mut env = Vec::new();
-    let mut remaining = arguments.iter();
-    while let Some(argument) = remaining.next() {
-        if argument != CHECK_ENV_FLAG {
-            match command {
-                None => command = Some(argument.clone()),
-                Some(_) => args.push(argument.clone()),
-            }
-            continue;
-        }
-        let assignment = remaining
-            .next()
-            .ok_or_else(|| format!("{CHECK_ENV_FLAG} precisa de NOME=valor\n{CHECK_USAGE}"))?;
-        match assignment.split_once('=') {
-            Some((name, value)) if !name.is_empty() => {
-                env.push((name.to_string(), value.to_string()))
-            }
-            _ => return Err(format!("variável inválida: {assignment}\n{CHECK_USAGE}")),
-        }
-    }
-    let command = command.ok_or_else(|| CHECK_USAGE.to_string())?;
-    Ok(CheckInvocation { command, args, env })
-}
-
-fn check_preview(snapshot: &WidgetSnapshot) -> Vec<String> {
-    let blocks = snapshot.summary.display_blocks();
-    lines_to_plain_text(&render_blocks(&blocks, CHECK_PREVIEW_WIDTH))
-}
-
-fn run_check(arguments: &[String]) -> ExitCode {
-    if arguments.first().map(String::as_str) == Some(CHECK_CONFIG_FLAG) {
-        return run_check_config(&arguments[1..]);
-    }
-    let invocation = match parse_check_arguments(arguments) {
-        Ok(invocation) => invocation,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::from(EXIT_CODE_USAGE);
-        }
-    };
-    let settings = WidgetSettings {
-        id: WidgetId::new(CHECK_WIDGET_ID),
-        command: invocation.command,
-        args: invocation.args,
-        env: invocation.env,
-        interval_seconds: DEFAULT_INTERVAL_SECONDS,
-        interval_adjusted: false,
-        timeout_seconds: CHECK_TIMEOUT_SECONDS,
-        span: DEFAULT_SPAN,
-        max_items: None,
-        llm_sections: vec![],
-        llm_max_items: DEFAULT_LLM_MAX_ITEMS,
-        llm_max_characters_per_item: DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
-    };
-    let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let runner = PluginRunner::new(settings, working_directory);
-    let parse = |json: &str| parse_snapshot_report(json).map_err(|error| error.to_string());
-    let outcome = build_check_report(runner.raw_snapshot_output(), &parse, &check_preview);
-    println!("{}", outcome.text);
-    ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(EXIT_CODE_FAILURE))
-}
-
-fn run_check_config(arguments: &[String]) -> ExitCode {
-    let path = match config_path_argument(arguments) {
-        Ok(path) => path,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::from(EXIT_CODE_USAGE);
-        }
-    };
-    match read_config_file(&path).and_then(|text| parse_config(&text)) {
-        Ok(config) => {
-            for warning in &config.warnings {
-                println!("aviso: {warning}");
-            }
-            println!("configuração válida: {}", path.display());
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("mosaic: {error}");
-            ExitCode::from(EXIT_CODE_FAILURE)
-        }
-    }
-}
-
-fn config_path_argument(arguments: &[String]) -> Result<PathBuf, String> {
-    match arguments {
-        [] => config_directory()
-            .map(|directory| config_file_path(&directory))
-            .map_err(|error| error.to_string()),
-        [path] => Ok(PathBuf::from(path)),
-        _ => Err(CHECK_CONFIG_USAGE.to_string()),
-    }
-}
-
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().map(String::as_str) == Some(CHECK_SUBCOMMAND) {
-        return run_check(&arguments[1..]);
+        return check_command::run(&arguments[1..]);
     }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
