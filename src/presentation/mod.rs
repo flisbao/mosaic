@@ -1,3 +1,4 @@
+pub mod app_events;
 pub mod app_state;
 pub mod blocks;
 pub mod focus_column;

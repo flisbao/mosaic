@@ -13,30 +13,22 @@ use std::time::{Duration, Instant};
 use chrono::NaiveDateTime;
 use crossterm::event::{self, Event};
 use mosaic::application::alert_tracker::AlertTracker;
-use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
-use mosaic::application::llm::{
-    execute_recommendation, LlmError, LlmRunner, RecommendationOutcome, RecommendationStore,
-};
-use mosaic::application::pomodoro_notifications::{AlertMessage, Notifier};
-use mosaic::application::ports::{Cancellable, Clock, SourceError};
+use mosaic::application::execute_action::execute_confirmed;
+use mosaic::application::llm::{execute_recommendation, LlmRunner, RecommendationStore};
+use mosaic::application::pomodoro_notifications::Notifier;
+use mosaic::application::ports::{Cancellable, Clock};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
-use mosaic::application::recommendation_view::{
-    idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
-};
+use mosaic::application::recommendation_view::IA_WIDGET_ID;
 use mosaic::application::refresh::refresh_widget;
-use mosaic::application::reload::{
-    apply_if_current, apply_plan, reload_widgets, WidgetGenerations, WidgetLifecycle,
-};
+use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetLifecycle};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::application::widget_notices::with_interval_notice;
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
-use mosaic::domain::widget::WidgetSnapshot;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
-use mosaic::domain::widget_content::AlertLevel;
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, load_config, prepare_reload, read_config_file,
     reload_notice, retain_restart_sections, AppConfig, ConfigError, Harness, LlmConfig,
@@ -53,6 +45,7 @@ use mosaic::infrastructure::refresh_signal::{refresh_channel, RefreshSignal, Ref
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
+use mosaic::presentation::app_events::{apply_event, stored_ia_result, AppEvent, EventContext};
 use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::from_crossterm;
 use mosaic::presentation::render::render;
@@ -62,8 +55,6 @@ use mosaic::presentation::tab_layout::{
 use thiserror::Error;
 
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
-const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
 const APP_DIRECTORY_NAME: &str = "mosaic";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
@@ -81,17 +72,6 @@ enum AppError {
     Config(#[from] ConfigError),
     #[error("falha de terminal: {0}")]
     Terminal(#[from] std::io::Error),
-}
-
-enum AppEvent {
-    WidgetUpdated(WidgetId, u64, Result<WidgetSnapshot, SourceError>),
-    ActionFinished(
-        WidgetId,
-        u64,
-        ActionNotice,
-        Result<WidgetSnapshot, SourceError>,
-    ),
-    RecommendationFinished(Result<RecommendationOutcome, LlmError>),
 }
 
 struct WidgetRuntime {
@@ -453,7 +433,12 @@ fn event_loop(
             return Ok(());
         }
         while let Ok(app_event) = receiver.try_recv() {
-            apply_event(state, app_event, services, &mut alert_tracker, clock.now());
+            let context = EventContext {
+                generations: &services.generations,
+                notifier: &services.notifier,
+                recommendation_store: services.llm.as_ref().map(|llm| llm.store.as_ref()),
+            };
+            apply_event(state, app_event, &context, &mut alert_tracker, clock.now());
         }
         let elapsed = last_tick.elapsed();
         last_tick = Instant::now();
@@ -486,110 +471,10 @@ fn event_loop(
     }
 }
 
-fn announce_widget_alerts(
-    state: &mut AppState,
-    services: &Services,
-    tracker: &mut AlertTracker,
-    id: &WidgetId,
-    result: &Result<WidgetSnapshot, SourceError>,
-) {
-    let Ok(snapshot) = result else {
-        return;
-    };
-    for alert in tracker.fresh_alerts(id, &snapshot.alerts) {
-        let message = AlertMessage {
-            title: alert.title,
-            body: alert.body,
-        };
-        if alert.level == AlertLevel::Warn {
-            services.notifier.notify(&message);
-        }
-        state.show_alert(message);
-    }
-}
-
-fn apply_event(
-    state: &mut AppState,
-    app_event: AppEvent,
-    services: &Services,
-    tracker: &mut AlertTracker,
-    now: NaiveDateTime,
-) {
-    match app_event {
-        AppEvent::WidgetUpdated(id, generation, result) => {
-            apply_if_current(&services.generations, &id, generation, result, |result| {
-                announce_widget_alerts(state, services, tracker, &id, &result);
-                state.update_widget(&id, result, now);
-            });
-        }
-        AppEvent::ActionFinished(id, generation, notice, result) => {
-            state.finish_action(&id);
-            apply_if_current(&services.generations, &id, generation, result, |result| {
-                announce_widget_alerts(state, services, tracker, &id, &result);
-                state.update_widget(&id, result, now);
-            });
-            state.show_notice(describe_notice(notice));
-        }
-        AppEvent::RecommendationFinished(result) => {
-            apply_recommendation_result(state, services, result, now)
-        }
-    }
-}
-
-fn apply_recommendation_result(
-    state: &mut AppState,
-    services: &Services,
-    result: Result<RecommendationOutcome, LlmError>,
-    now: NaiveDateTime,
-) {
-    let ia = WidgetId::new(IA_WIDGET_ID);
-    match result {
-        Ok(outcome) => {
-            state.update_widget(
-                &ia,
-                Ok(recommendation_snapshot(&outcome.recommendation)),
-                now,
-            );
-            state.show_notice(match outcome.save_warning {
-                Some(reason) => {
-                    format!("{RECOMMENDATION_READY_MESSAGE}, mas não foi possível salvar: {reason}")
-                }
-                None => RECOMMENDATION_READY_MESSAGE.to_string(),
-            });
-        }
-        Err(LlmError::Unavailable(message)) => {
-            if let Some(llm) = &services.llm {
-                state.update_widget(&ia, stored_ia_result(llm.store.as_ref()), now);
-            }
-            state.show_notice(message);
-        }
-        Err(LlmError::Failed(message)) => {
-            state.update_widget(&ia, Err(SourceError::Failed(message)), now)
-        }
-    }
-}
-
 fn stored_ia_record(store: &dyn RecommendationStore, now: NaiveDateTime) -> WidgetRecord {
     let mut record = WidgetRecord::loading();
     record.apply(stored_ia_result(store), now);
     record
-}
-
-fn stored_ia_result(store: &dyn RecommendationStore) -> Result<WidgetSnapshot, SourceError> {
-    Ok(match store.load() {
-        Some(stored) => recommendation_snapshot(&stored),
-        None => idle_snapshot(),
-    })
-}
-
-fn describe_notice(notice: ActionNotice) -> String {
-    match notice {
-        ActionNotice::Succeeded(message) if message.is_empty() => {
-            ACTION_DONE_FALLBACK_MESSAGE.to_string()
-        }
-        ActionNotice::Succeeded(message) => message,
-        ActionNotice::Failed(message) => format!("Falha: {message}"),
-    }
 }
 
 fn reload_config(state: &mut AppState, services: &mut Services, spans: &mut Vec<u16>) {
