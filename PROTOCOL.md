@@ -1,6 +1,6 @@
 # Protocolo de widgets do Mosaic (v1)
 
-Um widget é qualquer programa que o Mosaic executa: Python, Node, shell, o que você preferir. Ele responde ao argumento `snapshot` imprimindo um JSON, e o Mosaic desenha o resultado como um card. Este documento é o contrato; o [esquema JSON](schema/protocol.schema.json) é equivalente e os testes garantem que os dois não divergem do código.
+Um widget é qualquer programa que o Mosaic executa: Python, Node, shell, o que você preferir. Ele responde ao argumento `snapshot` imprimindo um JSON, e o Mosaic desenha o resultado como um widget. Este documento é o contrato; o [esquema JSON](schema/protocol.schema.json) é equivalente e os testes garantem que os dois não divergem do código.
 
 Um widget completo, em Python:
 
@@ -20,7 +20,7 @@ O Mosaic roda `command` + `args` do widget com um argumento a mais:
 | `<comando> snapshot` | a cada `interval_seconds` e quando o usuário aperta `r` | um JSON na saída padrão |
 | `<comando> action <id>` | quando o usuário confirma uma ação (parâmetros em JSON na entrada padrão) | uma mensagem curta de texto |
 
-O processo recebe o ambiente do Mosaic mais `[widgets.env]` e roda no diretório onde o Mosaic foi iniciado. A saída vai até **1 MiB** e o widget tem `timeout_seconds` (padrão 5 s) para responder; código de saída diferente de zero, tempo esgotado ou saída grande demais viram um erro no card. `interval_seconds` abaixo de **30** sobe para 30 (o card avisa); a tecla `r` não tem esse limite.
+O processo recebe o ambiente do Mosaic mais `[widgets.env]` e roda no diretório onde o Mosaic foi iniciado. A saída vai até **1 MiB** e o widget tem `timeout_seconds` (padrão 5 s) para responder; código de saída diferente de zero, tempo esgotado ou saída grande demais viram um erro no widget. `interval_seconds` abaixo de **30** sobe para 30 (o widget avisa); a tecla `r` não tem esse limite.
 
 ## 2. Snapshot
 
@@ -30,15 +30,17 @@ O processo recebe o ambiente do Mosaic mais `[widgets.env]` e roda no diretório
   "summary": { "title": "Agenda", "blocks": [ ... ] },
   "detail": { "sections": [ { "heading": "Hoje", "blocks": [ ... ], "items": [ ... ] } ] },
   "actions": [ { "id": "refresh", "label": "Atualizar" } ],
-  "alerts": [ { "id": "deploy-42", "title": "Deploy falhou", "level": "warn" } ]
+  "alerts": [ { "id": "deploy-42", "title": "Deploy falhou", "level": "warn" } ],
+  "mini": { "value": "12", "text": "tarefas", "tone": "warn" }
 }
 ```
 
-- **`protocol`** (opcional, padrão 1): número inteiro positivo. Se for maior que a versão suportada, o card pede para atualizar o Mosaic; outro valor é erro.
+- **`protocol`** (opcional, padrão 1): número inteiro positivo. Se for maior que a versão suportada, o widget pede para atualizar o Mosaic; outro valor é erro.
 - **`summary.title`** (obrigatório) e **`summary.blocks`**: o conteúdo da caixa na Home (seção 3). Atalho: no lugar de `blocks` você pode usar `summary.lines`, uma lista de `{ "text", "flag"? }`.
-- **`detail`**: a aba do widget (exige `tab = true` na configuração). Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`.
+- **`detail`**: a aba do widget. A configuração decide a aba e o atalho para ela, com `[[tabs]]` e `tab = "Nome"`. Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`.
 - **`actions`**: `{ "id", "label", "description"?, "applies_to"?: "widget" | "item", "params"? }`.
 - **`alerts`**: seção 5.
+- **`mini`** (opcional): a coluna do modo foco, `{ "value", "text", "tone"? }`. `value` e `text` são obrigatórios; `tone` tem o padrão `normal`. Um `mini` inválido é descartado sem afetar o resto do widget. O `mosaic check` mostra a linha `mini: <value> <text>`.
 
 Campos desconhecidos são ignorados, então um widget novo continua funcionando em um Mosaic mais antigo.
 
@@ -70,12 +72,14 @@ Um bloco é um objeto com `type`, empilhado na ordem em que aparece.
 
 | Limite | Valor |
 | --- | --- |
-| blocos por card | 20 |
+| blocos por widget | 20 |
 | linhas por bloco (`lines`, `rows` e linhas de `table`) | 200 |
 | colunas de `table` | 10 |
 | indicadores de `stat` | 8 |
 | etiquetas por linha de `rows` | 3 |
 | caracteres por texto | 500 |
+| caracteres de `mini.value` | 8 |
+| caracteres de `mini.text` | 24 |
 | avisos novos por leitura | 5 |
 
 O excesso é cortado e o `mosaic check` avisa.
@@ -83,8 +87,8 @@ O excesso é cortado e o `mosaic check` avisa.
 **Texto:** antes de ser usado, todo texto do widget perde os caracteres de controle e de formatação do Unicode (escape, NUL, direção de texto), quebras de linha e tabulações viram um espaço e os espaços repetidos são colapsados.
 
 **Erros:**
-- JSON inválido, raiz que não é objeto ou `summary.title` ausente: o card inteiro mostra o erro.
-- Bloco malformado (não é objeto, sem `type`, lista que não é lista, linha sem `text`, tipo de valor errado): só esse bloco é descartado e o card ganha a linha `⚠ bloco inválido: <caminho>: <motivo>`. Veja o caminho em `mosaic check`, por exemplo `summary.blocks[2].rows[1].text`.
+- JSON inválido, raiz que não é objeto ou `summary.title` ausente: o widget inteiro mostra o erro.
+- Bloco malformado (não é objeto, sem `type`, lista que não é lista, linha sem `text`, tipo de valor errado): só esse bloco é descartado e o widget ganha a linha `⚠ bloco inválido: <caminho>: <motivo>`. Veja o caminho em `mosaic check`, por exemplo `summary.blocks[2].rows[1].text`.
 - Tipo de bloco, tom, flag ou campo desconhecido: ignorado, com aviso no `mosaic check`.
 
 ## 5. Avisos (`alerts`)
@@ -102,7 +106,7 @@ O excesso é cortado e o `mosaic check` avisa.
 mosaic check <comando> [args...] [--env NOME=valor]...
 ```
 
-Roda `snapshot` com as mesmas regras do Mosaic, sem abrir o terminal, e imprime os problemas e a prévia do card em 60 colunas:
+Roda `snapshot` com as mesmas regras do Mosaic, sem abrir o terminal, e imprime os problemas e a prévia do widget em 60 colunas:
 
 ```text
 ERRO summary.blocks[0].rows[2].text: campo obrigatório ausente

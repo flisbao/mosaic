@@ -1,9 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mosaic::domain::card::{BLOCK_TYPE_NAMES, TONE_NAMES};
+use mosaic::domain::blocks::BLOCK_TYPE_NAMES;
 use mosaic::domain::snapshot_report::Severity;
-use mosaic::domain::widget::FLAG_NAMES;
+use mosaic::domain::widget::{
+    FLAG_NAMES, MAXIMUM_MINI_TEXT_CHARACTERS, MAXIMUM_MINI_VALUE_CHARACTERS,
+};
+use mosaic::domain::widget_content::TONE_NAMES;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use serde_json::Value;
 
@@ -100,4 +103,15 @@ fn schema_matches_the_code() {
         })
         .collect();
     assert_eq!(block_types, BLOCK_TYPE_NAMES);
+    let mini = &schema["$defs"]["mini"];
+    assert_eq!(
+        mini["properties"]["value"]["maxLength"].as_u64(),
+        Some(u64::try_from(MAXIMUM_MINI_VALUE_CHARACTERS).unwrap())
+    );
+    assert_eq!(
+        mini["properties"]["text"]["maxLength"].as_u64(),
+        Some(u64::try_from(MAXIMUM_MINI_TEXT_CHARACTERS).unwrap())
+    );
+    assert_eq!(mini["properties"]["value"]["minLength"].as_u64(), Some(1));
+    assert_eq!(mini["properties"]["text"]["minLength"].as_u64(), Some(1));
 }

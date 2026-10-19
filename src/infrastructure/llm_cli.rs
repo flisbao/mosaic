@@ -1,16 +1,20 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
+use crate::application::ports::Cancellable;
+use crate::domain::widget_content::clean_text_limited;
 use crate::infrastructure::private_directory::prepare_private_directory;
-use crate::infrastructure::process::{run_process, ProcessLimits};
+use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
+use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
 const ARGUMENT_SEPARATOR: &str = "--";
 const OPENCODE_CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
 const OPENCODE_RESTRICTED_CONFIG: &str = r#"{"permission":{"*":"deny","external_directory":"deny","write":"deny","edit":"deny","bash":"deny","webfetch":"deny","read":"deny","grep":"deny","glob":"deny","list":"deny","patch":"deny","task":"deny","todowrite":"deny","todoread":"deny"},"tools":{"*":false,"write":false,"edit":false,"bash":false,"webfetch":false,"read":false,"grep":false,"glob":false,"list":false,"patch":false,"task":false,"todowrite":false,"todoread":false},"mcp":{}}"#;
+const OPENCODE_STDIN_INSTRUCTION: &str = "Responda ao pedido recebido pela entrada padrão.";
 const OPENCODE_CONFIG_HOME_VARIABLE: &str = "XDG_CONFIG_HOME";
 const OPENCODE_ISOLATED_CONFIG_DIRECTORY: &str = "xdg-config";
 
@@ -19,6 +23,7 @@ pub struct ClaudeCli {
     working_directory: PathBuf,
     max_budget_usd: Option<f64>,
     timeout: Duration,
+    cancel_flag: CancelFlag,
 }
 
 impl ClaudeCli {
@@ -33,6 +38,7 @@ impl ClaudeCli {
             working_directory,
             max_budget_usd,
             timeout,
+            cancel_flag: CancelFlag::default(),
         }
     }
 
@@ -75,7 +81,18 @@ impl LlmRunner for ClaudeCli {
             &self.environment(),
             Some(&request.prompt),
             self.timeout,
+            &self.cancel_flag,
         )
+    }
+}
+
+impl Cancellable for ClaudeCli {
+    fn cancel(&self) {
+        self.cancel_flag.cancel();
+    }
+
+    fn request_cancel(&self) {
+        self.cancel_flag.request_cancel();
     }
 }
 
@@ -83,6 +100,7 @@ pub struct OpenCodeCli {
     program: String,
     working_directory: PathBuf,
     timeout: Duration,
+    cancel_flag: CancelFlag,
 }
 
 impl OpenCodeCli {
@@ -91,6 +109,7 @@ impl OpenCodeCli {
             program,
             working_directory,
             timeout,
+            cancel_flag: CancelFlag::default(),
         }
     }
 
@@ -104,7 +123,7 @@ impl OpenCodeCli {
             arguments.extend(["-m".to_string(), model.clone()]);
         }
         arguments.push(ARGUMENT_SEPARATOR.to_string());
-        arguments.push(request.prompt.clone());
+        arguments.push(OPENCODE_STDIN_INSTRUCTION.to_string());
         arguments
     }
 }
@@ -134,19 +153,31 @@ impl LlmRunner for OpenCodeCli {
             &self.working_directory,
             &self.arguments(request),
             &self.environment(),
-            None,
+            Some(&request.prompt),
             self.timeout,
+            &self.cancel_flag,
         )
+    }
+}
+
+impl Cancellable for OpenCodeCli {
+    fn cancel(&self) {
+        self.cancel_flag.cancel();
+    }
+
+    fn request_cancel(&self) {
+        self.cancel_flag.request_cancel();
     }
 }
 
 fn run_cli(
     program: &str,
-    working_directory: &PathBuf,
+    working_directory: &Path,
     arguments: &[String],
     environment: &[(String, String)],
     stdin_text: Option<&str>,
     timeout: Duration,
+    cancel: &CancelFlag,
 ) -> Result<String, LlmError> {
     prepare_private_directory(working_directory)
         .map_err(|error| LlmError::Failed(error.to_string()))?;
@@ -159,11 +190,14 @@ fn run_cli(
         timeout,
         maximum_output_bytes: MAXIMUM_LLM_OUTPUT_BYTES,
     };
-    run_process(command, stdin_text, &limits).map_err(|error| {
+    run_process(command, stdin_text, &limits, cancel).map_err(|error| {
         if error.program_not_found() {
             LlmError::Unavailable(format!("`{program}` não encontrado no PATH"))
         } else {
-            LlmError::Failed(error.to_string())
+            LlmError::Failed(clean_text_limited(
+                &error.to_string(),
+                MAXIMUM_TEXT_CHARACTERS,
+            ))
         }
     })
 }
@@ -173,9 +207,12 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Instant;
 
     use super::*;
     use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
+    use crate::application::ports::Cancellable;
 
     trait RunRetrying: LlmRunner {
         fn run_retrying(&self, request: &LlmRequest) -> Result<String, LlmError> {
@@ -262,25 +299,17 @@ mod tests {
     }
 
     #[test]
-    fn opencode_arguments_use_dir_model_and_double_dash_before_prompt() {
+    fn opencode_arguments_use_dir_model_and_never_carry_the_prompt() {
         let cli = opencode("opencode".to_string(), Path::new("/tmp"), 5);
-        let arguments = cli.arguments(&request("faça isso", Some("anthropic/haiku")));
+        let arguments = cli.arguments(&request("SEGREDO-DO-PROMPT", Some("anthropic/haiku")));
         assert_eq!(arguments[0], "run");
         let joined = arguments.join(" ");
         assert!(joined.contains("--dir /tmp/neutro"), "{joined}");
         assert!(joined.contains("-m anthropic/haiku"), "{joined}");
+        assert!(!joined.contains("SEGREDO-DO-PROMPT"), "{joined}");
         let separator = arguments.iter().position(|a| a == "--").unwrap();
-        assert_eq!(arguments[separator + 1], "faça isso");
-        assert_eq!(arguments.last().unwrap(), "faça isso");
-    }
-
-    #[test]
-    fn opencode_prompt_starting_with_dash_stays_after_double_dash() {
-        let cli = opencode("opencode".to_string(), Path::new("/tmp"), 5);
-        let arguments = cli.arguments(&request("--help me", None));
-        let separator = arguments.iter().position(|a| a == "--").unwrap();
-        assert_eq!(arguments[separator + 1], "--help me");
-        assert_eq!(arguments.iter().filter(|a| *a == "--help me").count(), 1);
+        assert_eq!(arguments[separator + 1], OPENCODE_STDIN_INSTRUCTION);
+        assert_eq!(arguments.last().unwrap(), OPENCODE_STDIN_INSTRUCTION);
     }
 
     #[test]
@@ -323,7 +352,7 @@ mod tests {
 
     #[test]
     fn opencode_environment_reaches_the_process_and_claude_has_none() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "printf '%s' \"$OPENCODE_CONFIG_CONTENT\"");
         let output = opencode(program, directory.path(), 5)
             .run_retrying(&request("p", None))
@@ -336,7 +365,7 @@ mod tests {
 
     #[test]
     fn refuses_a_symlinked_working_directory() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let outside = directory.path().join("fora");
         fs::create_dir(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, directory.path().join("neutro")).unwrap();
@@ -349,7 +378,7 @@ mod tests {
 
     #[test]
     fn claude_sends_prompt_on_stdin_and_returns_stdout() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "cat");
         let prompt = "- critérios com $VAR e \"aspas\" e `crase`";
         let output = claude(program, directory.path(), 5)
@@ -359,22 +388,23 @@ mod tests {
     }
 
     #[test]
-    fn opencode_passes_prompt_as_last_argument() {
-        let directory = tempfile::tempdir().unwrap();
-        let program = fake_program(
-            directory.path(),
-            "for last; do :; done; printf '%s' \"$last\"",
-        );
-        let prompt = "-x com $VAR";
+    fn opencode_receives_the_prompt_on_stdin_not_in_arguments() {
+        let directory = crate::infrastructure::test_support::private_tempdir();
+        let program = fake_program(directory.path(), "printf 'ARGS=%s;STDIN=' \"$*\"; cat");
+        let prompt = "-x com $VAR e SEGREDO";
         let output = opencode(program, directory.path(), 5)
             .run_retrying(&request(prompt, None))
             .unwrap();
-        assert_eq!(output, prompt);
+        assert!(output.ends_with(&format!("STDIN={prompt}")), "{output}");
+        assert!(
+            !output.split(";STDIN=").next().unwrap().contains("SEGREDO"),
+            "{output}"
+        );
     }
 
     #[test]
     fn runs_in_the_neutral_working_directory() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "pwd -P");
         let output = claude(program, directory.path(), 5)
             .run_retrying(&request("p", None))
@@ -385,7 +415,7 @@ mod tests {
 
     #[test]
     fn missing_program_is_unavailable() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let error = claude("claude-que-nao-existe-xyz".to_string(), directory.path(), 5)
             .run_retrying(&request("p", None))
             .unwrap_err();
@@ -395,7 +425,7 @@ mod tests {
 
     #[test]
     fn nonzero_exit_is_failed_with_stderr() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "echo sem credito >&2; exit 2");
         let error = claude(program, directory.path(), 5)
             .run_retrying(&request("p", None))
@@ -405,7 +435,7 @@ mod tests {
 
     #[test]
     fn slow_cli_times_out() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "exec sleep 30");
         let started = std::time::Instant::now();
         let error = claude(program, directory.path(), 1)
@@ -418,12 +448,61 @@ mod tests {
 
     #[test]
     fn huge_output_is_failed() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "head -c 300000 /dev/zero | tr '\\0' 'a'");
         let error = claude(program, directory.path(), 5)
             .run_retrying(&request("p", None))
             .unwrap_err();
         assert!(matches!(error, LlmError::Failed(_)));
         assert!(error.to_string().contains("excedeu o limite"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancel_stops_the_running_llm_process_and_blocks_later_runs() {
+        let directory = crate::infrastructure::test_support::private_tempdir();
+        let pid_file = directory.path().join("pid.txt");
+        let marker = directory.path().join("spawned.txt");
+        let body = format!(
+            "echo $$ > '{}'; touch '{}'; exec sleep 30",
+            pid_file.display(),
+            marker.display()
+        );
+        let cli = Arc::new(claude(
+            fake_program(directory.path(), &body),
+            directory.path(),
+            60,
+        ));
+        let running = Arc::clone(&cli);
+        let worker = std::thread::spawn(move || running.run(&request("prompt", None)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pid_file.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+
+        Cancellable::cancel(cli.as_ref());
+
+        assert!(
+            !is_signalable(&pid),
+            "cancel() deve matar o processo do LLM antes de retornar"
+        );
+        let error = worker.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("cancelado"), "{error}");
+
+        fs::remove_file(&marker).unwrap();
+        let later = cli.run(&request("prompt", None)).unwrap_err();
+        assert!(later.to_string().contains("cancelado"), "{later}");
+        assert!(
+            !marker.exists(),
+            "execução após cancel() não deve criar processo"
+        );
+    }
+
+    fn is_signalable(pid: &str) -> bool {
+        Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }

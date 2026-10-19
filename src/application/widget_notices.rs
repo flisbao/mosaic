@@ -1,26 +1,28 @@
-use crate::domain::card::Tone;
-use crate::domain::widget::WidgetState;
+use crate::domain::widget::WidgetSnapshot;
+use crate::domain::widget_content::Tone;
 
-pub fn with_interval_notice(state: WidgetState, seconds: u64) -> WidgetState {
-    let WidgetState::Ready(mut snapshot) = state else {
-        return state;
-    };
+pub fn with_interval_notice<E>(
+    result: Result<WidgetSnapshot, E>,
+    seconds: u64,
+) -> Result<WidgetSnapshot, E> {
+    let mut snapshot = result?;
     snapshot.summary.put_notice_first(
         format!("intervalo ajustado para {seconds}s"),
         Tone::Muted,
         None,
     );
-    WidgetState::Ready(snapshot)
+    Ok(snapshot)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::{Block, Tone};
-    use crate::domain::widget::{Summary, WidgetSnapshot};
+    use crate::domain::blocks::Block;
+    use crate::domain::widget::Summary;
 
-    fn ready(blocks: Vec<Block>) -> WidgetState {
-        WidgetState::Ready(WidgetSnapshot {
+    fn ready(blocks: Vec<Block>) -> Result<WidgetSnapshot, String> {
+        Ok(WidgetSnapshot {
+            mini: None,
             summary: Summary {
                 title: "T".to_string(),
                 lines: vec![],
@@ -33,10 +35,8 @@ mod tests {
     }
 
     #[test]
-    fn ready_state_gets_the_notice_as_first_line() {
-        let WidgetState::Ready(snapshot) = with_interval_notice(ready(vec![]), 30) else {
-            panic!("esperava Ready");
-        };
+    fn ready_snapshot_gets_the_notice_as_first_line() {
+        let snapshot = with_interval_notice(ready(vec![]), 30).expect("snapshot pronto");
         assert_eq!(
             snapshot.summary.lines[0].text,
             "intervalo ajustado para 30s"
@@ -44,12 +44,9 @@ mod tests {
     }
 
     #[test]
-    fn notice_is_a_muted_block_when_the_card_uses_blocks() {
-        let WidgetState::Ready(snapshot) =
-            with_interval_notice(ready(vec![Block::Lines(vec![])]), 30)
-        else {
-            panic!("esperava Ready");
-        };
+    fn notice_is_a_muted_block_when_the_widget_uses_blocks() {
+        let snapshot =
+            with_interval_notice(ready(vec![Block::Lines(vec![])]), 30).expect("snapshot pronto");
         let Block::Lines(lines) = &snapshot.summary.blocks[0] else {
             panic!("esperava lines");
         };
@@ -57,12 +54,8 @@ mod tests {
     }
 
     #[test]
-    fn loading_and_failed_states_are_untouched() {
-        assert_eq!(
-            with_interval_notice(WidgetState::Loading, 30),
-            WidgetState::Loading
-        );
-        let failed = WidgetState::Failed("x".to_string());
-        assert_eq!(with_interval_notice(failed.clone(), 30), failed);
+    fn failures_are_untouched() {
+        let failed: Result<WidgetSnapshot, String> = Err("x".to_string());
+        assert_eq!(with_interval_notice(failed, 30), Err("x".to_string()));
     }
 }

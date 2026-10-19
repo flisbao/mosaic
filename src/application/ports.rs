@@ -10,13 +10,22 @@ pub enum SourceError {
     Failed(String),
 }
 
-pub trait WidgetSource: Send + Sync {
+pub trait Cancellable: Send + Sync {
+    fn cancel(&self);
+    fn request_cancel(&self);
+}
+
+pub trait WidgetSource: Cancellable {
     fn snapshot(&self) -> Result<WidgetSnapshot, SourceError>;
 }
 
 pub trait ActionExecutor: Send + Sync {
     fn execute(&self, action: &ConfirmedAction) -> Result<ActionOutcome, SourceError>;
 }
+
+pub trait WidgetRunner: WidgetSource + ActionExecutor {}
+
+impl<T: WidgetSource + ActionExecutor> WidgetRunner for T {}
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> NaiveDateTime;

@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 use mosaic::application::ports::SourceError;
-use mosaic::domain::card::{Block, BLOCK_TYPE_NAMES};
+use mosaic::domain::blocks::{Block, BLOCK_TYPE_NAMES};
 use mosaic::domain::snapshot_report::Severity;
 use mosaic::domain::widget::WidgetId;
 use mosaic::infrastructure::config::WidgetSettings;
@@ -26,7 +26,7 @@ fn gallery_output(command: &str, script: &str) -> Result<String, SourceError> {
         interval_adjusted: false,
         timeout_seconds: 10,
         span: 1,
-        tab: false,
+        max_items: None,
         llm_sections: vec![],
         llm_max_items: 20,
         llm_max_characters_per_item: 120,

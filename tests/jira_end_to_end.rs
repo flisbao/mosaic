@@ -72,7 +72,7 @@ fn jira_runner(server: &FakeJira, state_dir: &Path, mode: &str, token: &str) -> 
         interval_adjusted: false,
         timeout_seconds: 30,
         span: 1,
-        tab: true,
+        max_items: None,
         llm_sections: vec!["Sem dono".to_string()],
         llm_max_items: 20,
         llm_max_characters_per_item: 120,

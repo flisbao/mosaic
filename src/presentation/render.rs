@@ -9,13 +9,19 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
-use crate::domain::widget::WidgetState;
+use crate::domain::widget::DetailSection;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
-use crate::presentation::card_view::{flagged, render_blocks, truncate_to_width};
+use crate::presentation::focus_column::focus_column_lines;
+use crate::presentation::text_fit::{flagged, truncate_to_width};
+use crate::presentation::widget_box::{
+    box_block, box_body, dim_if_stale, render_widget_box, BoxContext,
+};
+use crate::presentation::widget_view::render_blocks;
 
-const HOME_TAB_NAME: &str = "Home";
+const FALLBACK_SPAN: u16 = 1;
 const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
-const LOADING_TEXT: &str = "carregando…";
+const FOCUS_COLUMN_WIDTH: u16 = 22;
+const FOCUS_MINIMUM_WIDTH: u16 = FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWABLE_SIDE);
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
 const MODAL_FRAME_THICKNESS: u16 = 2;
 const MINIMUM_DRAWABLE_SIDE: u16 = 3;
@@ -31,10 +37,10 @@ pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDate
         return;
     }
     render_top_bar(frame, state, now, area);
-    if state.active_tab() == 0 {
-        render_home(frame, state, spans, area);
+    if state.is_expanded() {
+        render_focus_mode(frame, state, now, area);
     } else {
-        render_detail(frame, state, area);
+        render_home(frame, state, spans, now, area);
     }
     render_notice(frame, state, area);
     render_modal(frame, state, area);
@@ -47,14 +53,8 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
         format!(" {}  {} ", now.format("%H:%M"), now.format("%d/%m/%Y")),
         Style::default().fg(Color::Cyan),
     )];
-    let mut names = vec![HOME_TAB_NAME.to_string()];
-    names.extend(
-        state
-            .tab_entry_indexes()
-            .iter()
-            .map(|&index| entry_title(&state.entries()[index])),
-    );
-    for (position, name) in names.iter().enumerate() {
+    for (position, tab) in state.tabs().iter().enumerate() {
+        let name = tab.name.as_str();
         let style = if position == state.active_tab() {
             Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
         } else {
@@ -94,113 +94,138 @@ fn pomodoro_text(timer: &PomodoroTimer) -> String {
     )
 }
 
-fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], area: Rect) {
+fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDateTime, area: Rect) {
     let size = TerminalSize {
         width: area.width,
         height: area.height,
     };
-    match arrange(spans, size) {
+    let entry_indexes = state.active_entry_indexes();
+    let tab_spans: Vec<u16> = entry_indexes
+        .iter()
+        .map(|&index| spans.get(index).copied().unwrap_or(FALLBACK_SPAN))
+        .collect();
+    match arrange(&tab_spans, size) {
         GridLayout::Grid(placements) => {
             for placement in placements {
-                let selected = placement.widget_index == state.selected_item();
-                let entry = &state.entries()[placement.widget_index];
-                render_box(frame, entry, to_rect(area, placement.area), selected, None);
+                let Some(&entry_index) = entry_indexes.get(placement.widget_index) else {
+                    continue;
+                };
+                let context = BoxContext {
+                    shortcut: state.shortcut_of(entry_index),
+                    selected: Some(entry_index) == state.focused_entry(),
+                    now,
+                    warning: None,
+                };
+                if let Some(entry) = state.entries().get(entry_index) {
+                    render_widget_box(frame, entry, to_rect(area, placement.area), &context);
+                }
             }
         }
         GridLayout::Compact(placement) => {
-            if let Some(entry) = state.entries().first() {
-                let warning = Some(ENLARGE_WARNING);
-                render_box(frame, entry, to_rect(area, placement.area), true, warning);
+            let first = entry_indexes.first().copied();
+            if let Some(entry) = first.and_then(|index| state.entries().get(index)) {
+                let context = BoxContext {
+                    shortcut: first.and_then(|index| state.shortcut_of(index)),
+                    selected: true,
+                    now,
+                    warning: Some(ENLARGE_WARNING),
+                };
+                render_widget_box(frame, entry, to_rect(area, placement.area), &context);
             }
         }
         GridLayout::Empty => {}
     }
 }
 
-fn render_box(
-    frame: &mut Frame,
-    entry: &WidgetEntry,
-    area: Rect,
-    selected: bool,
-    warning: Option<&str>,
-) {
-    if area.width < MINIMUM_DRAWABLE_SIDE || area.height < MINIMUM_DRAWABLE_SIDE {
+fn render_focus_mode(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
+    let content = content_area(area);
+    if content.width < FOCUS_MINIMUM_WIDTH {
+        render_detail(frame, state, now, content);
         return;
     }
-    let border = if selected {
-        Color::Cyan
-    } else {
-        Color::DarkGray
-    };
-    let block = Block::bordered()
-        .title(truncate_to_width(
-            &entry_title(entry),
-            area.width as usize - 2,
-        ))
-        .border_style(Style::default().fg(border));
-    let inner = block.inner(area);
-    let width = inner.width as usize;
-    let mut lines: Vec<Line> = Vec::new();
-    if let Some(warning) = warning {
-        lines.push(Line::styled(
-            truncate_to_width(warning, width),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    lines.extend(box_lines(entry, width));
-    frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-fn box_lines(entry: &WidgetEntry, width: usize) -> Vec<Line<'static>> {
-    match &entry.state {
-        WidgetState::Loading => vec![Line::from(LOADING_TEXT)],
-        WidgetState::Failed(message) => message
-            .lines()
-            .map(|line| {
-                Line::styled(
-                    truncate_to_width(line, width),
-                    Style::default().fg(Color::Red),
-                )
-            })
-            .collect(),
-        WidgetState::Ready(snapshot) => render_blocks(&snapshot.summary.display_blocks(), width),
-    }
-}
-
-fn render_detail(frame: &mut Frame, state: &AppState, area: Rect) {
-    let content = Rect::new(
-        area.x,
-        area.y + TOP_BAR_HEIGHT.min(area.height),
-        area.width,
-        area.height.saturating_sub(TOP_BAR_HEIGHT),
+    let column = Rect::new(content.x, content.y, FOCUS_COLUMN_WIDTH, content.height);
+    let detail = Rect::new(
+        content.x.saturating_add(FOCUS_COLUMN_WIDTH),
+        content.y,
+        content.width.saturating_sub(FOCUS_COLUMN_WIDTH),
+        content.height,
     );
+    render_focus_column(frame, state, column);
+    render_detail(frame, state, now, detail);
+}
+
+fn render_focus_column(frame: &mut Frame, state: &AppState, area: Rect) {
+    let entries: Vec<&WidgetEntry> = state
+        .active_entry_indexes()
+        .iter()
+        .filter_map(|&index| state.entries().get(index))
+        .collect();
+    let focused = state
+        .active_entry_indexes()
+        .iter()
+        .position(|&index| Some(index) == state.focused_entry());
+    let lines = focus_column_lines(&entries, focused, usize::from(area.width));
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn content_area(area: Rect) -> Rect {
+    let top = TOP_BAR_HEIGHT.min(area.height);
+    Rect::new(
+        area.x,
+        area.y.saturating_add(top),
+        area.width,
+        area.height.saturating_sub(top),
+    )
+}
+
+fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, content: Rect) {
     if content.width < MINIMUM_DRAWABLE_SIDE || content.height < MINIMUM_DRAWABLE_SIDE {
         return;
     }
-    let Some(&entry_index) = state.tab_entry_indexes().get(state.active_tab() - 1) else {
+    let Some(index) = state.focused_entry() else {
         return;
     };
-    let entry = &state.entries()[entry_index];
-    let block = Block::bordered().title(truncate_to_width(
-        &entry_title(entry),
-        content.width as usize - 2,
-    ));
+    let Some(entry) = state.entries().get(index) else {
+        return;
+    };
+    let block = box_block(entry, state.shortcut_of(index), true, content.width);
     let inner = block.inner(content);
-    let width = inner.width as usize;
-    let (lines, selected_row) = detail_lines(entry, state.selected_item(), width);
-    let scroll = selected_row.saturating_sub(inner.height.saturating_sub(1) as usize);
+    let width = usize::from(inner.width);
+    let (lines, selected_row) = detail_lines(entry, state.selected_item(), width, now);
+    let scroll = selected_row.saturating_sub(usize::from(inner.height.saturating_sub(1)));
     frame.render_widget(block, content);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)),
+        inner,
+    );
 }
 
-fn detail_lines(entry: &WidgetEntry, selected: usize, width: usize) -> (Vec<Line<'static>>, usize) {
-    let WidgetState::Ready(snapshot) = &entry.state else {
-        return (box_lines(entry, width), 0);
+fn detail_lines(
+    entry: &WidgetEntry,
+    selected: usize,
+    width: usize,
+    now: NaiveDateTime,
+) -> (Vec<Line<'static>>, usize) {
+    let header = box_body(entry, width, now, true).header;
+    let header_height = header.len();
+    let Some(sections) = entry
+        .record
+        .snapshot()
+        .and_then(|snapshot| snapshot.detail.as_ref())
+    else {
+        return (header, 0);
     };
-    let Some(sections) = &snapshot.detail else {
-        return (Vec::new(), 0);
-    };
+    let (lines, selected_row) = section_lines(sections, selected, width);
+    let mut all = header;
+    all.extend(dim_if_stale(lines, entry, now));
+    (all, selected_row.saturating_add(header_height))
+}
+
+fn section_lines(
+    sections: &[DetailSection],
+    selected: usize,
+    width: usize,
+) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::new();
     let mut item_index = 0;
     let mut selected_row = 0;
@@ -337,17 +362,10 @@ fn action_menu_lines(state: &AppState, selected: usize) -> Vec<String> {
         .collect()
 }
 
-fn entry_title(entry: &WidgetEntry) -> String {
-    match &entry.state {
-        WidgetState::Ready(snapshot) => snapshot.summary.title.clone(),
-        _ => entry.id.as_str().to_string(),
-    }
-}
-
 fn to_rect(origin: Rect, cell: CellRect) -> Rect {
     Rect::new(
-        origin.x + cell.x,
-        origin.y + cell.y,
+        origin.x.saturating_add(cell.x),
+        origin.y.saturating_add(cell.y),
         cell.width,
         cell.height,
     )
@@ -377,13 +395,16 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::domain::widget::{
-        ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Summary, SummaryLine, WidgetId,
-        WidgetSnapshot, WidgetState,
+        ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, SummaryLine,
+        WidgetId, WidgetRecord, WidgetSnapshot,
     };
-    use crate::presentation::app_state::{AppState, WidgetEntry};
+    use crate::presentation::app_state::{AppState, TabView, WidgetEntry};
     use crate::presentation::key_input::KeyInput;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeDelta};
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Style};
     use ratatui::Terminal;
 
     fn now() -> NaiveDateTime {
@@ -395,6 +416,7 @@ mod tests {
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
         WidgetSnapshot {
+            mini: None,
             alerts: vec![],
             summary: Summary {
                 blocks: vec![],
@@ -413,15 +435,39 @@ mod tests {
         }
     }
 
-    fn entry(id: &str, state: WidgetState, has_tab: bool) -> WidgetEntry {
+    fn ready(snapshot: WidgetSnapshot) -> WidgetRecord {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(Ok(snapshot), now());
+        record
+    }
+
+    fn failed(message: &str) -> WidgetRecord {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(Err(message.to_string()), now());
+        record
+    }
+
+    fn entry(id: &str, record: WidgetRecord) -> WidgetEntry {
         WidgetEntry {
             id: WidgetId::new(id),
-            state,
-            has_tab,
+            record,
+            interval: std::time::Duration::from_secs(30),
+            max_items: None,
         }
     }
 
-    fn kanban_entry() -> WidgetEntry {
+    fn state_with(entries: Vec<WidgetEntry>) -> AppState {
+        let entry_indexes = (0..entries.len()).collect();
+        AppState::new(
+            entries,
+            vec![TabView {
+                name: "Principal".to_string(),
+                entry_indexes,
+            }],
+        )
+    }
+
+    fn kanban_snapshot() -> WidgetSnapshot {
         let mut kanban = snapshot("Kanban", vec![plain_line("inbox 3")]);
         kanban.detail = Some(vec![DetailSection {
             blocks: vec![],
@@ -448,7 +494,11 @@ mod tests {
             scope: ActionScope::Item,
             params_json: "{}".to_string(),
         }];
-        entry("kanban", WidgetState::Ready(kanban), true)
+        kanban
+    }
+
+    fn kanban_entry() -> WidgetEntry {
+        entry("kanban", ready(kanban_snapshot()))
     }
 
     fn draw(state: &AppState, width: u16, height: u16) -> Vec<String> {
@@ -477,9 +527,169 @@ mod tests {
         }
     }
 
+    fn buffer_of(state: &AppState, width: u16, height: u16, at: NaiveDateTime) -> Buffer {
+        let spans = vec![1; state.entries().len()];
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render(frame, state, &spans, at))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn ready_at(snapshot: WidgetSnapshot, at: NaiveDateTime) -> WidgetRecord {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(Ok(snapshot), at);
+        record
+    }
+
+    fn border_colors(buffer: &Buffer) -> Vec<Option<Color>> {
+        let area = buffer.area;
+        (0..area.height)
+            .flat_map(|row| (0..area.width).map(move |column| (column, row)))
+            .filter(|&(column, row)| buffer[(column, row)].symbol() == "┌")
+            .map(|(column, row)| buffer[(column, row)].fg.into())
+            .collect()
+    }
+
+    fn border_cells(buffer: &Buffer) -> Vec<(Option<Color>, Modifier)> {
+        let area = buffer.area;
+        (0..area.height)
+            .flat_map(|row| (0..area.width).map(move |column| (column, row)))
+            .filter(|&(column, row)| buffer[(column, row)].symbol() == "┌")
+            .map(|(column, row)| {
+                (
+                    buffer[(column, row)].fg.into(),
+                    buffer[(column, row)].modifier,
+                )
+            })
+            .collect()
+    }
+
+    fn style_of_text(buffer: &Buffer, needle: &str) -> Option<Style> {
+        let area = buffer.area;
+        for row in 0..area.height {
+            let symbols: Vec<&str> = (0..area.width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect();
+            for start in 0..symbols.len() {
+                if symbols[start..].concat().starts_with(needle) {
+                    let column = u16::try_from(start).unwrap();
+                    return Some(buffer[(column, row)].style());
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn failing_widget_with_old_data_has_red_border_and_age_line() {
+        let old = ready_at(
+            snapshot("Agenda", vec![plain_line("reuniões 2")]),
+            now() - TimeDelta::minutes(45),
+        );
+        let mut failing = old;
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let state = state_with(vec![kanban_entry(), entry("agenda", failing)]);
+        let buffer = buffer_of(&state, 100, 30, now());
+        let colors = border_colors(&buffer);
+        assert!(colors.contains(&Some(Color::Red)), "{colors:?}");
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
+        assert!(text.contains("reuniões 2"), "{text}");
+        assert!(!text.contains("⚠ falha: fora do ar"), "{text}");
+    }
+
+    #[test]
+    fn first_load_failure_shows_only_red_message() {
+        let state = state_with(vec![entry("kanban", failed("plugin quebrou"))]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("plugin quebrou"), "{text}");
+        assert!(!text.contains("Kanban"), "{text}");
+        assert!(!text.contains("sem atualizar"), "{text}");
+        assert!(!text.contains("carregando"), "{text}");
+        let style = style_of_text(&buffer_of(&state, 100, 30, now()), "plugin quebrou");
+        assert_eq!(style.and_then(|style| style.fg), Some(Color::Red));
+    }
+
+    #[test]
+    fn refreshing_keeps_border_color_and_adds_indicator() {
+        let mut refreshing = ready(snapshot("Kanban", vec![plain_line("inbox 3")]));
+        refreshing.begin_refresh();
+        let idle = state_with(vec![kanban_entry()]);
+        let busy = state_with(vec![entry("kanban", refreshing)]);
+        assert_eq!(
+            border_colors(&buffer_of(&busy, 100, 30, now())),
+            border_colors(&buffer_of(&idle, 100, 30, now())),
+        );
+        let text = screen(&busy, 100, 30);
+        assert!(text.contains("[A] Kanban ⟳"), "{text}");
+        assert!(text.contains("inbox 3"), "{text}");
+    }
+
+    #[test]
+    fn stale_data_is_dimmed() {
+        let interval_periods = 10;
+        let stale_at = now() - TimeDelta::seconds(30 * interval_periods);
+        let stale = state_with(vec![entry(
+            "kanban",
+            ready_at(snapshot("Kanban", vec![plain_line("inbox 3")]), stale_at),
+        )]);
+        let fresh = state_with(vec![kanban_entry()]);
+        let stale_style = style_of_text(&buffer_of(&stale, 100, 30, now()), "inbox 3");
+        let fresh_style = style_of_text(&buffer_of(&fresh, 100, 30, now()), "Tarefa");
+        assert!(stale_style.is_some_and(|style| style.add_modifier.contains(Modifier::DIM)));
+        assert!(!fresh_style.is_some_and(|style| style.add_modifier.contains(Modifier::DIM)));
+    }
+
+    #[test]
+    fn widget_max_items_cuts_overflow_inside_box() {
+        let lines = (1..=10)
+            .map(|number| plain_line(&format!("linha {number}")))
+            .collect();
+        let mut failing = ready_at(snapshot("Agenda", lines), now() - TimeDelta::minutes(45));
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let mut capped = entry("agenda", failing);
+        capped.max_items = Some(3);
+        let text = screen(&state_with(vec![capped]), 100, 30);
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
+        assert!(text.contains("linha 2"), "{text}");
+        assert!(text.contains("+8 itens"), "{text}");
+        assert!(!text.contains("linha 3"), "{text}");
+    }
+
+    #[test]
+    fn focus_mode_lists_every_widget_of_the_tab_in_a_column() {
+        let mut agenda = snapshot("Agenda", vec![]);
+        agenda.mini = Some(Mini {
+            value: "3".to_string(),
+            text: "reuniões".to_string(),
+            tone: widget_content::Tone::Ok,
+        });
+        let mut state = state_with(vec![kanban_entry(), entry("agenda", ready(agenda))]);
+        press(&mut state, &[KeyInput::Enter]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("Kanban 2 itens"), "{text}");
+        assert!(text.contains("Agenda 3 reuniões"), "{text}");
+    }
+
+    #[test]
+    fn render_never_panics_on_zero_sized_frames() {
+        let mut state = state_with(vec![kanban_entry()]);
+        assert!(draw(&state, 0, 0).is_empty());
+        assert_eq!(draw(&state, 1, 1).len(), 1);
+        let rows = draw(&state, 59, 19);
+        assert_eq!(rows.len(), 19);
+        assert!(rows.iter().any(|row| row.contains("Amplie")), "{rows:?}");
+        assert!(border_colors(&buffer_of(&state, 59, 19, now())).contains(&Some(Color::Cyan)));
+        press(&mut state, &[KeyInput::Enter]);
+        for (width, height) in [(0, 0), (1, 1), (59, 19)] {
+            assert_eq!(draw(&state, width, height).len(), usize::from(height));
+        }
+    }
+
     #[test]
     fn top_bar_shows_clock_and_date() {
-        let state = AppState::new(vec![kanban_entry()]);
+        let state = state_with(vec![kanban_entry()]);
         let first_row = draw(&state, 100, 30).remove(0);
         assert!(first_row.contains("09:41"), "{first_row}");
         assert!(first_row.contains("17/10/2026"), "{first_row}");
@@ -487,14 +697,10 @@ mod tests {
 
     #[test]
     fn home_draws_one_box_per_widget_title() {
-        let state = AppState::new(vec![
+        let state = state_with(vec![
             kanban_entry(),
-            entry(
-                "agenda",
-                WidgetState::Ready(snapshot("Agenda", vec![])),
-                false,
-            ),
-            entry("time", WidgetState::Ready(snapshot("Time", vec![])), false),
+            entry("agenda", ready(snapshot("Agenda", vec![]))),
+            entry("time", ready(snapshot("Time", vec![]))),
         ]);
         let text = screen(&state, 100, 31);
         for title in ["Kanban", "Agenda", "Time"] {
@@ -503,13 +709,116 @@ mod tests {
     }
 
     #[test]
-    fn failed_widget_shows_error_inside_its_box() {
-        let state = AppState::new(vec![entry(
-            "kanban",
-            WidgetState::Failed("plugin quebrou".to_string()),
-            false,
-        )]);
-        assert!(screen(&state, 100, 30).contains("plugin quebrou"));
+    fn failure_after_success_shows_reason_and_age_in_focus_mode() {
+        let old = ready_at(kanban_snapshot(), now() - TimeDelta::minutes(45));
+        let mut failing = old;
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let mut state = state_with(vec![entry("kanban", failing)]);
+        press(&mut state, &[KeyInput::Enter]);
+        let rows = draw(&state, 100, 30);
+        let failure = rows
+            .iter()
+            .position(|row| row.contains("⚠ falha: fora do ar"));
+        let age = rows
+            .iter()
+            .position(|row| row.contains("sem atualizar há 45 min"));
+        let old_data = rows.iter().position(|row| row.contains("Tarefa A"));
+        assert!(failure.is_some(), "{rows:?}");
+        assert!(failure < age && age < old_data, "{rows:?}");
+        assert!(border_colors(&buffer_of(&state, 100, 30, now())).contains(&Some(Color::Red)));
+    }
+
+    #[test]
+    fn home_hides_failure_reason_even_when_selected() {
+        let mut failing = ready_at(
+            snapshot("Kanban", vec![plain_line("inbox 3")]),
+            now() - TimeDelta::minutes(45),
+        );
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let state = state_with(vec![entry("kanban", failing)]);
+        let text = screen(&state, 100, 30);
+        assert!(!text.contains("falha:"), "{text}");
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
+        assert!(border_colors(&buffer_of(&state, 100, 30, now())).contains(&Some(Color::Red)));
+    }
+
+    #[test]
+    fn failing_border_is_bold_only_when_focused() {
+        let mut failing = ready(snapshot("Kanban", vec![plain_line("inbox 3")]));
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let focused = state_with(vec![entry("kanban", failing.clone())]);
+        assert_eq!(
+            border_cells(&buffer_of(&focused, 100, 30, now())),
+            vec![(Some(Color::Red), Modifier::BOLD)]
+        );
+        let unfocused = state_with(vec![kanban_entry(), entry("kanban", failing)]);
+        let cells = border_cells(&buffer_of(&unfocused, 100, 30, now()));
+        assert!(
+            cells.contains(&(Some(Color::Red), Modifier::empty())),
+            "{cells:?}"
+        );
+    }
+
+    #[test]
+    fn stale_dimming_skips_failure_line() {
+        let mut stale = ready_at(
+            snapshot("Kanban", vec![plain_line("inbox 3")]),
+            now() - TimeDelta::minutes(5),
+        );
+        stale.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let state = state_with(vec![entry("kanban", stale)]);
+        let buffer = buffer_of(&state, 100, 30, now());
+        let age = style_of_text(&buffer, "sem atualizar");
+        let data = style_of_text(&buffer, "inbox 3");
+        assert!(age.is_some_and(|style| !style.add_modifier.contains(Modifier::DIM)));
+        assert!(data.is_some_and(|style| style.add_modifier.contains(Modifier::DIM)));
+    }
+
+    #[test]
+    fn ia_failure_after_idle_snapshot_is_shown_in_focus_mode() {
+        let mut record = ready(snapshot("IA", vec![plain_line("Sem recomendação ainda")]));
+        record.apply(
+            Err::<WidgetSnapshot, _>("modelo indisponível".to_string()),
+            now(),
+        );
+        let mut state = state_with(vec![entry("ia", record)]);
+        press(&mut state, &[KeyInput::Enter]);
+        assert!(screen(&state, 100, 30).contains("falha: modelo indisponível"));
+    }
+
+    #[test]
+    fn focus_column_needs_at_least_minimum_width() {
+        let mut state = state_with(vec![kanban_entry()]);
+        press(&mut state, &[KeyInput::Enter]);
+        assert!(!screen(&state, 24, 30).contains("Kanban 2 itens"));
+        assert!(screen(&state, 25, 30).contains("Kanban 2 itens"));
+    }
+
+    #[test]
+    fn first_refresh_without_snapshot_shows_indicator_and_loading() {
+        let mut refreshing = WidgetRecord::loading();
+        refreshing.begin_refresh();
+        let state = state_with(vec![entry("kanban", refreshing)]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("[A] kanban ⟳"), "{text}");
+        assert!(text.contains("carregando…"), "{text}");
+    }
+
+    #[test]
+    fn max_items_counts_only_body_lines_below_failure_header() {
+        let lines = (1..=5)
+            .map(|number| plain_line(&format!("linha {number}")))
+            .collect();
+        let mut failing = ready_at(snapshot("Agenda", lines), now() - TimeDelta::minutes(45));
+        failing.apply(Err::<WidgetSnapshot, _>("fora do ar".to_string()), now());
+        let mut capped = entry("agenda", failing);
+        capped.max_items = Some(5);
+        let text = screen(&state_with(vec![capped]), 100, 30);
+        for number in 1..=5 {
+            assert!(text.contains(&format!("linha {number}")), "{text}");
+        }
+        assert!(text.contains("sem atualizar há 45 min"), "{text}");
+        assert!(!text.contains("+"), "{text}");
     }
 
     #[test]
@@ -518,21 +827,17 @@ mod tests {
             text: "inbox 3".to_string(),
             flag: Some(Flag::Updated),
         };
-        let state = AppState::new(vec![entry(
-            "kanban",
-            WidgetState::Ready(snapshot("Kanban", vec![line])),
-            false,
-        )]);
+        let state = state_with(vec![entry("kanban", ready(snapshot("Kanban", vec![line])))]);
         assert!(screen(&state, 100, 30).contains("● inbox 3"));
     }
 
     #[test]
     fn confirmation_dialog_shows_description_and_keys() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         press(
             &mut state,
             &[
-                KeyInput::Tab,
+                KeyInput::Enter,
                 KeyInput::Down,
                 KeyInput::Character('a'),
                 KeyInput::Enter,
@@ -550,20 +855,20 @@ mod tests {
 
     #[test]
     fn action_menu_lists_action_labels() {
-        let mut state = AppState::new(vec![kanban_entry()]);
-        press(&mut state, &[KeyInput::Tab, KeyInput::Character('a')]);
+        let mut state = state_with(vec![kanban_entry()]);
+        press(&mut state, &[KeyInput::Enter, KeyInput::Character('a')]);
         assert!(screen(&state, 100, 30).contains("Mover para done"));
     }
 
     #[test]
     fn compact_mode_shows_enlarge_warning() {
-        let state = AppState::new(vec![kanban_entry()]);
+        let state = state_with(vec![kanban_entry()]);
         assert!(screen(&state, 50, 15).contains("Amplie"));
     }
 
     #[test]
     fn zero_sized_area_does_not_panic() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         for width in 0..=14u16 {
             for height in 0..=14u16 {
                 draw(&state, width, height);
@@ -571,7 +876,7 @@ mod tests {
         }
         press(
             &mut state,
-            &[KeyInput::Tab, KeyInput::Character('a'), KeyInput::Enter],
+            &[KeyInput::Enter, KeyInput::Character('a'), KeyInput::Enter],
         );
         for (width, height) in [(0, 0), (1, 1), (3, 3), (10, 4), (60, 20)] {
             draw(&state, width, height);
@@ -580,10 +885,9 @@ mod tests {
 
     #[test]
     fn wide_characters_are_truncated_with_ellipsis_inside_box() {
-        let state = AppState::new(vec![entry(
+        let state = state_with(vec![entry(
             "kanban",
-            WidgetState::Ready(snapshot("Kanban", vec![plain_line(&"日本語".repeat(15))])),
-            false,
+            ready(snapshot("Kanban", vec![plain_line(&"日本語".repeat(15))])),
         )]);
         let rows = draw(&state, 60, 20);
         let row = rows
@@ -595,8 +899,8 @@ mod tests {
 
     #[test]
     fn detail_tab_lists_sections_and_items() {
-        let mut state = AppState::new(vec![kanban_entry()]);
-        press(&mut state, &[KeyInput::Tab, KeyInput::Down]);
+        let mut state = state_with(vec![kanban_entry()]);
+        press(&mut state, &[KeyInput::Enter, KeyInput::Down]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("inbox"));
         assert!(text.contains("  ⚠ Tarefa A"), "{text}");
@@ -605,7 +909,7 @@ mod tests {
 
     #[test]
     fn notice_is_rendered_on_the_last_row() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         state.show_notice("Cartão movido".to_string());
         let rows = draw(&state, 100, 30);
         assert!(rows[29].contains("Cartão movido"));
@@ -621,7 +925,7 @@ mod tests {
     }
 
     fn app_with_pomodoro() -> AppState {
-        AppState::new(vec![kanban_entry()]).with_pomodoro(pomodoro_timer())
+        state_with(vec![kanban_entry()]).with_pomodoro(pomodoro_timer())
     }
 
     #[test]
@@ -653,7 +957,7 @@ mod tests {
 
     #[test]
     fn top_bar_without_pomodoro_has_no_timer_text() {
-        let state = AppState::new(vec![kanban_entry()]);
+        let state = state_with(vec![kanban_entry()]);
         let first_row = draw(&state, 100, 30).remove(0);
         assert!(!first_row.contains("foco") && !first_row.contains("parado"));
     }
@@ -672,7 +976,7 @@ mod tests {
 
     #[test]
     fn send_confirmation_modal_shows_text_and_keys() {
-        let mut state = AppState::new(vec![kanban_entry()]);
+        let mut state = state_with(vec![kanban_entry()]);
         state.ask_send_confirmation(
             "Enviar 3 itens (~40 tokens, estimativa) para claude?".to_string(),
             crate::application::recommendation::RecommendationPlan {
@@ -712,9 +1016,10 @@ mod tests {
     #[test]
     fn long_detail_item_is_wrapped_not_truncated() {
         let sentence = format!("{} FIM-DA-FRASE", "palavra ".repeat(30));
-        let mut state = AppState::new(vec![entry(
+        let mut state = state_with(vec![entry(
             "ia",
-            WidgetState::Ready(WidgetSnapshot {
+            ready(WidgetSnapshot {
+                mini: None,
                 alerts: vec![],
                 summary: Summary {
                     blocks: vec![],
@@ -733,9 +1038,8 @@ mod tests {
                 }]),
                 actions: vec![],
             }),
-            true,
         )]);
-        press(&mut state, &[KeyInput::Tab]);
+        press(&mut state, &[KeyInput::Enter]);
         assert!(screen(&state, 100, 30).contains("FIM-DA-FRASE"));
     }
 
@@ -749,7 +1053,7 @@ mod tests {
                 draw(&state, width, height);
             }
         }
-        let mut modal = AppState::new(vec![kanban_entry()]);
+        let mut modal = state_with(vec![kanban_entry()]);
         modal.ask_send_confirmation(
             "x".repeat(200),
             crate::application::recommendation::RecommendationPlan {
@@ -765,48 +1069,49 @@ mod tests {
         }
     }
 
-    use crate::domain::card;
+    use crate::domain::blocks;
+    use crate::domain::widget_content;
 
-    fn card_line(text: &str) -> card::CardLine {
-        card::CardLine {
+    fn widget_line(text: &str) -> blocks::lines::WidgetLine {
+        blocks::lines::WidgetLine {
             text: text.to_string(),
-            tone: card::Tone::Normal,
+            tone: widget_content::Tone::Normal,
             flag: None,
         }
     }
 
-    fn card_cell(text: &str) -> card::Cell {
-        card::Cell {
+    fn widget_cell(text: &str) -> blocks::table::Cell {
+        blocks::table::Cell {
             text: text.to_string(),
-            tone: card::Tone::Normal,
+            tone: widget_content::Tone::Normal,
             flag: None,
         }
     }
 
-    fn entry_with_blocks(blocks: Vec<card::Block>) -> WidgetEntry {
-        let mut card = snapshot("Agenda", vec![]);
-        card.summary.blocks = blocks;
-        entry("agenda", WidgetState::Ready(card), true)
+    fn entry_with_blocks(blocks: Vec<blocks::Block>) -> WidgetEntry {
+        let mut widget_snapshot = snapshot("Agenda", vec![]);
+        widget_snapshot.summary.blocks = blocks;
+        entry("agenda", ready(widget_snapshot))
     }
 
-    fn rows_and_stat_blocks() -> Vec<card::Block> {
+    fn rows_and_stat_blocks() -> Vec<blocks::Block> {
         vec![
-            card::Block::Rows(vec![card::Row {
+            blocks::Block::Rows(vec![blocks::rows::Row {
                 time: Some("09:00".to_string()),
                 text: "Daily".to_string(),
-                tags: vec![card::Tag {
+                tags: vec![blocks::rows::Tag {
                     text: "agora".to_string(),
-                    tone: card::Tone::Warn,
+                    tone: widget_content::Tone::Warn,
                 }],
-                tone: card::Tone::Normal,
+                tone: widget_content::Tone::Normal,
                 marker: Some('▶'),
                 flag: None,
             }]),
-            card::Block::Stat {
-                items: vec![card::StatItem {
+            blocks::Block::Stat {
+                items: vec![blocks::stat::StatItem {
                     value: "3".to_string(),
                     label: "reuniões".to_string(),
-                    tone: card::Tone::Ok,
+                    tone: widget_content::Tone::Ok,
                 }],
                 hint: Some("hoje".to_string()),
             },
@@ -815,7 +1120,7 @@ mod tests {
 
     #[test]
     fn home_box_renders_rows_and_stat_blocks() {
-        let state = AppState::new(vec![entry_with_blocks(rows_and_stat_blocks())]);
+        let state = state_with(vec![entry_with_blocks(rows_and_stat_blocks())]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("▶ 09:00 Daily"), "{text}");
         assert!(text.contains("[agora]"), "{text}");
@@ -825,14 +1130,14 @@ mod tests {
 
     #[test]
     fn home_box_renders_a_table() {
-        let table = card::Block::Table {
-            columns: vec![card::Column {
+        let table = blocks::Block::Table {
+            columns: vec![blocks::table::Column {
                 title: "Nome".to_string(),
-                align: card::Align::Left,
+                align: widget_content::Align::Left,
             }],
-            rows: vec![vec![card_cell("ana")]],
+            rows: vec![vec![widget_cell("ana")]],
         };
-        let state = AppState::new(vec![entry_with_blocks(vec![table])]);
+        let state = state_with(vec![entry_with_blocks(vec![table])]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("Nome"), "{text}");
         assert!(text.contains("ana"), "{text}");
@@ -840,9 +1145,9 @@ mod tests {
 
     #[test]
     fn legacy_lines_still_render_exactly_as_before() {
-        let state = AppState::new(vec![entry(
+        let state = state_with(vec![entry(
             "kanban",
-            WidgetState::Ready(snapshot(
+            ready(snapshot(
                 "Kanban",
                 vec![
                     plain_line("inbox 3"),
@@ -852,7 +1157,6 @@ mod tests {
                     },
                 ],
             )),
-            false,
         )]);
         let text = screen(&state, 100, 30);
         assert!(text.contains("inbox 3"), "{text}");
@@ -861,14 +1165,11 @@ mod tests {
 
     #[test]
     fn detail_section_shows_blocks_before_items() {
-        let mut entry = kanban_entry();
-        let WidgetState::Ready(snapshot) = &mut entry.state else {
-            panic!("esperava Ready");
-        };
+        let mut snapshot = kanban_snapshot();
         let sections = snapshot.detail.as_mut().unwrap();
-        sections[0].blocks = vec![card::Block::Lines(vec![card_line("RESUMO DA SEÇÃO")])];
-        let mut state = AppState::new(vec![entry]);
-        press(&mut state, &[KeyInput::Tab]);
+        sections[0].blocks = vec![blocks::Block::Lines(vec![widget_line("RESUMO DA SEÇÃO")])];
+        let mut state = state_with(vec![entry("kanban", ready(snapshot))]);
+        press(&mut state, &[KeyInput::Enter]);
         let rows = draw(&state, 100, 30);
         let position = |needle: &str| rows.iter().position(|row| row.contains(needle)).unwrap();
         assert!(position("inbox") < position("RESUMO DA SEÇÃO"));
@@ -877,14 +1178,13 @@ mod tests {
 
     #[test]
     fn selection_ignores_block_content() {
-        let mut entry = kanban_entry();
-        let WidgetState::Ready(snapshot) = &mut entry.state else {
-            panic!("esperava Ready");
-        };
-        snapshot.detail.as_mut().unwrap()[0].blocks =
-            vec![card::Block::Lines(vec![card_line("a"), card_line("b")])];
-        let mut state = AppState::new(vec![entry]);
-        press(&mut state, &[KeyInput::Tab, KeyInput::Down]);
+        let mut snapshot = kanban_snapshot();
+        snapshot.detail.as_mut().unwrap()[0].blocks = vec![blocks::Block::Lines(vec![
+            widget_line("a"),
+            widget_line("b"),
+        ])];
+        let mut state = state_with(vec![entry("kanban", ready(snapshot))]);
+        press(&mut state, &[KeyInput::Enter, KeyInput::Down]);
         assert_eq!(state.selected_item(), 1);
         press(&mut state, &[KeyInput::Down]);
         assert_eq!(state.selected_item(), 1);
@@ -894,22 +1194,22 @@ mod tests {
     fn small_terminal_with_blocks_does_not_panic() {
         let wide = "日本語".repeat(40);
         let columns = (0..10)
-            .map(|_| card::Column {
+            .map(|_| blocks::table::Column {
                 title: wide.clone(),
-                align: card::Align::Right,
+                align: widget_content::Align::Right,
             })
             .collect();
         let rows = (0..200)
-            .map(|_| (0..10).map(|_| card_cell(&wide)).collect())
+            .map(|_| (0..10).map(|_| widget_cell(&wide)).collect())
             .collect();
         let mut blocks = rows_and_stat_blocks();
-        blocks.push(card::Block::Table { columns, rows });
-        blocks.push(card::Block::Lines(vec![card_line(&wide); 200]));
-        let mut state = AppState::new(vec![entry_with_blocks(blocks)]);
+        blocks.push(blocks::Block::Table { columns, rows });
+        blocks.push(blocks::Block::Lines(vec![widget_line(&wide); 200]));
+        let mut state = state_with(vec![entry_with_blocks(blocks)]);
         for size in 0..=14 {
             draw(&state, size, size);
         }
-        press(&mut state, &[KeyInput::Tab]);
+        press(&mut state, &[KeyInput::Enter]);
         for size in 0..=14 {
             draw(&state, size, size);
         }

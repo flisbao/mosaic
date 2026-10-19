@@ -7,18 +7,29 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use mosaic::application::llm::{
-    execute_recommendation, LlmError, RecommendationStore, StoredRecommendation,
+    execute_recommendation, LlmError, RecommendationOutcome, RecommendationStore,
 };
 use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContext};
 use mosaic::application::recommendation_view::recommendation_snapshot;
 use mosaic::application::refresh::refresh_widget;
-use mosaic::domain::widget::WidgetId;
+use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::config::WidgetSettings;
 use mosaic::infrastructure::llm_cli::ClaudeCli;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::FileRecommendationStore;
 
 const FORK_RACE_RETRIES: usize = 20;
+const PRIVATE_TEMPORARY_DIRECTORY_MODE: u32 = 0o700;
+
+fn private_tempdir() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(
+        directory.path(),
+        fs::Permissions::from_mode(PRIVATE_TEMPORARY_DIRECTORY_MODE),
+    )
+    .unwrap();
+    directory
+}
 
 fn now() -> chrono::NaiveDateTime {
     NaiveDate::from_ymd_opt(2026, 10, 17)
@@ -38,7 +49,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         interval_adjusted: false,
         timeout_seconds: 10,
         span: 1,
-        tab: true,
+        max_items: None,
         llm_sections: vec!["inbox".to_string()],
         llm_max_items: 20,
         llm_max_characters_per_item: 120,
@@ -70,12 +81,13 @@ fn run_plan(
     directory: &Path,
     script_body: &str,
 ) -> (
-    Result<StoredRecommendation, LlmError>,
+    Result<RecommendationOutcome, LlmError>,
     FileRecommendationStore,
 ) {
     let root = kanban_root(directory);
     let runner = kanban_runner(&root);
-    let state = refresh_widget(&runner);
+    let mut state = WidgetRecord::loading();
+    state.apply(refresh_widget(&runner), now());
     let selection = LlmSelection {
         sections: vec!["inbox".to_string()],
         max_items: 20,
@@ -115,13 +127,15 @@ fn run_plan(
 
 #[test]
 fn recommendation_is_generated_saved_and_shown_in_the_ia_box() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let (result, store) = run_plan(
         directory.path(),
         "cat > \"$(dirname \"$0\")/stdin.txt\"; printf '1. Corrigir login\\nComece por: Corrigir login'",
     );
 
-    let stored = result.unwrap();
+    let outcome = result.unwrap();
+    assert_eq!(outcome.save_warning, None);
+    let stored = outcome.recommendation;
     assert_eq!(stored.text, "1. Corrigir login\nComece por: Corrigir login");
     assert_eq!(store.load(), Some(stored.clone()));
     let snapshot = recommendation_snapshot(&stored);
@@ -131,7 +145,7 @@ fn recommendation_is_generated_saved_and_shown_in_the_ia_box() {
 
 #[test]
 fn prompt_reaches_the_cli_with_meta_and_only_selected_sections() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let (result, _store) = run_plan(
         directory.path(),
         "cat > \"$(dirname \"$0\")/stdin.txt\"; printf 'ok'",
@@ -149,7 +163,7 @@ fn prompt_reaches_the_cli_with_meta_and_only_selected_sections() {
 
 #[test]
 fn cli_failure_leaves_nothing_stored() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let (result, store) = run_plan(directory.path(), "echo sem credito >&2; exit 2");
 
     assert_eq!(

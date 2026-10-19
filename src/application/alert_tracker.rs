@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::domain::card::Alert;
 use crate::domain::widget::WidgetId;
+use crate::domain::widget_content::Alert;
 
 pub const MAXIMUM_NEW_ALERTS_PER_SNAPSHOT: usize = 5;
 pub const MAXIMUM_REMEMBERED_IDS: usize = 1000;
@@ -58,7 +58,7 @@ impl AlertTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::card::AlertLevel;
+    use crate::domain::widget_content::AlertLevel;
 
     fn alert(id: &str) -> Alert {
         Alert {

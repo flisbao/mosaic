@@ -1,12 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::{NaiveDate, NaiveDateTime};
+
 use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
 use mosaic::application::refresh::refresh_widget;
-use mosaic::domain::widget::{WidgetId, WidgetState};
+use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::config::WidgetSettings;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
-use mosaic::presentation::app_state::{AppState, Command, Mode, WidgetEntry};
+use mosaic::presentation::app_state::{AppState, Command, Mode, TabView, WidgetEntry};
 use mosaic::presentation::key_input::KeyInput;
 
 fn kanban_plugin_path() -> PathBuf {
@@ -23,7 +25,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         interval_adjusted: false,
         timeout_seconds: 10,
         span: 1,
-        tab: true,
+        max_items: None,
         llm_sections: vec![],
         llm_max_items: 20,
         llm_max_characters_per_item: 120,
@@ -31,7 +33,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
     PluginRunner::new(settings, root.to_path_buf())
 }
 
-fn kanban_with_one_card() -> (tempfile::TempDir, PathBuf) {
+fn kanban_with_one_item() -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("kanban");
     fs::create_dir_all(root.join("inbox")).unwrap();
@@ -40,11 +42,26 @@ fn kanban_with_one_card() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn app_for(runner: &PluginRunner) -> AppState {
-    AppState::new(vec![WidgetEntry {
-        id: WidgetId::new("kanban"),
-        state: refresh_widget(runner),
-        has_tab: true,
-    }])
+    let mut record = WidgetRecord::loading();
+    record.apply(refresh_widget(runner), now());
+    AppState::new(
+        vec![WidgetEntry {
+            id: WidgetId::new("kanban"),
+            record,
+            interval: std::time::Duration::from_secs(30),
+            max_items: None,
+        }],
+        vec![TabView {
+            name: "Principal".to_string(),
+            entry_indexes: vec![0],
+        }],
+    )
+}
+
+fn now() -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2026, 10, 18)
+        .and_then(|date| date.and_hms_opt(12, 0, 0))
+        .expect("data válida")
 }
 
 fn press(app: &mut AppState, keys: &[KeyInput]) -> Option<Command> {
@@ -56,7 +73,7 @@ fn press(app: &mut AppState, keys: &[KeyInput]) -> Option<Command> {
 }
 
 fn choose_move_to_done(app: &mut AppState) {
-    let mut keys = vec![KeyInput::Tab, KeyInput::Character('a')];
+    let mut keys = vec![KeyInput::Enter, KeyInput::Character('a')];
     keys.extend([KeyInput::Down; 4]);
     keys.push(KeyInput::Enter);
     press(app, &keys);
@@ -64,8 +81,8 @@ fn choose_move_to_done(app: &mut AppState) {
 }
 
 #[test]
-fn confirmed_move_renames_the_card_and_refreshes_the_widget() {
-    let (_directory, root) = kanban_with_one_card();
+fn confirmed_move_renames_the_item_and_refreshes_the_widget() {
+    let (_directory, root) = kanban_with_one_item();
     let runner = kanban_runner(&root);
     let mut app = app_for(&runner);
     choose_move_to_done(&mut app);
@@ -78,8 +95,8 @@ fn confirmed_move_renames_the_card_and_refreshes_the_widget() {
     assert!(matches!(notice, ActionNotice::Succeeded(_)), "{notice:?}");
     assert!(root.join("done/a.md").is_file());
     assert!(!root.join("inbox/a.md").exists());
-    let WidgetState::Ready(snapshot) = state else {
-        panic!("esperava Ready");
+    let Ok(snapshot) = state else {
+        panic!("esperava snapshot");
     };
     let lines: Vec<String> = snapshot
         .summary
@@ -93,7 +110,7 @@ fn confirmed_move_renames_the_card_and_refreshes_the_widget() {
 
 #[test]
 fn cancel_leaves_files_untouched() {
-    let (_directory, root) = kanban_with_one_card();
+    let (_directory, root) = kanban_with_one_item();
     let runner = kanban_runner(&root);
     let mut app = app_for(&runner);
     choose_move_to_done(&mut app);

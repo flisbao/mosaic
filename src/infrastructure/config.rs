@@ -5,12 +5,16 @@ use std::time::Duration;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::application::reload::{PreparedWidgets, WidgetSpec};
+use crate::application::reload_plan::{plan_reload, WidgetIdentity};
 use crate::domain::pomodoro::PomodoroSettings;
 use crate::domain::widget::WidgetId;
 
 pub const MINIMUM_INTERVAL_SECONDS: u64 = 30;
+pub const MAXIMUM_INTERVAL_SECONDS: u64 = 86_400;
 pub const DEFAULT_INTERVAL_SECONDS: u64 = MINIMUM_INTERVAL_SECONDS;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 5;
+pub const MAXIMUM_TIMEOUT_SECONDS: u64 = 3_600;
 pub const DEFAULT_SPAN: u16 = 1;
 pub const DEFAULT_LLM_MAX_ITEMS: usize = 20;
 pub const DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM: usize = 120;
@@ -21,12 +25,19 @@ pub const DEFAULT_CYCLES_BEFORE_LONG_BREAK: u32 = 4;
 pub const DEFAULT_LLM_TIMEOUT_SECONDS: u64 = 120;
 pub const DEFAULT_PRIORITY_PROMPT: &str = "prompts/prioridade.md";
 pub const DEFAULT_SUGGESTIONS: [&str; 3] = ["Beber água", "Levantar e alongar", "Tomar um café"];
+pub const IMPLICIT_TAB_NAME: &str = "Mosaic";
+const RELOAD_DONE_NOTICE: &str = "Configuração recarregada";
+const RESTART_REQUIRED_NOTICE: &str = "só valem após reiniciar";
+const WARNING_SEPARATOR: &str = " | ";
 
 const CONFIG_DIRECTORY_NAME: &str = "mosaic";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const SECONDS_PER_MINUTE: u64 = 60;
 const POMODORO_SECTION: &str = "pomodoro";
+const LEGACY_NOTIFY_COMMAND_WARNING: &str =
+    "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
 const LLM_SECTION: &str = "llm";
+const FIRST_TAB_INDEX: usize = 0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WidgetSettings {
@@ -38,10 +49,16 @@ pub struct WidgetSettings {
     pub interval_adjusted: bool,
     pub timeout_seconds: u64,
     pub span: u16,
-    pub tab: bool,
+    pub max_items: Option<usize>,
     pub llm_sections: Vec<String>,
     pub llm_max_items: usize,
     pub llm_max_characters_per_item: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabSettings {
+    pub name: String,
+    pub widget_ids: Vec<WidgetId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +76,7 @@ pub struct PomodoroConfig {
     pub cycles_before_long_break: u32,
     pub suggestions: Vec<String>,
     pub bell: bool,
-    pub notify_command: Option<String>,
+    pub notify_command: Option<Vec<String>>,
 }
 
 impl PomodoroConfig {
@@ -89,8 +106,10 @@ pub struct LlmConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub widgets: Vec<WidgetSettings>,
+    pub tabs: Vec<TabSettings>,
     pub pomodoro: PomodoroConfig,
     pub llm: LlmConfig,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -108,6 +127,22 @@ pub enum ConfigError {
         section: String,
         field: &'static str,
     },
+    #[error("widget '{widget}': '{field}' não pode passar de {maximum}")]
+    ValueTooLarge {
+        widget: String,
+        field: &'static str,
+        maximum: u64,
+    },
+    #[error("[{section}]: '{field}' não pode passar de {maximum}")]
+    SettingTooLarge {
+        section: String,
+        field: &'static str,
+        maximum: u64,
+    },
+    #[error("widget '{widget}': aba '{tab}' não existe na configuração")]
+    UnknownTab { widget: String, tab: String },
+    #[error("nome de aba duplicado na configuração: '{0}'")]
+    DuplicateTabName(String),
     #[error("[llm]: harness desconhecido '{0}' (use \"claude\" ou \"opencode\")")]
     UnknownHarness(String),
     #[error("não foi possível descobrir o diretório de configuração")]
@@ -117,11 +152,25 @@ pub enum ConfigError {
 #[derive(Deserialize)]
 struct RawConfig {
     #[serde(default)]
+    tabs: Vec<RawTabSection>,
+    #[serde(default)]
     widgets: Vec<RawWidget>,
     #[serde(default)]
     pomodoro: RawPomodoro,
     #[serde(default)]
     llm: RawLlm,
+}
+
+#[derive(Deserialize)]
+struct RawTabSection {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawTab {
+    Legacy(bool),
+    Name(String),
 }
 
 #[derive(Deserialize)]
@@ -135,8 +184,8 @@ struct RawWidget {
     interval_seconds: Option<u64>,
     timeout_seconds: Option<u64>,
     span: Option<u16>,
-    #[serde(default)]
-    tab: bool,
+    tab: Option<RawTab>,
+    max_items: Option<usize>,
     #[serde(default)]
     llm_sections: Vec<String>,
     llm_max_items: Option<usize>,
@@ -152,7 +201,14 @@ struct RawPomodoro {
     cycles_before_long_break: Option<u32>,
     suggestions: Option<Vec<String>>,
     bell: Option<bool>,
-    notify_command: Option<String>,
+    notify_command: Option<RawNotifyCommand>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawNotifyCommand {
+    Line(String),
+    Arguments(Vec<String>),
 }
 
 #[derive(Deserialize, Default)]
@@ -167,21 +223,92 @@ struct RawLlm {
 }
 
 pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
-    let raw: RawConfig =
-        toml::from_str(text).map_err(|error| ConfigError::Parse(error.to_string()))?;
+    let raw: RawConfig = toml::from_str(text)
+        .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error)))?;
     let mut seen = HashSet::new();
     let mut widgets = Vec::new();
-    for widget in raw.widgets {
+    let mut tab_assignments = Vec::new();
+    let mut warnings = Vec::new();
+    for mut widget in raw.widgets {
         if !seen.insert(widget.id.clone()) {
             return Err(ConfigError::DuplicateWidgetId(widget.id));
         }
+        let tab_name = named_tab(&widget.id, widget.tab.take(), &mut warnings);
+        tab_assignments.push(TabAssignment {
+            widget_id: widget.id.clone(),
+            tab_name,
+        });
         widgets.push(convert_widget(widget)?);
     }
     Ok(AppConfig {
         widgets,
-        pomodoro: convert_pomodoro(raw.pomodoro)?,
+        tabs: build_tabs(raw.tabs, &tab_assignments)?,
+        pomodoro: convert_pomodoro(raw.pomodoro, &mut warnings)?,
         llm: convert_llm(raw.llm)?,
+        warnings,
     })
+}
+
+struct TabAssignment {
+    widget_id: String,
+    tab_name: Option<String>,
+}
+
+fn named_tab(widget_id: &str, tab: Option<RawTab>, warnings: &mut Vec<String>) -> Option<String> {
+    match tab {
+        Some(RawTab::Name(name)) => Some(name),
+        Some(RawTab::Legacy(true)) => {
+            warnings.push(format!(
+                "widget '{widget_id}': 'tab = true' foi aposentado e é ignorado"
+            ));
+            None
+        }
+        Some(RawTab::Legacy(false)) | None => None,
+    }
+}
+
+fn build_tabs(
+    raw_tabs: Vec<RawTabSection>,
+    assignments: &[TabAssignment],
+) -> Result<Vec<TabSettings>, ConfigError> {
+    let mut tabs = if raw_tabs.is_empty() {
+        vec![TabSettings {
+            name: IMPLICIT_TAB_NAME.to_string(),
+            widget_ids: Vec::new(),
+        }]
+    } else {
+        unique_tabs(raw_tabs)?
+    };
+    for assignment in assignments {
+        let index = match &assignment.tab_name {
+            None => FIRST_TAB_INDEX,
+            Some(name) => tabs
+                .iter()
+                .position(|tab| &tab.name == name)
+                .ok_or_else(|| ConfigError::UnknownTab {
+                    widget: assignment.widget_id.clone(),
+                    tab: name.clone(),
+                })?,
+        };
+        tabs[index]
+            .widget_ids
+            .push(WidgetId::new(assignment.widget_id.clone()));
+    }
+    Ok(tabs)
+}
+
+fn unique_tabs(raw_tabs: Vec<RawTabSection>) -> Result<Vec<TabSettings>, ConfigError> {
+    let mut tabs: Vec<TabSettings> = Vec::with_capacity(raw_tabs.len());
+    for raw_tab in raw_tabs {
+        if tabs.iter().any(|tab| tab.name == raw_tab.name) {
+            return Err(ConfigError::DuplicateTabName(raw_tab.name));
+        }
+        tabs.push(TabSettings {
+            name: raw_tab.name,
+            widget_ids: Vec::new(),
+        });
+    }
+    Ok(tabs)
 }
 
 fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
@@ -191,13 +318,22 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
         &widget.id,
         "interval_seconds",
     )?;
-    let interval_seconds = configured_interval.max(MINIMUM_INTERVAL_SECONDS);
+    let interval_seconds =
+        configured_interval.clamp(MINIMUM_INTERVAL_SECONDS, MAXIMUM_INTERVAL_SECONDS);
     let timeout_seconds = positive_or_default(
         widget.timeout_seconds,
         DEFAULT_TIMEOUT_SECONDS,
         &widget.id,
         "timeout_seconds",
     )?;
+    if timeout_seconds > MAXIMUM_TIMEOUT_SECONDS {
+        return Err(ConfigError::ValueTooLarge {
+            widget: widget.id.clone(),
+            field: "timeout_seconds",
+            maximum: MAXIMUM_TIMEOUT_SECONDS,
+        });
+    }
+    let max_items = positive_limit(widget.max_items, &widget.id, "max_items")?;
     let llm_max_items = positive_or_default(
         widget.llm_max_items.map(|value| value as u64),
         DEFAULT_LLM_MAX_ITEMS as u64,
@@ -219,14 +355,17 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
         interval_adjusted: interval_seconds != configured_interval,
         timeout_seconds,
         span: widget.span.unwrap_or(DEFAULT_SPAN),
-        tab: widget.tab,
+        max_items,
         llm_sections: widget.llm_sections,
         llm_max_items,
         llm_max_characters_per_item,
     })
 }
 
-fn convert_pomodoro(raw: RawPomodoro) -> Result<PomodoroConfig, ConfigError> {
+fn convert_pomodoro(
+    raw: RawPomodoro,
+    warnings: &mut Vec<String>,
+) -> Result<PomodoroConfig, ConfigError> {
     let cycles = positive_setting(
         raw.cycles_before_long_break.map(u64::from),
         u64::from(DEFAULT_CYCLES_BEFORE_LONG_BREAK),
@@ -258,11 +397,29 @@ fn convert_pomodoro(raw: RawPomodoro) -> Result<PomodoroConfig, ConfigError> {
             .suggestions
             .unwrap_or_else(|| DEFAULT_SUGGESTIONS.iter().map(|s| s.to_string()).collect()),
         bell: raw.bell.unwrap_or(true),
-        notify_command: raw
-            .notify_command
-            .map(|command| command.trim().to_string())
-            .filter(|command| !command.is_empty()),
+        notify_command: convert_notify_command(raw.notify_command, warnings),
     })
+}
+
+fn convert_notify_command(
+    raw: Option<RawNotifyCommand>,
+    warnings: &mut Vec<String>,
+) -> Option<Vec<String>> {
+    let arguments = match raw? {
+        RawNotifyCommand::Arguments(arguments) => arguments,
+        RawNotifyCommand::Line(line) => {
+            let arguments: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            if !arguments.is_empty() {
+                warnings.push(LEGACY_NOTIFY_COMMAND_WARNING.to_string());
+            }
+            arguments
+        }
+    };
+    let cleaned: Vec<String> = arguments
+        .into_iter()
+        .filter(|argument| !argument.trim().is_empty())
+        .collect();
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
 fn convert_llm(raw: RawLlm) -> Result<LlmConfig, ConfigError> {
@@ -277,17 +434,25 @@ fn convert_llm(raw: RawLlm) -> Result<LlmConfig, ConfigError> {
             field: "max_budget_usd",
         });
     }
+    let timeout_seconds = positive_setting(
+        raw.timeout_seconds,
+        DEFAULT_LLM_TIMEOUT_SECONDS,
+        LLM_SECTION,
+        "timeout_seconds",
+    )?;
+    if timeout_seconds > MAXIMUM_TIMEOUT_SECONDS {
+        return Err(ConfigError::SettingTooLarge {
+            section: LLM_SECTION.to_string(),
+            field: "timeout_seconds",
+            maximum: MAXIMUM_TIMEOUT_SECONDS,
+        });
+    }
     Ok(LlmConfig {
         enabled: raw.enabled.unwrap_or(true),
         harness,
         model: raw.model.filter(|model| !model.trim().is_empty()),
         max_budget_usd: raw.max_budget_usd,
-        timeout_seconds: positive_setting(
-            raw.timeout_seconds,
-            DEFAULT_LLM_TIMEOUT_SECONDS,
-            LLM_SECTION,
-            "timeout_seconds",
-        )?,
+        timeout_seconds,
         confirm_before_send: raw.confirm_before_send.unwrap_or(true),
         priority_prompt: raw
             .priority_prompt
@@ -308,6 +473,20 @@ fn positive_or_default(
         }),
         Some(amount) => Ok(amount),
         None => Ok(default),
+    }
+}
+
+fn positive_limit(
+    value: Option<usize>,
+    widget: &str,
+    field: &'static str,
+) -> Result<Option<usize>, ConfigError> {
+    match value {
+        Some(0) => Err(ConfigError::InvalidValue {
+            widget: widget.to_string(),
+            field,
+        }),
+        other => Ok(other),
     }
 }
 
@@ -335,6 +514,103 @@ pub fn config_directory() -> Result<PathBuf, ConfigError> {
 
 pub fn config_file_path(directory: &Path) -> PathBuf {
     directory.join(CONFIG_FILE_NAME)
+}
+
+pub fn read_config_file(path: &Path) -> Result<String, ConfigError> {
+    std::fs::read_to_string(path).map_err(|error| ConfigError::Io(error.to_string()))
+}
+
+pub fn reload_notice(current: &AppConfig, next: &AppConfig) -> String {
+    let restart_sections = restart_sections_changed(current, next);
+    let mut notice = RELOAD_DONE_NOTICE.to_string();
+    if !restart_sections.is_empty() {
+        notice.push_str(&format!(
+            "; {} {RESTART_REQUIRED_NOTICE}",
+            restart_sections.join("/")
+        ));
+    }
+    if !next.warnings.is_empty() {
+        notice.push_str(&format!(". {}", next.warnings.join(WARNING_SEPARATOR)));
+    }
+    notice
+}
+
+fn restart_sections_changed(current: &AppConfig, next: &AppConfig) -> Vec<&'static str> {
+    let mut sections = Vec::new();
+    if current.llm != next.llm {
+        sections.push("[llm]");
+    }
+    if current.pomodoro != next.pomodoro {
+        sections.push("[pomodoro]/notificações");
+    }
+    sections
+}
+
+pub fn retain_restart_sections(active: &AppConfig, mut next: AppConfig) -> AppConfig {
+    next.llm = active.llm.clone();
+    next.pomodoro = active.pomodoro.clone();
+    next
+}
+
+pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
+    parse_config(&read_config_file(&config_file_path(directory))?)
+}
+
+pub fn prepare_reload(
+    current: &[WidgetSettings],
+    text: &str,
+) -> Result<PreparedWidgets<WidgetSettings, AppConfig>, ConfigError> {
+    let config = parse_config(text)?;
+    let current_identities: Vec<WidgetIdentity> =
+        current.iter().map(WidgetIdentity::from).collect();
+    let next_identities: Vec<WidgetIdentity> =
+        config.widgets.iter().map(WidgetIdentity::from).collect();
+    Ok(PreparedWidgets {
+        plan: plan_reload(&current_identities, &next_identities),
+        specs: config.widgets.clone(),
+        config,
+    })
+}
+
+impl WidgetSpec for WidgetSettings {
+    fn widget_id(&self) -> &WidgetId {
+        &self.id
+    }
+}
+
+impl From<&WidgetSettings> for WidgetIdentity {
+    fn from(settings: &WidgetSettings) -> Self {
+        Self {
+            id: settings.id.clone(),
+            command: settings.command.clone(),
+            args: settings.args.clone(),
+            env: settings.env.clone(),
+            interval_seconds: settings.interval_seconds,
+            interval_adjusted: settings.interval_adjusted,
+            timeout_seconds: settings.timeout_seconds,
+        }
+    }
+}
+
+fn describe_parse_error(text: &str, error: &toml::de::Error) -> String {
+    match error.span() {
+        Some(span) => {
+            let (line, column) = line_and_column(text, span.start);
+            format!("linha {line}, coluna {column}: {}", error.message())
+        }
+        None => error.message().to_string(),
+    }
+}
+
+fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
+    let before = text.get(..offset).unwrap_or(text);
+    let line = before.matches('\n').count() + 1;
+    let column = before
+        .rsplit('\n')
+        .next()
+        .map_or(0, |text| text.chars().count())
+        + 1;
+    (line, column)
 }
 
 #[cfg(test)]
@@ -373,7 +649,7 @@ mod tests {
         assert!(!widget.interval_adjusted);
         assert_eq!(widget.timeout_seconds, 3);
         assert_eq!(widget.span, 2);
-        assert!(widget.tab);
+        assert_eq!(widget.max_items, None);
     }
 
     #[test]
@@ -384,7 +660,7 @@ mod tests {
         assert!(!widget.interval_adjusted);
         assert_eq!(widget.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
         assert_eq!(widget.span, DEFAULT_SPAN);
-        assert!(!widget.tab);
+        assert_eq!(widget.max_items, None);
         assert!(widget.args.is_empty());
         assert!(widget.env.is_empty());
     }
@@ -417,11 +693,49 @@ mod tests {
 
     #[test]
     fn interval_at_or_above_minimum_is_kept() {
-        for interval in [30, 31, i64::MAX] {
+        for interval in [30, 31, MAXIMUM_INTERVAL_SECONDS as i64] {
             let widget = interval_settings(interval);
             assert_eq!(widget.interval_seconds, interval as u64);
             assert!(!widget.interval_adjusted, "{interval}");
         }
+    }
+
+    #[test]
+    fn interval_above_maximum_is_capped_and_flagged() {
+        for interval in [MAXIMUM_INTERVAL_SECONDS as i64 + 1, i64::MAX] {
+            let widget = interval_settings(interval);
+            assert_eq!(widget.interval_seconds, MAXIMUM_INTERVAL_SECONDS);
+            assert!(widget.interval_adjusted, "{interval}");
+        }
+    }
+
+    #[test]
+    fn widget_timeout_above_maximum_is_rejected() {
+        let text = format!(
+            "[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntimeout_seconds = {}\n",
+            MAXIMUM_TIMEOUT_SECONDS + 1
+        );
+        assert_eq!(
+            parse_config(&text).unwrap_err(),
+            ConfigError::ValueTooLarge {
+                widget: "a".to_string(),
+                field: "timeout_seconds",
+                maximum: MAXIMUM_TIMEOUT_SECONDS,
+            }
+        );
+    }
+
+    #[test]
+    fn llm_timeout_above_maximum_is_rejected() {
+        let text = format!("[llm]\ntimeout_seconds = {}\n", MAXIMUM_TIMEOUT_SECONDS + 1);
+        assert_eq!(
+            parse_config(&text).unwrap_err(),
+            ConfigError::SettingTooLarge {
+                section: "llm".to_string(),
+                field: "timeout_seconds",
+                maximum: MAXIMUM_TIMEOUT_SECONDS,
+            }
+        );
     }
 
     #[test]
@@ -517,8 +831,16 @@ mod tests {
         assert_eq!(config.pomodoro.suggestions, vec!["Água"]);
         assert!(!config.pomodoro.bell);
         assert_eq!(
-            config.pomodoro.notify_command.as_deref(),
-            Some("notify-send")
+            config.pomodoro.notify_command,
+            Some(vec!["notify-send".to_string()])
+        );
+        assert!(
+            config
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("notify_command")),
+            "{:?}",
+            config.warnings
         );
         assert!(!config.llm.enabled);
         assert_eq!(config.llm.model.as_deref(), Some("haiku"));
@@ -622,6 +944,47 @@ mod tests {
     fn blank_notify_command_becomes_none() {
         let config = parse_config("[pomodoro]\nnotify_command = \"   \"\n").unwrap();
         assert_eq!(config.pomodoro.notify_command, None);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn notify_command_accepts_a_list_of_arguments() {
+        let config = parse_config(
+            "[pomodoro]\nnotify_command = [\"/opt/meu notifier/run\", \"--urgente\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.pomodoro.notify_command,
+            Some(vec![
+                "/opt/meu notifier/run".to_string(),
+                "--urgente".to_string()
+            ])
+        );
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn legacy_notify_command_string_is_split_with_a_warning() {
+        let config =
+            parse_config("[pomodoro]\nnotify_command = \"notify-send --urgency=low\"\n").unwrap();
+        assert_eq!(
+            config.pomodoro.notify_command,
+            Some(vec!["notify-send".to_string(), "--urgency=low".to_string()])
+        );
+        assert!(
+            config
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("notify_command")),
+            "{:?}",
+            config.warnings
+        );
+    }
+
+    #[test]
+    fn empty_notify_command_list_becomes_none() {
+        let config = parse_config("[pomodoro]\nnotify_command = []\n").unwrap();
+        assert_eq!(config.pomodoro.notify_command, None);
     }
 
     #[test]
@@ -650,6 +1013,324 @@ mod tests {
         .unwrap();
         let ids: Vec<&str> = config.widgets.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, vec!["b", "a"]);
+    }
+
+    fn tab_widget_ids(tab: &TabSettings) -> Vec<&str> {
+        tab.widget_ids.iter().map(WidgetId::as_str).collect()
+    }
+
+    #[test]
+    fn without_tabs_section_all_widgets_land_in_one_implicit_tab() {
+        let config = parse_config(
+            "[[widgets]]\nid = \"b\"\ncommand = \"x\"\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.tabs.len(), 1);
+        assert_eq!(config.tabs[0].name, IMPLICIT_TAB_NAME);
+        assert_eq!(tab_widget_ids(&config.tabs[0]), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn widget_goes_to_the_tab_it_names_and_unnamed_goes_to_first() {
+        let config = parse_config(
+            r#"
+            [[tabs]]
+            name = "Trabalho"
+
+            [[tabs]]
+            name = "Pessoal"
+
+            [[widgets]]
+            id = "a"
+            command = "x"
+            tab = "Pessoal"
+
+            [[widgets]]
+            id = "b"
+            command = "x"
+
+            [[widgets]]
+            id = "c"
+            command = "x"
+            tab = "Trabalho"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.tabs[0].name, "Trabalho");
+        assert_eq!(tab_widget_ids(&config.tabs[0]), vec!["b", "c"]);
+        assert_eq!(config.tabs[1].name, "Pessoal");
+        assert_eq!(tab_widget_ids(&config.tabs[1]), vec!["a"]);
+    }
+
+    #[test]
+    fn unknown_tab_name_is_an_error_naming_widget_and_tab() {
+        let result = parse_config(
+            "[[tabs]]\nname = \"Trabalho\"\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = \"Inexistente\"\n",
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::UnknownTab {
+                widget: "a".to_string(),
+                tab: "Inexistente".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn tab_name_without_tabs_section_is_unknown() {
+        let result = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = \"Trabalho\"\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::UnknownTab {
+                widget: "a".to_string(),
+                tab: "Trabalho".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn duplicate_tab_names_are_rejected() {
+        let result = parse_config("[[tabs]]\nname = \"A\"\n[[tabs]]\nname = \"A\"\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::DuplicateTabName("A".to_string())
+        );
+    }
+
+    #[test]
+    fn tab_without_widgets_is_kept_and_empty() {
+        let config = parse_config(
+            "[[tabs]]\nname = \"Vazia\"\n[[tabs]]\nname = \"Cheia\"\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = \"Cheia\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.tabs[0].name, "Vazia");
+        assert!(config.tabs[0].widget_ids.is_empty());
+        assert_eq!(tab_widget_ids(&config.tabs[1]), vec!["a"]);
+    }
+
+    #[test]
+    fn legacy_tab_true_is_ignored_with_warning() {
+        let config =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = true\n").unwrap();
+        assert_eq!(config.widgets.len(), 1);
+        assert_eq!(config.tabs.len(), 1);
+        assert_eq!(
+            config.warnings,
+            vec!["widget 'a': 'tab = true' foi aposentado e é ignorado".to_string()]
+        );
+    }
+
+    #[test]
+    fn max_items_zero_is_rejected() {
+        let result = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\nmax_items = 0\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::InvalidValue {
+                widget: "a".to_string(),
+                field: "max_items"
+            }
+        );
+    }
+
+    #[test]
+    fn max_items_is_parsed() {
+        let config =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\nmax_items = 5\n").unwrap();
+        assert_eq!(config.widgets[0].max_items, Some(5));
+    }
+
+    const RELOAD_BASE: &str = r#"
+[[widgets]]
+id = "jira"
+command = "python3"
+args = ["jira.py", "my-tasks"]
+interval_seconds = 60
+
+[[widgets]]
+id = "clima"
+command = "sh"
+"#;
+
+    fn reload_base_widgets() -> Vec<WidgetSettings> {
+        parse_config(RELOAD_BASE).unwrap().widgets
+    }
+
+    #[test]
+    fn invalid_toml_reports_line_and_column_in_portuguese() {
+        let error = parse_config("[[widgets]]\nid = \"jira\"\ncommand = \n").unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("linha 3"), "{message}");
+        assert!(message.contains("coluna "), "{message}");
+    }
+
+    #[test]
+    fn reload_with_invalid_toml_reports_line_and_keeps_current() {
+        let current = reload_base_widgets();
+
+        let result = prepare_reload(&current, "[[widgets]]\nid = \"jira\"\ncommand = \n");
+
+        assert!(
+            matches!(&result, Err(ConfigError::Parse(message)) if message.contains("linha 3")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn reload_with_duplicate_ids_is_rejected_before_planning() {
+        let current = reload_base_widgets();
+        let duplicated = format!("{RELOAD_BASE}\n[[widgets]]\nid = \"jira\"\ncommand = \"sh\"\n");
+
+        let result = prepare_reload(&current, &duplicated);
+
+        assert_eq!(
+            result,
+            Err(ConfigError::DuplicateWidgetId("jira".to_string()))
+        );
+    }
+
+    #[test]
+    fn changed_only_max_items_tab_span_or_order_keeps() {
+        let current = reload_base_widgets();
+        let variants = [
+            RELOAD_BASE.replace(
+                "interval_seconds = 60",
+                "interval_seconds = 60\nmax_items = 3",
+            ),
+            format!(
+                "[[tabs]]\nname = \"Trabalho\"\n{}",
+                RELOAD_BASE.replace(
+                    "interval_seconds = 60",
+                    "interval_seconds = 60\ntab = \"Trabalho\"\nspan = 2",
+                )
+            ),
+            RELOAD_BASE.replace(
+                "[[widgets]]\nid = \"jira\"",
+                "[[tabs]]\nname = \"Trabalho\"\n\n[[widgets]]\nid = \"jira\"",
+            ),
+            RELOAD_BASE.replace(
+                "id = \"clima\"\ncommand = \"sh\"",
+                "id = \"clima\"\ncommand = \"sh\"\nllm_max_items = 5\nllm_sections = [\"Tarefas\"]",
+            ),
+            swap_widget_order(RELOAD_BASE),
+        ];
+        for variant in variants {
+            let prepared = prepare_reload(&current, &variant).unwrap();
+
+            assert_eq!(prepared.plan.changes.len(), 2, "{variant}");
+            assert!(
+                prepared
+                    .plan
+                    .changes
+                    .iter()
+                    .all(|(_, change)| *change
+                        == crate::application::reload_plan::WidgetChange::Keep),
+                "{variant}"
+            );
+        }
+    }
+
+    fn swap_widget_order(text: &str) -> String {
+        let (head, tail) = text.split_once("[[widgets]]\nid = \"jira\"").unwrap();
+        let (jira_body, clima_block) = tail.split_once("[[widgets]]").unwrap();
+        format!("{head}[[widgets]]{clima_block}\n[[widgets]]\nid = \"jira\"{jira_body}")
+    }
+
+    #[test]
+    fn changed_command_restarts_only_that_widget() {
+        let current = reload_base_widgets();
+        let changed = RELOAD_BASE.replace("command = \"sh\"", "command = \"bash\"");
+
+        let prepared = prepare_reload(&current, &changed).unwrap();
+
+        let changes: Vec<(&str, crate::application::reload_plan::WidgetChange)> = prepared
+            .plan
+            .changes
+            .iter()
+            .map(|(id, change)| (id.as_str(), *change))
+            .collect();
+        assert_eq!(
+            changes,
+            vec![
+                ("jira", crate::application::reload_plan::WidgetChange::Keep),
+                (
+                    "clima",
+                    crate::application::reload_plan::WidgetChange::Restart
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn reload_notice_without_restart_sections_is_plain() {
+        let current = parse_config(RELOAD_BASE).unwrap();
+        let next = parse_config(RELOAD_BASE).unwrap();
+
+        assert_eq!(reload_notice(&current, &next), "Configuração recarregada");
+    }
+
+    #[test]
+    fn reload_notice_names_each_section_that_needs_restart() {
+        let current = parse_config(RELOAD_BASE).unwrap();
+        let llm = parse_config(&format!("{RELOAD_BASE}\n[llm]\nharness = \"opencode\"\n")).unwrap();
+        let pomodoro =
+            parse_config(&format!("{RELOAD_BASE}\n[pomodoro]\nfocus_minutes = 30\n")).unwrap();
+        let both = parse_config(&format!(
+            "{RELOAD_BASE}\n[llm]\nharness = \"opencode\"\n[pomodoro]\nfocus_minutes = 30\n"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            reload_notice(&current, &llm),
+            "Configuração recarregada; [llm] só valem após reiniciar"
+        );
+        assert_eq!(
+            reload_notice(&current, &pomodoro),
+            "Configuração recarregada; [pomodoro]/notificações só valem após reiniciar"
+        );
+        assert_eq!(
+            reload_notice(&current, &both),
+            "Configuração recarregada; [llm]/[pomodoro]/notificações só valem após reiniciar"
+        );
+    }
+
+    #[test]
+    fn reload_notice_appends_config_warnings() {
+        let current = parse_config(RELOAD_BASE).unwrap();
+        let next = parse_config(
+            &RELOAD_BASE.replace("interval_seconds = 60", "interval_seconds = 60\ntab = true"),
+        )
+        .unwrap();
+
+        let notice = reload_notice(&current, &next);
+
+        assert!(notice.starts_with("Configuração recarregada. "), "{notice}");
+        assert!(notice.contains("aposentado"), "{notice}");
+    }
+
+    #[test]
+    fn retain_restart_sections_keeps_active_llm_and_pomodoro_but_takes_new_widgets() {
+        let active = parse_config(RELOAD_BASE).unwrap();
+        let next = parse_config(&format!(
+            "{}\n[llm]\nharness = \"opencode\"\n",
+            RELOAD_BASE.replace("command = \"sh\"", "command = \"bash\"")
+        ))
+        .unwrap();
+
+        let retained = retain_restart_sections(&active, next.clone());
+
+        assert_eq!(retained.llm, active.llm);
+        assert_eq!(retained.pomodoro, active.pomodoro);
+        assert_eq!(retained.widgets, next.widgets);
+    }
+
+    #[test]
+    fn missing_config_file_is_io_error() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let result = load_config(directory.path());
+
+        assert!(matches!(result, Err(ConfigError::Io(_))), "{result:?}");
     }
 
     #[test]

@@ -1,7 +1,7 @@
-use crate::application::ports::{ActionExecutor, WidgetSource};
+use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use crate::application::refresh::refresh_widget;
 use crate::domain::action::ConfirmedAction;
-use crate::domain::widget::WidgetState;
+use crate::domain::widget::WidgetSnapshot;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionNotice {
@@ -13,7 +13,7 @@ pub fn execute_confirmed(
     executor: &dyn ActionExecutor,
     source: &dyn WidgetSource,
     action: ConfirmedAction,
-) -> (ActionNotice, WidgetState) {
+) -> (ActionNotice, Result<WidgetSnapshot, SourceError>) {
     let notice = match executor.execute(&action) {
         Ok(outcome) => ActionNotice::Succeeded(outcome.message),
         Err(error) => ActionNotice::Failed(error.to_string()),
@@ -24,10 +24,9 @@ pub fn execute_confirmed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::SourceError;
     use crate::application::refresh::fakes::{snapshot_titled, FakeSource};
     use crate::domain::action::{ActionOutcome, ConfirmedAction, ProposedAction};
-    use crate::domain::widget::{ActionScope, ActionSpec, WidgetId, WidgetState};
+    use crate::domain::widget::{ActionScope, ActionSpec, WidgetId};
 
     struct FakeExecutor(Result<ActionOutcome, SourceError>);
 
@@ -60,7 +59,7 @@ mod tests {
         let (notice, state) = execute_confirmed(&executor, &source, confirmed());
 
         assert_eq!(notice, ActionNotice::Succeeded("movido".to_string()));
-        assert_eq!(state, WidgetState::Ready(snapshot_titled("Kanban")));
+        assert_eq!(state, Ok(snapshot_titled("Kanban")));
         assert_eq!(source.call_count(), 1);
     }
 
@@ -72,7 +71,7 @@ mod tests {
         let (notice, state) = execute_confirmed(&executor, &source, confirmed());
 
         assert_eq!(notice, ActionNotice::Failed("destino existe".to_string()));
-        assert_eq!(state, WidgetState::Ready(snapshot_titled("Kanban")));
+        assert_eq!(state, Ok(snapshot_titled("Kanban")));
         assert_eq!(source.call_count(), 1);
     }
 }
