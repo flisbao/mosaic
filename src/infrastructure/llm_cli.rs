@@ -12,6 +12,7 @@ pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 const ARGUMENT_SEPARATOR: &str = "--";
 const OPENCODE_CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
 const OPENCODE_RESTRICTED_CONFIG: &str = r#"{"permission":{"*":"deny","external_directory":"deny","write":"deny","edit":"deny","bash":"deny","webfetch":"deny","read":"deny","grep":"deny","glob":"deny","list":"deny","patch":"deny","task":"deny","todowrite":"deny","todoread":"deny"},"tools":{"*":false,"write":false,"edit":false,"bash":false,"webfetch":false,"read":false,"grep":false,"glob":false,"list":false,"patch":false,"task":false,"todowrite":false,"todoread":false},"mcp":{}}"#;
+const OPENCODE_STDIN_INSTRUCTION: &str = "Responda ao pedido recebido pela entrada padrão.";
 const OPENCODE_CONFIG_HOME_VARIABLE: &str = "XDG_CONFIG_HOME";
 const OPENCODE_ISOLATED_CONFIG_DIRECTORY: &str = "xdg-config";
 
@@ -120,7 +121,7 @@ impl OpenCodeCli {
             arguments.extend(["-m".to_string(), model.clone()]);
         }
         arguments.push(ARGUMENT_SEPARATOR.to_string());
-        arguments.push(request.prompt.clone());
+        arguments.push(OPENCODE_STDIN_INSTRUCTION.to_string());
         arguments
     }
 }
@@ -150,7 +151,7 @@ impl LlmRunner for OpenCodeCli {
             &self.working_directory,
             &self.arguments(request),
             &self.environment(),
-            None,
+            Some(&request.prompt),
             self.timeout,
             &self.cancel_flag,
         )
@@ -293,25 +294,17 @@ mod tests {
     }
 
     #[test]
-    fn opencode_arguments_use_dir_model_and_double_dash_before_prompt() {
+    fn opencode_arguments_use_dir_model_and_never_carry_the_prompt() {
         let cli = opencode("opencode".to_string(), Path::new("/tmp"), 5);
-        let arguments = cli.arguments(&request("faça isso", Some("anthropic/haiku")));
+        let arguments = cli.arguments(&request("SEGREDO-DO-PROMPT", Some("anthropic/haiku")));
         assert_eq!(arguments[0], "run");
         let joined = arguments.join(" ");
         assert!(joined.contains("--dir /tmp/neutro"), "{joined}");
         assert!(joined.contains("-m anthropic/haiku"), "{joined}");
+        assert!(!joined.contains("SEGREDO-DO-PROMPT"), "{joined}");
         let separator = arguments.iter().position(|a| a == "--").unwrap();
-        assert_eq!(arguments[separator + 1], "faça isso");
-        assert_eq!(arguments.last().unwrap(), "faça isso");
-    }
-
-    #[test]
-    fn opencode_prompt_starting_with_dash_stays_after_double_dash() {
-        let cli = opencode("opencode".to_string(), Path::new("/tmp"), 5);
-        let arguments = cli.arguments(&request("--help me", None));
-        let separator = arguments.iter().position(|a| a == "--").unwrap();
-        assert_eq!(arguments[separator + 1], "--help me");
-        assert_eq!(arguments.iter().filter(|a| *a == "--help me").count(), 1);
+        assert_eq!(arguments[separator + 1], OPENCODE_STDIN_INSTRUCTION);
+        assert_eq!(arguments.last().unwrap(), OPENCODE_STDIN_INSTRUCTION);
     }
 
     #[test]
@@ -390,17 +383,18 @@ mod tests {
     }
 
     #[test]
-    fn opencode_passes_prompt_as_last_argument() {
+    fn opencode_receives_the_prompt_on_stdin_not_in_arguments() {
         let directory = tempfile::tempdir().unwrap();
-        let program = fake_program(
-            directory.path(),
-            "for last; do :; done; printf '%s' \"$last\"",
-        );
-        let prompt = "-x com $VAR";
+        let program = fake_program(directory.path(), "printf 'ARGS=%s;STDIN=' \"$*\"; cat");
+        let prompt = "-x com $VAR e SEGREDO";
         let output = opencode(program, directory.path(), 5)
             .run_retrying(&request(prompt, None))
             .unwrap();
-        assert_eq!(output, prompt);
+        assert!(output.ends_with(&format!("STDIN={prompt}")), "{output}");
+        assert!(
+            !output.split(";STDIN=").next().unwrap().contains("SEGREDO"),
+            "{output}"
+        );
     }
 
     #[test]

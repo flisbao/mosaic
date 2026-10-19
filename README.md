@@ -12,6 +12,8 @@ cargo run --release
 
 Na primeira execução o Mosaic cria `~/.config/mosaic/` com a configuração, os widgets de exemplo (kanban, Jira, galeria) e o prompt de prioridade. Se você já usava a versão anterior, copie `~/.config/panel-tui/` para `~/.config/mosaic/`.
 
+O prompt é enviado ao `claude` e ao `opencode` pela entrada padrão, nunca como argumento, para não aparecer em `ps`.
+
 ## Escrevendo um widget
 
 Um widget responde ao argumento `snapshot` imprimindo um JSON:
