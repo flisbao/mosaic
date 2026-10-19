@@ -37,7 +37,7 @@ impl ProcessError {
 #[cfg(unix)]
 const LOWEST_SAFE_PROCESS_GROUP_ID: i32 = 2;
 #[cfg(unix)]
-const ABSOLUTE_KILL_PATH: &str = "/bin/kill";
+const KILL_PROGRAM_PATHS: [&str; 2] = ["/bin/kill", "/usr/bin/kill"];
 
 #[derive(Default)]
 struct CancelState {
@@ -232,20 +232,22 @@ fn isolate_process_group(_command: &mut Command) {}
 
 #[cfg(unix)]
 fn signal_process_group(pid: u32) {
+    let Some(program) = resolve_kill_program(&KILL_PROGRAM_PATHS) else {
+        return;
+    };
     if let Some(target) = process_group_argument(pid) {
-        let _ = kill_command().args(["-KILL", "--", &target]).output();
+        let _ = Command::new(program)
+            .args(["-KILL", "--", &target])
+            .output();
     }
 }
 
 #[cfg(unix)]
-fn kill_command() -> Command {
-    let absolute = std::path::Path::new(ABSOLUTE_KILL_PATH);
-    let program = if absolute.exists() {
-        ABSOLUTE_KILL_PATH
-    } else {
-        "kill"
-    };
-    Command::new(program)
+fn resolve_kill_program<'a>(candidates: &[&'a str]) -> Option<&'a str> {
+    candidates
+        .iter()
+        .copied()
+        .find(|candidate| std::path::Path::new(candidate).is_file())
 }
 
 #[cfg(not(unix))]
@@ -399,8 +401,25 @@ mod tests {
         })
     }
 
+    #[test]
+    fn kill_program_is_never_resolved_through_path() {
+        assert_eq!(
+            resolve_kill_program(&["/caminho/que/nao/existe/kill"]),
+            None
+        );
+        assert_eq!(resolve_kill_program(&[]), None);
+    }
+
+    #[test]
+    fn kill_program_is_the_first_existing_absolute_path() {
+        assert_eq!(
+            resolve_kill_program(&["/caminho/que/nao/existe/kill", "/bin/sh", "/usr/bin/env"]),
+            Some("/bin/sh")
+        );
+    }
+
     fn is_gone(pid: &str) -> bool {
-        let signalable = kill_command()
+        let signalable = Command::new("kill")
             .args(["-0", pid])
             .output()
             .is_ok_and(|output| output.status.success());
