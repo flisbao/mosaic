@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
-use crate::application::llm::{RecommendationStore, StoredRecommendation};
+use crate::application::llm::{RecommendationStore, StoreError, StoredRecommendation};
 use crate::infrastructure::private_directory::prepare_private_directory;
 
 const APP_DIRECTORY_NAME: &str = "mosaic";
@@ -14,6 +14,7 @@ const TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 const RECOMMENDATION_FILE_MODE: u32 = 0o600;
 pub const MAXIMUM_RECOMMENDATION_FILE_BYTES: u64 = 1_048_576;
 const TEMPORARY_FILE_SUFFIX: &str = ".tmp";
+const NO_PARENT_DIRECTORY_MESSAGE: &str = "o caminho da recomendação não tem diretório pai";
 
 #[derive(Serialize, Deserialize)]
 struct StoredFile {
@@ -29,6 +30,31 @@ impl FileRecommendationStore {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
+
+    fn write_atomically(&self, content: &str) -> std::io::Result<()> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| std::io::Error::other(NO_PARENT_DIRECTORY_MESSAGE))?;
+        prepare_private_directory(parent)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let mut temporary_name = self.path.as_os_str().to_os_string();
+        temporary_name.push(TEMPORARY_FILE_SUFFIX);
+        let temporary = PathBuf::from(temporary_name);
+        let _ = fs::remove_file(&temporary);
+        let mut file = open_private_file(&temporary)?;
+        let written = file
+            .write_all(content.as_bytes())
+            .and_then(|()| file.sync_all())
+            .and_then(|()| {
+                drop(file);
+                fs::rename(&temporary, &self.path)
+            });
+        if written.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        written
+    }
 }
 
 pub struct NullRecommendationStore;
@@ -38,7 +64,9 @@ impl RecommendationStore for NullRecommendationStore {
         None
     }
 
-    fn save(&self, _recommendation: &StoredRecommendation) {}
+    fn save(&self, _recommendation: &StoredRecommendation) -> Result<(), StoreError> {
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -81,7 +109,7 @@ impl RecommendationStore for FileRecommendationStore {
         })
     }
 
-    fn save(&self, recommendation: &StoredRecommendation) {
+    fn save(&self, recommendation: &StoredRecommendation) -> Result<(), StoreError> {
         let stored = StoredFile {
             text: recommendation.text.clone(),
             created_at: recommendation
@@ -89,29 +117,10 @@ impl RecommendationStore for FileRecommendationStore {
                 .format(TIMESTAMP_FORMAT)
                 .to_string(),
         };
-        let Ok(content) = serde_json::to_string(&stored) else {
-            return;
-        };
-        let Some(parent) = self.path.parent() else {
-            return;
-        };
-        if prepare_private_directory(parent).is_err() {
-            return;
-        }
-        let mut temporary_name = self.path.as_os_str().to_os_string();
-        temporary_name.push(TEMPORARY_FILE_SUFFIX);
-        let temporary = PathBuf::from(temporary_name);
-        let _ = fs::remove_file(&temporary);
-        let Ok(mut file) = open_private_file(&temporary) else {
-            return;
-        };
-        let written = file
-            .write_all(content.as_bytes())
-            .and_then(|()| file.sync_all());
-        drop(file);
-        if written.is_err() || fs::rename(&temporary, &self.path).is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
+        let content = serde_json::to_string(&stored)
+            .map_err(|error| StoreError::Failed(error.to_string()))?;
+        self.write_atomically(&content)
+            .map_err(|error| StoreError::Failed(error.to_string()))
     }
 }
 
@@ -137,7 +146,7 @@ mod tests {
     fn store_round_trips_a_recommendation() {
         let directory = crate::infrastructure::test_support::private_tempdir();
         let store = FileRecommendationStore::new(directory.path().join("rec.json"));
-        store.save(&stored());
+        store.save(&stored()).unwrap();
         assert_eq!(store.load(), Some(stored()));
     }
 
@@ -164,7 +173,9 @@ mod tests {
     fn store_save_creates_missing_directory() {
         let directory = crate::infrastructure::test_support::private_tempdir();
         let path = directory.path().join("novo/sub/rec.json");
-        FileRecommendationStore::new(path.clone()).save(&stored());
+        FileRecommendationStore::new(path.clone())
+            .save(&stored())
+            .unwrap();
         assert!(path.is_file());
     }
 
@@ -174,7 +185,7 @@ mod tests {
         let blocker = directory.path().join("arquivo");
         fs::write(&blocker, "x").unwrap();
         let store = FileRecommendationStore::new(blocker.join("rec.json"));
-        store.save(&stored());
+        assert!(store.save(&stored()).is_err());
         assert_eq!(store.load(), None);
     }
 
@@ -184,7 +195,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let directory = crate::infrastructure::test_support::private_tempdir();
         let path = directory.path().join("rec.json");
-        FileRecommendationStore::new(path.clone()).save(&stored());
+        FileRecommendationStore::new(path.clone())
+            .save(&stored())
+            .unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
@@ -198,7 +211,9 @@ mod tests {
         fs::write(&target, "original").unwrap();
         let path = directory.path().join("rec.json");
         symlink(&target, &path).unwrap();
-        FileRecommendationStore::new(path.clone()).save(&stored());
+        FileRecommendationStore::new(path.clone())
+            .save(&stored())
+            .unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "original");
         assert!(!fs::symlink_metadata(&path)
             .unwrap()
@@ -213,7 +228,9 @@ mod tests {
         let directory = crate::infrastructure::test_support::private_tempdir();
         let real = directory.path().join("real.json");
         let path = directory.path().join("rec.json");
-        FileRecommendationStore::new(real.clone()).save(&stored());
+        FileRecommendationStore::new(real.clone())
+            .save(&stored())
+            .unwrap();
         symlink(&real, &path).unwrap();
         assert_eq!(FileRecommendationStore::new(path).load(), None);
     }
@@ -234,7 +251,7 @@ mod tests {
     #[test]
     fn null_store_neither_loads_nor_saves() {
         let store = NullRecommendationStore;
-        store.save(&stored());
+        assert!(store.save(&stored()).is_ok());
         assert_eq!(store.load(), None);
     }
 

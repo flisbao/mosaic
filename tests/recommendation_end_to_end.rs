@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use mosaic::application::llm::{
-    execute_recommendation, LlmError, RecommendationStore, StoredRecommendation,
+    execute_recommendation, LlmError, RecommendationOutcome, RecommendationStore,
 };
 use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContext};
 use mosaic::application::recommendation_view::recommendation_snapshot;
@@ -81,7 +81,7 @@ fn run_plan(
     directory: &Path,
     script_body: &str,
 ) -> (
-    Result<StoredRecommendation, LlmError>,
+    Result<RecommendationOutcome, LlmError>,
     FileRecommendationStore,
 ) {
     let root = kanban_root(directory);
@@ -133,7 +133,9 @@ fn recommendation_is_generated_saved_and_shown_in_the_ia_box() {
         "cat > \"$(dirname \"$0\")/stdin.txt\"; printf '1. Corrigir login\\nComece por: Corrigir login'",
     );
 
-    let stored = result.unwrap();
+    let outcome = result.unwrap();
+    assert_eq!(outcome.save_warning, None);
+    let stored = outcome.recommendation;
     assert_eq!(stored.text, "1. Corrigir login\nComece por: Corrigir login");
     assert_eq!(store.load(), Some(stored.clone()));
     let snapshot = recommendation_snapshot(&stored);

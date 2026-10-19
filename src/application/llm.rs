@@ -29,7 +29,19 @@ pub struct StoredRecommendation {
 
 pub trait RecommendationStore: Send + Sync {
     fn load(&self) -> Option<StoredRecommendation>;
-    fn save(&self, recommendation: &StoredRecommendation);
+    fn save(&self, recommendation: &StoredRecommendation) -> Result<(), StoreError>;
+}
+
+#[derive(Debug, Clone, Error, PartialEq)]
+pub enum StoreError {
+    #[error("{0}")]
+    Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecommendationOutcome {
+    pub recommendation: StoredRecommendation,
+    pub save_warning: Option<String>,
 }
 
 const EMPTY_ANSWER_MESSAGE: &str = "a IA devolveu uma resposta vazia";
@@ -40,7 +52,7 @@ pub fn execute_recommendation(
     plan: &RecommendationPlan,
     model: Option<&str>,
     now: NaiveDateTime,
-) -> Result<StoredRecommendation, LlmError> {
+) -> Result<RecommendationOutcome, LlmError> {
     let answer = runner.run(&LlmRequest {
         prompt: plan.prompt.clone(),
         model: model.map(str::to_string),
@@ -53,8 +65,14 @@ pub fn execute_recommendation(
         text: text.to_string(),
         created_at: now,
     };
-    store.save(&recommendation);
-    Ok(recommendation)
+    let save_warning = store
+        .save(&recommendation)
+        .err()
+        .map(|error| error.to_string());
+    Ok(RecommendationOutcome {
+        recommendation,
+        save_warning,
+    })
 }
 
 #[cfg(test)]
@@ -94,8 +112,21 @@ mod tests {
             self.saved.lock().unwrap().clone()
         }
 
-        fn save(&self, recommendation: &StoredRecommendation) {
+        fn save(&self, recommendation: &StoredRecommendation) -> Result<(), StoreError> {
             *self.saved.lock().unwrap() = Some(recommendation.clone());
+            Ok(())
+        }
+    }
+
+    struct FailingStore;
+
+    impl RecommendationStore for FailingStore {
+        fn load(&self) -> Option<StoredRecommendation> {
+            None
+        }
+
+        fn save(&self, _recommendation: &StoredRecommendation) -> Result<(), StoreError> {
+            Err(StoreError::Failed("disco cheio".to_string()))
         }
     }
 
@@ -121,9 +152,18 @@ mod tests {
 
         let result = execute_recommendation(&runner, &store, &plan(), None, now()).unwrap();
 
-        assert_eq!(result.text, "1. Fazer X");
-        assert_eq!(result.created_at, now());
-        assert_eq!(store.load(), Some(result));
+        assert_eq!(result.recommendation.text, "1. Fazer X");
+        assert_eq!(result.recommendation.created_at, now());
+        assert_eq!(result.save_warning, None);
+        assert_eq!(store.load(), Some(result.recommendation));
+    }
+
+    #[test]
+    fn save_failure_keeps_the_recommendation_and_exposes_a_warning() {
+        let runner = FakeRunner::answering(Ok("1. Fazer X".to_string()));
+        let outcome = execute_recommendation(&runner, &FailingStore, &plan(), None, now()).unwrap();
+        assert_eq!(outcome.recommendation.text, "1. Fazer X");
+        assert_eq!(outcome.save_warning.as_deref(), Some("disco cheio"));
     }
 
     #[test]

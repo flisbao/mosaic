@@ -14,7 +14,7 @@ use mosaic::application::alert_tracker::AlertTracker;
 use mosaic::application::check_report::build_check_report;
 use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
 use mosaic::application::llm::{
-    execute_recommendation, LlmError, LlmRunner, RecommendationStore, StoredRecommendation,
+    execute_recommendation, LlmError, LlmRunner, RecommendationOutcome, RecommendationStore,
 };
 use mosaic::application::pomodoro_notifications::{AlertMessage, Notifier};
 use mosaic::application::ports::{Cancellable, Clock, SourceError};
@@ -100,7 +100,7 @@ enum AppEvent {
         ActionNotice,
         Result<WidgetSnapshot, SourceError>,
     ),
-    RecommendationFinished(Result<StoredRecommendation, LlmError>),
+    RecommendationFinished(Result<RecommendationOutcome, LlmError>),
 }
 
 struct WidgetRuntime {
@@ -645,14 +645,23 @@ fn apply_event(
 fn apply_recommendation_result(
     state: &mut AppState,
     services: &Services,
-    result: Result<StoredRecommendation, LlmError>,
+    result: Result<RecommendationOutcome, LlmError>,
     now: NaiveDateTime,
 ) {
     let ia = WidgetId::new(IA_WIDGET_ID);
     match result {
-        Ok(stored) => {
-            state.update_widget(&ia, Ok(recommendation_snapshot(&stored)), now);
-            state.show_notice(RECOMMENDATION_READY_MESSAGE.to_string());
+        Ok(outcome) => {
+            state.update_widget(
+                &ia,
+                Ok(recommendation_snapshot(&outcome.recommendation)),
+                now,
+            );
+            state.show_notice(match outcome.save_warning {
+                Some(reason) => {
+                    format!("{RECOMMENDATION_READY_MESSAGE}, mas não foi possível salvar: {reason}")
+                }
+                None => RECOMMENDATION_READY_MESSAGE.to_string(),
+            });
         }
         Err(LlmError::Unavailable(message)) => {
             if let Some(llm) = &services.llm {
