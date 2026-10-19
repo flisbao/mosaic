@@ -4,8 +4,10 @@ use std::time::Duration;
 
 use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
 use crate::application::ports::Cancellable;
+use crate::domain::widget_content::clean_text_limited;
 use crate::infrastructure::private_directory::prepare_private_directory;
 use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
+use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
@@ -192,7 +194,10 @@ fn run_cli(
         if error.program_not_found() {
             LlmError::Unavailable(format!("`{program}` não encontrado no PATH"))
         } else {
-            LlmError::Failed(error.to_string())
+            LlmError::Failed(clean_text_limited(
+                &error.to_string(),
+                MAXIMUM_TEXT_CHARACTERS,
+            ))
         }
     })
 }

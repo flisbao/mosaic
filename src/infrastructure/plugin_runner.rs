@@ -5,9 +5,11 @@ use std::time::Duration;
 use crate::application::ports::{ActionExecutor, Cancellable, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
+use crate::domain::widget_content::clean_text_limited;
 use crate::infrastructure::config::WidgetSettings;
 use crate::infrastructure::plugin_protocol::parse_snapshot;
 use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
+use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 
@@ -40,7 +42,7 @@ impl PluginRunner {
             maximum_output_bytes: MAXIMUM_PLUGIN_OUTPUT_BYTES,
         };
         run_process(command, stdin_text, &limits, &self.cancel_flag)
-            .map_err(|error| SourceError::Failed(error.to_string()))
+            .map_err(|error| SourceError::Failed(bounded_message(&error.to_string())))
     }
 
     pub fn raw_snapshot_output(&self) -> Result<String, SourceError> {
@@ -70,9 +72,13 @@ impl ActionExecutor for PluginRunner {
         let params = action_parameters(action);
         let output = self.run(&["action", action.action_id()], Some(&params))?;
         Ok(ActionOutcome {
-            message: output.trim().to_string(),
+            message: bounded_message(&output),
         })
     }
+}
+
+fn bounded_message(text: &str) -> String {
+    clean_text_limited(text, MAXIMUM_TEXT_CHARACTERS)
 }
 
 fn action_parameters(action: &ConfirmedAction) -> String {
@@ -268,6 +274,53 @@ mod tests {
     #[test]
     fn action_parameters_ignore_non_object_params() {
         assert_eq!(action_parameters(&move_action("[1]", None)), "{}");
+    }
+
+    #[test]
+    fn huge_stderr_becomes_a_bounded_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = runner(
+            directory.path(),
+            "head -c 100000 /dev/zero | tr '\\0' a >&2; exit 1",
+            5,
+        );
+        let message = snapshot_error(&runner);
+        assert!(
+            message.chars().count() <= MAXIMUM_TEXT_CHARACTERS,
+            "{} caracteres",
+            message.chars().count()
+        );
+    }
+
+    #[test]
+    fn control_and_bidi_characters_are_removed_from_stderr() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = runner(
+            directory.path(),
+            "printf 'falha\\342\\200\\256oculta\\n' >&2; exit 1",
+            5,
+        );
+        let message = snapshot_error(&runner);
+        assert!(!message.contains('\u{202e}'), "{message:?}");
+        assert!(message.contains("falha"), "{message:?}");
+    }
+
+    #[test]
+    fn huge_action_output_becomes_a_bounded_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = runner(directory.path(), "head -c 100000 /dev/zero | tr '\\0' a", 5);
+        let spec = ActionSpec {
+            id: "move".to_string(),
+            label: "Mover".to_string(),
+            description: None,
+            scope: ActionScope::Widget,
+            params_json: "{}".to_string(),
+        };
+        let action = ProposedAction::new(WidgetId::new("test"), spec, None)
+            .unwrap()
+            .confirm();
+        let outcome = runner.execute(&action).unwrap();
+        assert!(outcome.message.chars().count() <= MAXIMUM_TEXT_CHARACTERS);
     }
 
     #[test]

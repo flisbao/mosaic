@@ -11,6 +11,7 @@ use thiserror::Error;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const READ_CHUNK_BYTES: usize = 8192;
+const MAXIMUM_ERROR_BYTES: usize = 16_384;
 const CANCEL_RELEASE_LIMIT: Duration = Duration::from_secs(2);
 const INVALID_TIMEOUT_MESSAGE: &str = "tempo limite inválido";
 
@@ -153,7 +154,11 @@ pub fn run_process(
     }
     cancel.register_child(child.id());
     let stdout = capture(child.stdout.take(), limits.maximum_output_bytes, true);
-    let stderr = capture(child.stderr.take(), limits.maximum_output_bytes, false);
+    let stderr = capture(
+        child.stderr.take(),
+        limits.maximum_output_bytes.min(MAXIMUM_ERROR_BYTES),
+        false,
+    );
     let status = wait_for_exit(&mut child, &stdout, limits, deadline, cancel)?;
 
     let stdout_bytes = join_output(stdout, limits, deadline, cancel)?;
@@ -690,6 +695,21 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("excedeu o limite"), "{error}");
         assert!(error.to_string().contains("100"), "{error}");
+    }
+
+    #[test]
+    fn stderr_capture_is_capped_below_the_stdout_limit() {
+        let error = run(
+            shell("head -c 100000 /dev/zero | tr '\\0' a >&2; exit 1"),
+            None,
+            &limits(5, 1_048_576),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().len() <= MAXIMUM_ERROR_BYTES,
+            "{}",
+            error.to_string().len()
+        );
     }
 
     #[test]
