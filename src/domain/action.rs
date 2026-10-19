@@ -1,8 +1,6 @@
 use crate::domain::error::DomainError;
 use crate::domain::widget::{ActionScope, ActionSpec, WidgetId};
 
-const EMPTY_PARAMS: &str = "{}";
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProposedAction {
     widget: WidgetId,
@@ -66,51 +64,14 @@ impl ConfirmedAction {
         self.item_id.as_deref()
     }
 
-    pub fn params_json_with_item(&self) -> String {
-        let params = self.spec.params_json.trim();
-        let Some(item_id) = &self.item_id else {
-            return params.to_string();
-        };
-        let item_field = format!("\"item_id\":\"{}\"", escape_json_text(item_id));
-        let params = if params.is_empty() {
-            EMPTY_PARAMS
-        } else {
-            params
-        };
-        let body = params
-            .strip_prefix('{')
-            .and_then(|rest| rest.strip_suffix('}'))
-            .map(str::trim)
-            .unwrap_or("");
-        if body.is_empty() {
-            format!("{{{item_field}}}")
-        } else {
-            format!("{{{body},{item_field}}}")
-        }
+    pub fn params_json(&self) -> &str {
+        self.spec.params_json.trim()
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionOutcome {
     pub message: String,
-}
-
-fn escape_json_text(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            control if control.is_control() => {
-                escaped.push_str(&format!("\\u{:04x}", control as u32))
-            }
-            other => escaped.push(other),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
@@ -170,37 +131,13 @@ mod tests {
     }
 
     #[test]
-    fn params_json_with_item_injects_item_id() {
+    fn confirmed_action_exposes_raw_params_and_item() {
         let action = propose(
-            spec(ActionScope::Item, None, r#"{"to":"done"}"#),
+            spec(ActionScope::Item, None, r#" {"to":"done"} "#),
             Some("inbox/a.md"),
-        );
-        let json = action.confirm().params_json_with_item();
-        assert!(json.contains(r#""to":"done""#));
-        assert!(json.contains(r#""item_id":"inbox/a.md""#));
-    }
-
-    #[test]
-    fn params_json_with_item_handles_empty_params() {
-        let action = propose(spec(ActionScope::Item, None, ""), Some("a.md"));
-        assert_eq!(
-            action.confirm().params_json_with_item(),
-            r#"{"item_id":"a.md"}"#
-        );
-    }
-
-    #[test]
-    fn params_json_with_item_escapes_quotes_and_backslashes() {
-        let action = propose(spec(ActionScope::Item, None, "{}"), Some(r#"a"b\c"#));
-        assert_eq!(
-            action.confirm().params_json_with_item(),
-            r#"{"item_id":"a\"b\\c"}"#
-        );
-    }
-
-    #[test]
-    fn params_json_without_item_is_unchanged() {
-        let action = propose(spec(ActionScope::Widget, None, r#"{"x":1}"#), None);
-        assert_eq!(action.confirm().params_json_with_item(), r#"{"x":1}"#);
+        )
+        .confirm();
+        assert_eq!(action.params_json(), r#"{"to":"done"}"#);
+        assert_eq!(action.item_id(), Some("inbox/a.md"));
     }
 }

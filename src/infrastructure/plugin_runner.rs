@@ -11,6 +11,8 @@ use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 
+const ITEM_ID_KEY: &str = "item_id";
+
 pub struct PluginRunner {
     settings: WidgetSettings,
     working_directory: PathBuf,
@@ -65,12 +67,26 @@ impl Cancellable for PluginRunner {
 
 impl ActionExecutor for PluginRunner {
     fn execute(&self, action: &ConfirmedAction) -> Result<ActionOutcome, SourceError> {
-        let params = action.params_json_with_item();
+        let params = action_parameters(action);
         let output = self.run(&["action", action.action_id()], Some(&params))?;
         Ok(ActionOutcome {
             message: output.trim().to_string(),
         })
     }
+}
+
+fn action_parameters(action: &ConfirmedAction) -> String {
+    let mut parameters = match serde_json::from_str::<serde_json::Value>(action.params_json()) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    if let Some(item_id) = action.item_id() {
+        parameters.insert(
+            ITEM_ID_KEY.to_string(),
+            serde_json::Value::String(item_id.to_string()),
+        );
+    }
+    serde_json::Value::Object(parameters).to_string()
 }
 
 #[cfg(all(test, unix))]
@@ -205,6 +221,53 @@ mod tests {
         let stdin = fs::read_to_string(directory.path().join("stdin.txt")).unwrap();
         assert!(stdin.contains(r#""item_id":"a.md""#));
         assert!(stdin.contains(r#""to":"done""#));
+    }
+
+    fn move_action(params: &str, item: Option<&str>) -> ConfirmedAction {
+        let spec = ActionSpec {
+            id: "move".to_string(),
+            label: "Mover".to_string(),
+            description: None,
+            scope: if item.is_some() {
+                ActionScope::Item
+            } else {
+                ActionScope::Widget
+            },
+            params_json: params.to_string(),
+        };
+        ProposedAction::new(WidgetId::new("test"), spec, item.map(str::to_string))
+            .unwrap()
+            .confirm()
+    }
+
+    #[test]
+    fn action_parameters_override_an_existing_item_id_with_a_single_key() {
+        let json = action_parameters(&move_action(
+            r#"{"to":"done","item_id":"velho"}"#,
+            Some("novo.md"),
+        ));
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["item_id"], "novo.md");
+        assert_eq!(value["to"], "done");
+        assert_eq!(json.matches("item_id").count(), 1, "{json}");
+    }
+
+    #[test]
+    fn action_parameters_escape_the_item_id() {
+        let json = action_parameters(&move_action("{}", Some(r#"a"b\c"#)));
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["item_id"], r#"a"b\c"#);
+    }
+
+    #[test]
+    fn action_parameters_without_item_keep_the_params() {
+        let json = action_parameters(&move_action(r#"{"x":1}"#, None));
+        assert_eq!(json, r#"{"x":1}"#);
+    }
+
+    #[test]
+    fn action_parameters_ignore_non_object_params() {
+        assert_eq!(action_parameters(&move_action("[1]", None)), "{}");
     }
 
     #[test]

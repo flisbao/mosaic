@@ -518,11 +518,22 @@ impl Reader {
                 Some("item") => ActionScope::Item,
                 _ => ActionScope::Widget,
             },
-            params_json: object
-                .get("params")
-                .map(Value::to_string)
-                .unwrap_or_else(|| EMPTY_PARAMS_JSON.to_string()),
+            params_json: self.action_params(object, path),
         })
+    }
+
+    fn action_params(&mut self, object: &Map<String, Value>, path: &str) -> String {
+        match object.get("params") {
+            None => EMPTY_PARAMS_JSON.to_string(),
+            Some(params @ Value::Object(_)) => params.to_string(),
+            Some(_) => {
+                self.warning(
+                    &key_path(path, "params"),
+                    "params precisa ser um objeto; usando {}",
+                );
+                EMPTY_PARAMS_JSON.to_string()
+            }
+        }
     }
 
     fn alerts(&mut self, root: &Map<String, Value>) -> Vec<Alert> {
@@ -646,6 +657,15 @@ mod tests {
         assert_eq!(item.id.as_deref(), Some("a"));
         assert_eq!(item.meta, vec![("p".to_string(), "alta".to_string())]);
         assert_eq!(parsed.snapshot.actions[0].params_json, r#"{"to":"done"}"#);
+    }
+
+    #[test]
+    fn action_params_that_are_not_an_object_become_empty_with_a_warning() {
+        let parsed = report(
+            r#"{"summary":{"title":"T"},"actions":[{"id":"mover","label":"Mover","params":[1,2]}]}"#,
+        );
+        assert_eq!(parsed.snapshot.actions[0].params_json, "{}");
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["actions[0].params"]);
     }
 
     #[test]
