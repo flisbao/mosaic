@@ -19,6 +19,17 @@ use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::FileRecommendationStore;
 
 const FORK_RACE_RETRIES: usize = 20;
+const PRIVATE_TEMPORARY_DIRECTORY_MODE: u32 = 0o700;
+
+fn private_tempdir() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(
+        directory.path(),
+        fs::Permissions::from_mode(PRIVATE_TEMPORARY_DIRECTORY_MODE),
+    )
+    .unwrap();
+    directory
+}
 
 fn now() -> chrono::NaiveDateTime {
     NaiveDate::from_ymd_opt(2026, 10, 17)
@@ -116,7 +127,7 @@ fn run_plan(
 
 #[test]
 fn recommendation_is_generated_saved_and_shown_in_the_ia_box() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let (result, store) = run_plan(
         directory.path(),
         "cat > \"$(dirname \"$0\")/stdin.txt\"; printf '1. Corrigir login\\nComece por: Corrigir login'",
@@ -132,7 +143,7 @@ fn recommendation_is_generated_saved_and_shown_in_the_ia_box() {
 
 #[test]
 fn prompt_reaches_the_cli_with_meta_and_only_selected_sections() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let (result, _store) = run_plan(
         directory.path(),
         "cat > \"$(dirname \"$0\")/stdin.txt\"; printf 'ok'",
@@ -150,7 +161,7 @@ fn prompt_reaches_the_cli_with_meta_and_only_selected_sections() {
 
 #[test]
 fn cli_failure_leaves_nothing_stored() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = private_tempdir();
     let (result, store) = run_plan(directory.path(), "echo sem credito >&2; exit 2");
 
     assert_eq!(

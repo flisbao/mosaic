@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn store_round_trips_a_recommendation() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let store = FileRecommendationStore::new(directory.path().join("rec.json"));
         store.save(&stored());
         assert_eq!(store.load(), Some(stored()));
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn store_load_ignores_missing_empty_and_corrupt_files() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let path = directory.path().join("rec.json");
         let store = FileRecommendationStore::new(path.clone());
         assert_eq!(store.load(), None);
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn store_save_creates_missing_directory() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let path = directory.path().join("novo/sub/rec.json");
         FileRecommendationStore::new(path.clone()).save(&stored());
         assert!(path.is_file());
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn store_save_into_unwritable_path_does_not_panic() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let blocker = directory.path().join("arquivo");
         fs::write(&blocker, "x").unwrap();
         let store = FileRecommendationStore::new(blocker.join("rec.json"));
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn store_save_creates_a_private_file() {
         use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let path = directory.path().join("rec.json");
         FileRecommendationStore::new(path.clone()).save(&stored());
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn store_save_over_a_symlink_does_not_touch_the_link_target() {
         use std::os::unix::fs::symlink;
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let target = directory.path().join("alvo.txt");
         fs::write(&target, "original").unwrap();
         let path = directory.path().join("rec.json");
@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn store_load_refuses_a_symlink() {
         use std::os::unix::fs::symlink;
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let real = directory.path().join("real.json");
         let path = directory.path().join("rec.json");
         FileRecommendationStore::new(real.clone()).save(&stored());
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn store_load_refuses_an_oversized_file() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let path = directory.path().join("rec.json");
         let padding = "a".repeat(MAXIMUM_RECOMMENDATION_FILE_BYTES as usize);
         fs::write(

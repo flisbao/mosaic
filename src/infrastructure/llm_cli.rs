@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn opencode_environment_reaches_the_process_and_claude_has_none() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "printf '%s' \"$OPENCODE_CONFIG_CONTENT\"");
         let output = opencode(program, directory.path(), 5)
             .run_retrying(&request("p", None))
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn refuses_a_symlinked_working_directory() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let outside = directory.path().join("fora");
         fs::create_dir(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, directory.path().join("neutro")).unwrap();
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn claude_sends_prompt_on_stdin_and_returns_stdout() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "cat");
         let prompt = "- critérios com $VAR e \"aspas\" e `crase`";
         let output = claude(program, directory.path(), 5)
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn opencode_receives_the_prompt_on_stdin_not_in_arguments() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "printf 'ARGS=%s;STDIN=' \"$*\"; cat");
         let prompt = "-x com $VAR e SEGREDO";
         let output = opencode(program, directory.path(), 5)
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn runs_in_the_neutral_working_directory() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "pwd -P");
         let output = claude(program, directory.path(), 5)
             .run_retrying(&request("p", None))
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn missing_program_is_unavailable() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let error = claude("claude-que-nao-existe-xyz".to_string(), directory.path(), 5)
             .run_retrying(&request("p", None))
             .unwrap_err();
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn nonzero_exit_is_failed_with_stderr() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "echo sem credito >&2; exit 2");
         let error = claude(program, directory.path(), 5)
             .run_retrying(&request("p", None))
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn slow_cli_times_out() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "exec sleep 30");
         let started = std::time::Instant::now();
         let error = claude(program, directory.path(), 1)
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn huge_output_is_failed() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let program = fake_program(directory.path(), "head -c 300000 /dev/zero | tr '\\0' 'a'");
         let error = claude(program, directory.path(), 5)
             .run_retrying(&request("p", None))
@@ -455,7 +455,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn cancel_stops_the_running_llm_process_and_blocks_later_runs() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::infrastructure::test_support::private_tempdir();
         let pid_file = directory.path().join("pid.txt");
         let marker = directory.path().join("spawned.txt");
         let body = format!(
