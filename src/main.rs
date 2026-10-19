@@ -589,7 +589,7 @@ fn event_loop(
             Some(Command::Quit) => return Ok(()),
             Some(Command::RefreshAll) => services.runtime.trigger_all(),
             Some(Command::ReloadConfig) => reload_config(state, services, spans),
-            Some(Command::Execute(action)) => spawn_action(action, services, sender),
+            Some(Command::Execute(action)) => spawn_action(action, state, services, sender),
             Some(Command::RequestRecommendation) => {
                 request_recommendation(state, services, clock, sender)
             }
@@ -638,6 +638,7 @@ fn apply_event(
             });
         }
         AppEvent::ActionFinished(id, generation, notice, result) => {
+            state.finish_action(&id);
             apply_if_current(&services.generations, &id, generation, result, |result| {
                 announce_widget_alerts(state, services, tracker, &id, &result);
                 state.update_widget(&id, result, now);
@@ -760,12 +761,18 @@ fn rebuilt_layout(state: &AppState, config: &AppConfig, plan: &ReloadPlan) -> Ta
     layout
 }
 
-fn spawn_action(action: ConfirmedAction, services: &Services, sender: &Sender<AppEvent>) {
+fn spawn_action(
+    action: ConfirmedAction,
+    state: &mut AppState,
+    services: &Services,
+    sender: &Sender<AppEvent>,
+) {
     let widget = action.widget().clone();
     let (Some(runner), Some(generation)) = (
         services.runtime.runner(&widget),
         services.generations.current(&widget),
     ) else {
+        state.finish_action(&widget);
         return;
     };
     let runner = Arc::clone(runner);

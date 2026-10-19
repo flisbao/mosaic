@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
@@ -22,6 +22,7 @@ pub const PAGE_JUMP_ITEMS: usize = 10;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
 const POMODORO_DISABLED_NOTICE: &str = "Pomodoro desligado na configuração";
 const IA_BUSY_NOTICE: &str = "A IA já está processando um pedido";
+const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +73,7 @@ pub struct AppState {
     notice: Option<String>,
     pomodoro: Option<PomodoroTimer>,
     alerts: VecDeque<AlertMessage>,
+    pending_actions: HashSet<WidgetId>,
 }
 
 impl AppState {
@@ -87,6 +89,7 @@ impl AppState {
             notice: None,
             pomodoro: None,
             alerts: VecDeque::new(),
+            pending_actions: HashSet::new(),
         }
     }
 
@@ -199,6 +202,14 @@ impl AppState {
 
     pub fn show_notice(&mut self, text: String) {
         self.notice = Some(text);
+    }
+
+    pub fn mark_action_pending(&mut self, id: &WidgetId) {
+        self.pending_actions.insert(id.clone());
+    }
+
+    pub fn finish_action(&mut self, id: &WidgetId) {
+        self.pending_actions.remove(id);
     }
 
     pub fn update_widget(
@@ -362,7 +373,14 @@ impl AppState {
         proposed: ProposedAction,
     ) -> Option<Command> {
         match key {
-            KeyInput::Character('s') => Some(Command::Execute(proposed.confirm())),
+            KeyInput::Character('s') => {
+                let confirmed = proposed.confirm();
+                if !self.pending_actions.insert(confirmed.widget().clone()) {
+                    self.show_notice(ACTION_PENDING_NOTICE.to_string());
+                    return None;
+                }
+                Some(Command::Execute(confirmed))
+            }
             KeyInput::Escape | KeyInput::Character('n') => None,
             _ => {
                 self.mode = Mode::Confirming(proposed);
@@ -999,6 +1017,31 @@ mod tests {
             }
             other => panic!("esperava Confirming, veio {other:?}"),
         }
+    }
+
+    #[test]
+    fn second_confirmation_for_the_same_widget_is_blocked_while_pending() {
+        let mut app = app_confirming_move_of_second_item();
+        assert!(matches!(
+            app.handle_key(character('s')),
+            Some(Command::Execute(_))
+        ));
+
+        let mut again = app_confirming_move_of_second_item();
+        again.mark_action_pending(&WidgetId::new("kanban"));
+        assert_eq!(again.handle_key(character('s')), None);
+        assert_eq!(again.notice(), Some("Ação em andamento"));
+    }
+
+    #[test]
+    fn confirmation_works_again_after_the_action_finishes() {
+        let mut next = app_confirming_move_of_second_item();
+        next.mark_action_pending(&WidgetId::new("kanban"));
+        next.finish_action(&WidgetId::new("kanban"));
+        assert!(matches!(
+            next.handle_key(character('s')),
+            Some(Command::Execute(_))
+        ));
     }
 
     #[test]
