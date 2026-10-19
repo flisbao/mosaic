@@ -48,7 +48,7 @@ use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, Composite
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use mosaic::infrastructure::recommendation_file::{
-    default_recommendation_path, FileRecommendationStore,
+    default_recommendation_path, FileRecommendationStore, NullRecommendationStore,
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
@@ -68,7 +68,9 @@ const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
 const APP_DIRECTORY_NAME: &str = "mosaic";
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
-const FALLBACK_STORE_FILE_NAME: &str = "mosaic-recommendation.json";
+const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório de estado do usuário";
+const NO_STATE_DIRECTORY_STORE_WARNING: &str =
+    "recomendações não serão salvas: não há diretório de estado do usuário";
 const CHECK_SUBCOMMAND: &str = "check";
 const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
 const CHECK_ENV_FLAG: &str = "--env";
@@ -189,6 +191,7 @@ struct Services {
     shutdown: Arc<ShutdownCoordinator>,
     termination: Arc<AtomicBool>,
     llm: Option<LlmServices>,
+    startup_warnings: Vec<String>,
     notifier: CompositeNotifier,
     config_directory: PathBuf,
     config: AppConfig,
@@ -336,7 +339,13 @@ fn run() -> Result<(), AppError> {
         ia_record,
     );
     let mut state = AppState::new(entries, tabs);
-    if let Some(notice) = startup_notice(&config.warnings) {
+    let warnings: Vec<String> = config
+        .warnings
+        .iter()
+        .chain(&services.startup_warnings)
+        .cloned()
+        .collect();
+    if let Some(notice) = startup_notice(&warnings) {
         state.show_notice(notice);
     }
     if config.pomodoro.enabled {
@@ -401,7 +410,12 @@ fn build_services(
         &mut runtime,
         &mut generations,
     );
-    let llm = config.llm.enabled.then(|| build_llm_services(config));
+    let mut startup_warnings = Vec::new();
+    let llm = if config.llm.enabled {
+        build_llm_services(config, &mut startup_warnings)
+    } else {
+        None
+    };
     if let Some(llm) = &llm {
         shutdown.register(LLM_SHUTDOWN_KEY, Arc::clone(&llm.cancellable));
     }
@@ -411,6 +425,7 @@ fn build_services(
         shutdown,
         termination,
         llm,
+        startup_warnings,
         notifier: build_notifier(config),
         config_directory: directory.to_path_buf(),
         config: config.clone(),
@@ -436,10 +451,12 @@ fn share_llm_runner<T: LlmRunner + Cancellable + 'static>(
     )
 }
 
-fn build_llm_services(config: &AppConfig) -> LlmServices {
-    let working_directory = dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .unwrap_or_else(std::env::temp_dir)
+fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<LlmServices> {
+    let Some(state_directory) = dirs::state_dir().or_else(dirs::data_local_dir) else {
+        warnings.push(NO_STATE_DIRECTORY_LLM_WARNING.to_string());
+        return None;
+    };
+    let working_directory = state_directory
         .join(APP_DIRECTORY_NAME)
         .join(LLM_WORKING_DIRECTORY_NAME);
     let timeout = Duration::from_secs(config.llm.timeout_seconds);
@@ -456,15 +473,20 @@ fn build_llm_services(config: &AppConfig) -> LlmServices {
             timeout,
         )),
     };
-    let store_path = default_recommendation_path()
-        .unwrap_or_else(|| std::env::temp_dir().join(FALLBACK_STORE_FILE_NAME));
-    LlmServices {
+    let store: Arc<dyn RecommendationStore> = match default_recommendation_path() {
+        Some(path) => Arc::new(FileRecommendationStore::new(path)),
+        None => {
+            warnings.push(NO_STATE_DIRECTORY_STORE_WARNING.to_string());
+            Arc::new(NullRecommendationStore)
+        }
+    };
+    Some(LlmServices {
         runner,
         cancellable,
-        store: Arc::new(FileRecommendationStore::new(store_path)),
+        store,
         config: config.llm.clone(),
         selections: llm_selections(&config.widgets),
-    }
+    })
 }
 
 fn llm_selections(widgets: &[WidgetSettings]) -> HashMap<String, LlmSelection> {
