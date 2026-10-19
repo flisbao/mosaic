@@ -16,16 +16,14 @@ use mosaic::application::alert_tracker::AlertTracker;
 use mosaic::application::execute_action::execute_confirmed;
 use mosaic::application::llm::{execute_recommendation, LlmRunner, RecommendationStore};
 use mosaic::application::pomodoro_notifications::Notifier;
-use mosaic::application::ports::{Cancellable, Clock};
+use mosaic::application::ports::{Cancellable, Clock, WidgetRunner};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
 use mosaic::application::recommendation_view::IA_WIDGET_ID;
-use mosaic::application::refresh::refresh_widget;
-use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetLifecycle};
+use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
-use mosaic::application::widget_notices::with_interval_notice;
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
@@ -41,10 +39,10 @@ use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::{
     default_recommendation_path, FileRecommendationStore, NullRecommendationStore,
 };
-use mosaic::infrastructure::refresh_signal::{refresh_channel, RefreshSignal, RefreshWake};
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
+use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime, WidgetUpdate};
 use mosaic::presentation::app_events::{apply_event, stored_ia_result, AppEvent, EventContext};
 use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::from_crossterm;
@@ -64,7 +62,6 @@ const NO_STATE_DIRECTORY_STORE_WARNING: &str =
 const CHECK_SUBCOMMAND: &str = "check";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
-const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -72,80 +69,6 @@ enum AppError {
     Config(#[from] ConfigError),
     #[error("falha de terminal: {0}")]
     Terminal(#[from] std::io::Error),
-}
-
-struct WidgetRuntime {
-    working_directory: PathBuf,
-    sender: Sender<AppEvent>,
-    shutdown: Arc<ShutdownCoordinator>,
-    runners: HashMap<WidgetId, Arc<PluginRunner>>,
-    refresh_triggers: HashMap<WidgetId, RefreshSignal>,
-}
-
-impl WidgetRuntime {
-    fn new(
-        working_directory: PathBuf,
-        sender: Sender<AppEvent>,
-        shutdown: Arc<ShutdownCoordinator>,
-    ) -> Self {
-        Self {
-            working_directory,
-            sender,
-            shutdown,
-            runners: HashMap::new(),
-            refresh_triggers: HashMap::new(),
-        }
-    }
-
-    fn runner(&self, id: &WidgetId) -> Option<&Arc<PluginRunner>> {
-        self.runners.get(id)
-    }
-
-    fn trigger_all(&self) {
-        for trigger in self.refresh_triggers.values() {
-            trigger.request();
-        }
-    }
-}
-
-fn shutdown_key(id: &WidgetId) -> String {
-    format!("{WIDGET_SHUTDOWN_KEY_PREFIX}{}", id.as_str())
-}
-
-impl WidgetLifecycle for WidgetRuntime {
-    type Spec = WidgetSettings;
-
-    fn start(&mut self, settings: &WidgetSettings, generation: u64) {
-        let id = settings.id.clone();
-        let interval = Duration::from_secs(settings.interval_seconds);
-        let interval_notice = settings
-            .interval_adjusted
-            .then_some(settings.interval_seconds);
-        let runner = Arc::new(PluginRunner::new(
-            settings.clone(),
-            self.working_directory.clone(),
-        ));
-        self.shutdown.register(
-            &shutdown_key(&id),
-            Arc::clone(&runner) as Arc<dyn Cancellable>,
-        );
-        let trigger = spawn_refresher(
-            id.clone(),
-            generation,
-            Arc::clone(&runner),
-            interval,
-            interval_notice,
-            self.sender.clone(),
-        );
-        self.runners.insert(id.clone(), runner);
-        self.refresh_triggers.insert(id, trigger);
-    }
-
-    fn retire(&mut self, id: &WidgetId) {
-        self.shutdown.retire(&shutdown_key(id));
-        self.runners.remove(id);
-        self.refresh_triggers.remove(id);
-    }
 }
 
 struct LlmServices {
@@ -157,7 +80,7 @@ struct LlmServices {
 }
 
 struct Services {
-    runtime: WidgetRuntime,
+    runtime: WidgetRuntime<AppEvent>,
     generations: WidgetGenerations,
     shutdown: Arc<ShutdownCoordinator>,
     termination: Arc<AtomicBool>,
@@ -265,9 +188,17 @@ fn build_services(
     termination: Arc<AtomicBool>,
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
+    let working_directory = directory.to_path_buf();
+    let factory: RunnerFactory = Box::new(move |settings| {
+        Arc::new(PluginRunner::new(
+            settings.clone(),
+            working_directory.clone(),
+        )) as Arc<dyn WidgetRunner>
+    });
     let mut runtime = WidgetRuntime::new(
-        directory.to_path_buf(),
+        factory,
         sender.clone(),
+        widget_updated,
         Arc::clone(&shutdown),
     );
     let mut generations = WidgetGenerations::default();
@@ -298,6 +229,10 @@ fn build_services(
         config_directory: directory.to_path_buf(),
         config: config.clone(),
     }
+}
+
+fn widget_updated(update: WidgetUpdate) -> AppEvent {
+    AppEvent::WidgetUpdated(update.id, update.generation, update.result)
 }
 
 fn startup_plan(widgets: &[WidgetSettings]) -> ReloadPlan {
@@ -387,34 +322,6 @@ fn build_notifier(config: &AppConfig, shutdown: &ShutdownCoordinator) -> Composi
         notifiers.push(Box::new(notifier));
     }
     CompositeNotifier::new(notifiers)
-}
-
-fn spawn_refresher(
-    id: WidgetId,
-    generation: u64,
-    runner: Arc<PluginRunner>,
-    interval: Duration,
-    interval_notice: Option<u64>,
-    sender: Sender<AppEvent>,
-) -> RefreshSignal {
-    let (trigger, waiter) = refresh_channel();
-    thread::spawn(move || loop {
-        let refreshed = refresh_widget(runner.as_ref());
-        let state = match interval_notice {
-            Some(seconds) => with_interval_notice(refreshed, seconds),
-            None => refreshed,
-        };
-        if sender
-            .send(AppEvent::WidgetUpdated(id.clone(), generation, state))
-            .is_err()
-        {
-            break;
-        }
-        if waiter.wait(interval) == RefreshWake::Closed {
-            break;
-        }
-    });
-    trigger
 }
 
 fn event_loop(

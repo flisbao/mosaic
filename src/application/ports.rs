@@ -23,6 +23,10 @@ pub trait ActionExecutor: Send + Sync {
     fn execute(&self, action: &ConfirmedAction) -> Result<ActionOutcome, SourceError>;
 }
 
+pub trait WidgetRunner: WidgetSource + ActionExecutor {}
+
+impl<T: WidgetSource + ActionExecutor> WidgetRunner for T {}
+
 pub trait Clock: Send + Sync {
     fn now(&self) -> NaiveDateTime;
 }
