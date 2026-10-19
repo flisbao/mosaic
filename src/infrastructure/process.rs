@@ -134,7 +134,11 @@ pub fn run_process(
         .ok_or_else(|| ProcessError::new(INVALID_TIMEOUT_MESSAGE))?;
     isolate_process_group(&mut command);
     let mut child = command
-        .stdin(Stdio::piped())
+        .stdin(if stdin_text.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -142,12 +146,9 @@ pub fn run_process(
             message: format!("não foi possível iniciar '{program}': {error}"),
             program_not_found: error.kind() == std::io::ErrorKind::NotFound,
         })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let text = stdin_text.map(str::to_string);
+    if let (Some(text), Some(mut stdin)) = (stdin_text.map(str::to_string), child.stdin.take()) {
         thread::spawn(move || {
-            if let Some(text) = text {
-                let _ = stdin.write_all(text.as_bytes());
-            }
+            let _ = stdin.write_all(text.as_bytes());
         });
     }
     cancel.register_child(child.id());
@@ -689,6 +690,14 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("excedeu o limite"), "{error}");
         assert!(error.to_string().contains("100"), "{error}");
+    }
+
+    #[test]
+    fn run_process_without_stdin_text_gives_the_child_a_closed_stdin() {
+        let started = Instant::now();
+        let output = run(shell("cat"), None, &limits(5, 1024)).unwrap();
+        assert_eq!(output, "");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
