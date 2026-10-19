@@ -34,6 +34,8 @@ const CONFIG_DIRECTORY_NAME: &str = "mosaic";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const SECONDS_PER_MINUTE: u64 = 60;
 const POMODORO_SECTION: &str = "pomodoro";
+const LEGACY_NOTIFY_COMMAND_WARNING: &str =
+    "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
 const LLM_SECTION: &str = "llm";
 const FIRST_TAB_INDEX: usize = 0;
 
@@ -74,7 +76,7 @@ pub struct PomodoroConfig {
     pub cycles_before_long_break: u32,
     pub suggestions: Vec<String>,
     pub bell: bool,
-    pub notify_command: Option<String>,
+    pub notify_command: Option<Vec<String>>,
 }
 
 impl PomodoroConfig {
@@ -199,7 +201,14 @@ struct RawPomodoro {
     cycles_before_long_break: Option<u32>,
     suggestions: Option<Vec<String>>,
     bell: Option<bool>,
-    notify_command: Option<String>,
+    notify_command: Option<RawNotifyCommand>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawNotifyCommand {
+    Line(String),
+    Arguments(Vec<String>),
 }
 
 #[derive(Deserialize, Default)]
@@ -234,7 +243,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
     Ok(AppConfig {
         widgets,
         tabs: build_tabs(raw.tabs, &tab_assignments)?,
-        pomodoro: convert_pomodoro(raw.pomodoro)?,
+        pomodoro: convert_pomodoro(raw.pomodoro, &mut warnings)?,
         llm: convert_llm(raw.llm)?,
         warnings,
     })
@@ -353,7 +362,10 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
     })
 }
 
-fn convert_pomodoro(raw: RawPomodoro) -> Result<PomodoroConfig, ConfigError> {
+fn convert_pomodoro(
+    raw: RawPomodoro,
+    warnings: &mut Vec<String>,
+) -> Result<PomodoroConfig, ConfigError> {
     let cycles = positive_setting(
         raw.cycles_before_long_break.map(u64::from),
         u64::from(DEFAULT_CYCLES_BEFORE_LONG_BREAK),
@@ -385,11 +397,29 @@ fn convert_pomodoro(raw: RawPomodoro) -> Result<PomodoroConfig, ConfigError> {
             .suggestions
             .unwrap_or_else(|| DEFAULT_SUGGESTIONS.iter().map(|s| s.to_string()).collect()),
         bell: raw.bell.unwrap_or(true),
-        notify_command: raw
-            .notify_command
-            .map(|command| command.trim().to_string())
-            .filter(|command| !command.is_empty()),
+        notify_command: convert_notify_command(raw.notify_command, warnings),
     })
+}
+
+fn convert_notify_command(
+    raw: Option<RawNotifyCommand>,
+    warnings: &mut Vec<String>,
+) -> Option<Vec<String>> {
+    let arguments = match raw? {
+        RawNotifyCommand::Arguments(arguments) => arguments,
+        RawNotifyCommand::Line(line) => {
+            let arguments: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            if !arguments.is_empty() {
+                warnings.push(LEGACY_NOTIFY_COMMAND_WARNING.to_string());
+            }
+            arguments
+        }
+    };
+    let cleaned: Vec<String> = arguments
+        .into_iter()
+        .filter(|argument| !argument.trim().is_empty())
+        .collect();
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
 fn convert_llm(raw: RawLlm) -> Result<LlmConfig, ConfigError> {
@@ -801,8 +831,16 @@ mod tests {
         assert_eq!(config.pomodoro.suggestions, vec!["Água"]);
         assert!(!config.pomodoro.bell);
         assert_eq!(
-            config.pomodoro.notify_command.as_deref(),
-            Some("notify-send")
+            config.pomodoro.notify_command,
+            Some(vec!["notify-send".to_string()])
+        );
+        assert!(
+            config
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("notify_command")),
+            "{:?}",
+            config.warnings
         );
         assert!(!config.llm.enabled);
         assert_eq!(config.llm.model.as_deref(), Some("haiku"));
@@ -905,6 +943,47 @@ mod tests {
     #[test]
     fn blank_notify_command_becomes_none() {
         let config = parse_config("[pomodoro]\nnotify_command = \"   \"\n").unwrap();
+        assert_eq!(config.pomodoro.notify_command, None);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn notify_command_accepts_a_list_of_arguments() {
+        let config = parse_config(
+            "[pomodoro]\nnotify_command = [\"/opt/meu notifier/run\", \"--urgente\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.pomodoro.notify_command,
+            Some(vec![
+                "/opt/meu notifier/run".to_string(),
+                "--urgente".to_string()
+            ])
+        );
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn legacy_notify_command_string_is_split_with_a_warning() {
+        let config =
+            parse_config("[pomodoro]\nnotify_command = \"notify-send --urgency=low\"\n").unwrap();
+        assert_eq!(
+            config.pomodoro.notify_command,
+            Some(vec!["notify-send".to_string(), "--urgency=low".to_string()])
+        );
+        assert!(
+            config
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("notify_command")),
+            "{:?}",
+            config.warnings
+        );
+    }
+
+    #[test]
+    fn empty_notify_command_list_becomes_none() {
+        let config = parse_config("[pomodoro]\nnotify_command = []\n").unwrap();
         assert_eq!(config.pomodoro.notify_command, None);
     }
 

@@ -1,11 +1,18 @@
 use std::io::Write;
-use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use crate::application::pomodoro_notifications::{AlertMessage, Notifier};
+use crate::application::ports::Cancellable;
+use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
 
 const BELL_CHARACTER: &[u8] = b"\x07";
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
+const NOTIFY_MAXIMUM_OUTPUT_BYTES: usize = 1_024;
+pub const MAXIMUM_PENDING_NOTIFICATIONS: usize = 4;
 
 pub struct BellNotifier {
     output: Mutex<Box<dyn Write + Send>>,
@@ -29,34 +36,65 @@ impl Notifier for BellNotifier {
 }
 
 pub struct CommandNotifier {
-    command: String,
+    command: Vec<String>,
+    cancel_flag: CancelFlag,
+    pending: Arc<AtomicUsize>,
 }
 
 impl CommandNotifier {
-    pub fn new(command: String) -> Self {
-        Self { command }
+    pub fn new(command: Vec<String>) -> Self {
+        Self {
+            command,
+            cancel_flag: CancelFlag::default(),
+            pending: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.pending.load(Ordering::SeqCst)
     }
 }
 
 impl Notifier for CommandNotifier {
     fn notify(&self, message: &AlertMessage) {
-        let mut parts = self.command.split_whitespace().map(str::to_string);
-        let Some(program) = parts.next() else {
+        let Some((program, arguments)) = self.command.split_first() else {
             return;
         };
+        if self.pending.fetch_add(1, Ordering::SeqCst) >= MAXIMUM_PENDING_NOTIFICATIONS {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+            return;
+        }
         let mut command = Command::new(program);
         command
-            .args(parts)
+            .args(arguments)
             .arg(&message.title)
-            .arg(&message.body)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .arg(&message.body);
+        let limits = ProcessLimits {
+            timeout: NOTIFY_TIMEOUT,
+            maximum_output_bytes: NOTIFY_MAXIMUM_OUTPUT_BYTES,
+        };
+        let cancel_flag = self.cancel_flag.clone();
+        let pending = Arc::clone(&self.pending);
         thread::spawn(move || {
-            if let Ok(mut child) = command.spawn() {
-                let _ = child.wait();
-            }
+            let _ = run_process(command, None, &limits, &cancel_flag);
+            pending.fetch_sub(1, Ordering::SeqCst);
         });
+    }
+}
+
+impl Cancellable for CommandNotifier {
+    fn cancel(&self) {
+        self.cancel_flag.cancel();
+    }
+
+    fn request_cancel(&self) {
+        self.cancel_flag.request_cancel();
+    }
+}
+
+impl Notifier for Arc<CommandNotifier> {
+    fn notify(&self, message: &AlertMessage) {
+        self.as_ref().notify(message);
     }
 }
 
@@ -82,8 +120,7 @@ impl Notifier for CompositeNotifier {
 mod tests {
     use std::fs;
     use std::io::Write;
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use super::*;
 
@@ -138,17 +175,20 @@ mod tests {
     fn command_notifier_passes_title_and_body_as_arguments() {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
-        let script = directory.path().join("notify");
+        let script = directory.path().join("com espaço");
+        fs::create_dir(&script).unwrap();
+        let script = script.join("notify");
         fs::write(
             &script,
             "#!/bin/sh\nprintf '%s|%s|%s' \"$1\" \"$2\" \"$3\" > \"$(dirname \"$0\")/saida.txt\"\n",
         )
         .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        let notifier = CommandNotifier::new(format!("{} --urgente", script.display()));
-        let output = directory.path().join("saida.txt");
+        let output = script.parent().unwrap().join("saida.txt");
+        let notifier =
+            CommandNotifier::new(vec![script.display().to_string(), "--urgente".to_string()]);
 
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !output.exists() && Instant::now() < deadline {
             notifier.notify(&message());
             std::thread::sleep(Duration::from_millis(100));
@@ -163,7 +203,50 @@ mod tests {
 
     #[test]
     fn command_notifier_missing_program_does_not_panic() {
-        CommandNotifier::new("programa-que-nao-existe-xyz".to_string()).notify(&message());
-        CommandNotifier::new("   ".to_string()).notify(&message());
+        CommandNotifier::new(vec!["programa-que-nao-existe-xyz".to_string()]).notify(&message());
+        CommandNotifier::new(vec![]).notify(&message());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancel_kills_a_hung_notification_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let notifier = CommandNotifier::new(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo $$ > \"$0\"; exec sleep 30".to_string(),
+            pid_file.display().to_string(),
+        ]);
+        notifier.notify(&message());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fs::read_to_string(&pid_file).map_or(true, |text| !text.ends_with('\n'))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid = fs::read_to_string(&pid_file).unwrap().trim().to_string();
+
+        notifier.cancel();
+
+        let state = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let running = state
+            .rsplit_once(')')
+            .is_some_and(|(_, rest)| !rest.trim_start().starts_with('Z'));
+        assert!(!running, "o comando de notificação sobreviveu ao cancel()");
+    }
+
+    #[test]
+    fn pending_notifications_are_capped() {
+        let notifier = CommandNotifier::new(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "exec sleep 2".to_string(),
+        ]);
+        for _ in 0..(MAXIMUM_PENDING_NOTIFICATIONS * 3) {
+            notifier.notify(&message());
+        }
+        assert!(notifier.pending_count() <= MAXIMUM_PENDING_NOTIFICATIONS);
+        notifier.cancel();
     }
 }

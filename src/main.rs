@@ -83,6 +83,7 @@ const EXIT_CODE_FAILURE: u8 = 1;
 const CHECK_CONFIG_FLAG: &str = "--config";
 const CHECK_CONFIG_USAGE: &str = "uso: mosaic check --config [caminho]";
 const LLM_SHUTDOWN_KEY: &str = "llm";
+const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
 
 #[derive(Debug, Error)]
@@ -420,6 +421,7 @@ fn build_services(
     if let Some(llm) = &llm {
         shutdown.register(LLM_SHUTDOWN_KEY, Arc::clone(&llm.cancellable));
     }
+    let notifier = build_notifier(config, &shutdown);
     Services {
         runtime,
         generations,
@@ -427,7 +429,7 @@ fn build_services(
         termination,
         llm,
         startup_warnings,
-        notifier: build_notifier(config),
+        notifier,
         config_directory: directory.to_path_buf(),
         config: config.clone(),
     }
@@ -506,13 +508,18 @@ fn llm_selections(widgets: &[WidgetSettings]) -> HashMap<String, LlmSelection> {
         .collect()
 }
 
-fn build_notifier(config: &AppConfig) -> CompositeNotifier {
+fn build_notifier(config: &AppConfig, shutdown: &ShutdownCoordinator) -> CompositeNotifier {
     let mut notifiers: Vec<Box<dyn Notifier>> = Vec::new();
     if config.pomodoro.bell {
         notifiers.push(Box::new(BellNotifier::new(Box::new(std::io::stdout()))));
     }
     if let Some(command) = &config.pomodoro.notify_command {
-        notifiers.push(Box::new(CommandNotifier::new(command.clone())));
+        let notifier = Arc::new(CommandNotifier::new(command.clone()));
+        shutdown.register(
+            NOTIFIER_SHUTDOWN_KEY,
+            Arc::clone(&notifier) as Arc<dyn Cancellable>,
+        );
+        notifiers.push(Box::new(notifier));
     }
     CompositeNotifier::new(notifiers)
 }

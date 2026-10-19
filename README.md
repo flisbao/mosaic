@@ -82,6 +82,8 @@ mosaic check --config            # usa ~/.config/mosaic/config.toml
 mosaic check --config caminho.toml
 ```
 
+`[pomodoro] notify_command` é uma lista de argumentos (ex.: `["notify-send", "--urgency=low"]`); o Mosaic acrescenta título e corpo como os **dois últimos argumentos**, sem shell. Cada notificação tem limite de 5 s e no máximo 4 rodam ao mesmo tempo. Título e corpo vêm do provider: não use programas que interpretem argumentos começando com `-` de forma perigosa.
+
 ## Licença
 
 MIT
