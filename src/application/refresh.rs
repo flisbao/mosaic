@@ -47,6 +47,7 @@ pub(crate) mod fakes {
         fn cancel(&self) {
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
+        fn request_cancel(&self) {}
     }
 
     pub fn snapshot_titled(title: &str) -> WidgetSnapshot {

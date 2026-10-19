@@ -194,6 +194,7 @@ mod tests {
             thread::sleep(SLOW_CANCEL_DURATION);
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
+        fn request_cancel(&self) {}
     }
 
     fn fake_source() -> Arc<FakeSource> {
@@ -275,6 +276,7 @@ mod tests {
         fn cancel(&self) {
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
+        fn request_cancel(&self) {}
     }
 
     #[test]
