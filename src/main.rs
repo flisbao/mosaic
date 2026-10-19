@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,6 +50,7 @@ use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use mosaic::infrastructure::recommendation_file::{
     default_recommendation_path, FileRecommendationStore, NullRecommendationStore,
 };
+use mosaic::infrastructure::refresh_signal::{refresh_channel, RefreshSignal, RefreshWake};
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
@@ -108,7 +109,7 @@ struct WidgetRuntime {
     sender: Sender<AppEvent>,
     shutdown: Arc<ShutdownCoordinator>,
     runners: HashMap<WidgetId, Arc<PluginRunner>>,
-    refresh_triggers: HashMap<WidgetId, Sender<()>>,
+    refresh_triggers: HashMap<WidgetId, RefreshSignal>,
 }
 
 impl WidgetRuntime {
@@ -132,7 +133,7 @@ impl WidgetRuntime {
 
     fn trigger_all(&self) {
         for trigger in self.refresh_triggers.values() {
-            let _ = trigger.send(());
+            trigger.request();
         }
     }
 }
@@ -523,8 +524,8 @@ fn spawn_refresher(
     interval: Duration,
     interval_notice: Option<u64>,
     sender: Sender<AppEvent>,
-) -> Sender<()> {
-    let (trigger, triggered) = mpsc::channel();
+) -> RefreshSignal {
+    let (trigger, waiter) = refresh_channel();
     thread::spawn(move || loop {
         let refreshed = refresh_widget(runner.as_ref());
         let state = match interval_notice {
@@ -537,7 +538,7 @@ fn spawn_refresher(
         {
             break;
         }
-        if let Err(RecvTimeoutError::Disconnected) = triggered.recv_timeout(interval) {
+        if waiter.wait(interval) == RefreshWake::Closed {
             break;
         }
     });
