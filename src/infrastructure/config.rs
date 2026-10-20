@@ -175,8 +175,12 @@ impl std::fmt::Display for SettingLocation {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ConfigError {
-    #[error("falha de leitura ou escrita: {0}")]
-    Io(String),
+    #[error("falha de leitura ou escrita em {path}: {reason}")]
+    Io {
+        path: String,
+        kind: std::io::ErrorKind,
+        reason: String,
+    },
     #[error("configuração inválida: {0}")]
     Parse(String),
     #[error("widget duplicado na configuração: '{0}'")]
@@ -200,6 +204,16 @@ pub enum ConfigError {
     UnknownHarness(String),
     #[error("não foi possível descobrir o diretório de configuração")]
     MissingConfigDirectory,
+}
+
+impl ConfigError {
+    pub fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError + '_ {
+        move |error| ConfigError::Io {
+            path: path.display().to_string(),
+            kind: error.kind(),
+            reason: error.to_string(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -572,7 +586,7 @@ pub fn config_file_path(directory: &Path) -> PathBuf {
 }
 
 pub fn read_config_file(path: &Path) -> Result<String, ConfigError> {
-    std::fs::read_to_string(path).map_err(|error| ConfigError::Io(error.to_string()))
+    std::fs::read_to_string(path).map_err(ConfigError::io(path))
 }
 
 pub fn reload_notice(current: &AppConfig, next: &AppConfig) -> String {
@@ -1431,7 +1445,13 @@ command = "sh"
 
         let result = load_config(directory.path());
 
-        assert!(matches!(result, Err(ConfigError::Io(_))), "{result:?}");
+        match result {
+            Err(ConfigError::Io { path, kind, .. }) => {
+                assert_eq!(kind, std::io::ErrorKind::NotFound);
+                assert!(path.ends_with("config.toml"), "{path}");
+            }
+            other => panic!("esperava ConfigError::Io, veio {other:?}"),
+        }
     }
 
     #[test]
