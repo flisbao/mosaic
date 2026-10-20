@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 mod check_command;
 
 use std::collections::HashMap;
@@ -10,7 +12,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::NaiveDateTime;
-use crossterm::event::{self, Event};
 use mosaic::application::alert_tracker::AlertTracker;
 use mosaic::application::execute_action::execute_confirmed;
 use mosaic::application::launch_spec::WidgetLaunchSpec;
@@ -53,6 +54,7 @@ use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
 };
+use ratatui::crossterm::event::{self, Event};
 use thiserror::Error;
 
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);

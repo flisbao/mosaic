@@ -14,7 +14,6 @@ pub mod recommendation_file;
 pub mod refresh_signal;
 pub mod shutdown;
 pub mod system_clock;
-pub mod terminal_capabilities;
 pub mod widget_runtime;
 
 #[cfg(all(test, unix))]

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 
