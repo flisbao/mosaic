@@ -11,6 +11,12 @@ fn shifted(position: usize, delta: isize, last: usize) -> usize {
     position.saturating_add_signed(delta).min(last)
 }
 
+#[derive(Clone, Copy)]
+enum Direction {
+    Forward,
+    Backward,
+}
+
 impl AppState {
     pub(super) fn handle_navigation_key(&mut self, key: KeyInput) {
         if self.is_expanded() {
@@ -30,8 +36,8 @@ impl AppState {
 
     fn handle_grid_key(&mut self, key: KeyInput) {
         match key {
-            KeyInput::Tab => self.cycle_tab(true),
-            KeyInput::BackTab => self.cycle_tab(false),
+            KeyInput::Tab => self.cycle_tab(Direction::Forward),
+            KeyInput::BackTab => self.cycle_tab(Direction::Backward),
             KeyInput::Up | KeyInput::Left => self.move_focus(BACKWARD),
             KeyInput::Down | KeyInput::Right => self.move_focus(FORWARD),
             KeyInput::Enter => self.expand_focused(),
@@ -67,15 +73,14 @@ impl AppState {
         self.selected_item = shifted(self.selected_item, delta, last);
     }
 
-    fn cycle_tab(&mut self, forward: bool) {
+    fn cycle_tab(&mut self, direction: Direction) {
         let count = self.tabs().len();
         if count == 0 {
             return;
         }
-        let next = if forward {
-            (self.active_tab + 1) % count
-        } else {
-            (self.active_tab + count - 1) % count
+        let next = match direction {
+            Direction::Forward => (self.active_tab + 1) % count,
+            Direction::Backward => (self.active_tab + count - 1) % count,
         };
         self.go_to_tab(next);
     }
