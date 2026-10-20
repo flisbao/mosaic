@@ -169,7 +169,8 @@ GCALCLI_NO_ERROR_DETAIL = "sem detalhes"
 GCALCLI_FAILURE_MESSAGE = "gcalcli falhou: {detail}"
 GCALCLI_MISSING_BINARY_MESSAGE = "gcalcli não encontrado no PATH; veja a seção gcalcli do README"
 GCALCLI_NOT_RESPONDING_MESSAGE = "gcalcli não respondeu; rode `gcalcli init` no terminal (seção gcalcli do README)"
-GCALCLI_MISSING_COLUMNS_MESSAGE = "saída do gcalcli sem as colunas: {columns}"
+GCALCLI_UNEXECUTABLE_MESSAGE = "gcalcli não pôde ser executado; veja a seção gcalcli do README"
+GCALCLI_MISSING_COLUMNS_MESSAGE ="saída do gcalcli sem as colunas: {columns}"
 GCALCLI_SKIPPED_ROW_WARNING = "linha do gcalcli ignorada"
 TSV_SEPARATOR = "\t"
 
@@ -1112,8 +1113,15 @@ def goa_source(config, window_start, window_end, zone, busctl=run_busctl, http_g
         except ACCOUNT_FAILURES:
             warnings.append(ACCOUNT_UNAVAILABLE_WARNING.format(email=account.email))
     if len(warnings) == len(accounts):
-        raise SourceError(ALL_ACCOUNTS_FAILED_MESSAGE)
+        raise SourceError(_all_accounts_failed_message(accounts))
     return SourceResult(events=events, warnings=warnings)
+
+
+def _all_accounts_failed_message(accounts):
+    attention_warnings = [
+        ATTENTION_NEEDED_WARNING.format(email=account.email) for account in accounts if account.attention_needed
+    ]
+    return "; ".join(attention_warnings) or ALL_ACCOUNTS_FAILED_MESSAGE
 
 
 def _goa_arguments(path, interface, method):
@@ -1254,6 +1262,7 @@ def run_gcalcli(arguments):
         arguments,
         capture_output=True,
         text=True,
+        errors="replace",
         timeout=GCALCLI_TIMEOUT_SECONDS,
         stdin=subprocess.DEVNULL,
     )
@@ -1288,6 +1297,8 @@ def _run_gcalcli(arguments, run):
         raise SourceError(GCALCLI_MISSING_BINARY_MESSAGE) from None
     except subprocess.TimeoutExpired:
         raise SourceError(GCALCLI_NOT_RESPONDING_MESSAGE) from None
+    except OSError:
+        raise SourceError(GCALCLI_UNEXECUTABLE_MESSAGE) from None
 
 
 def _first_error_line(errors):

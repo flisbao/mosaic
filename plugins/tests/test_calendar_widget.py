@@ -1144,6 +1144,34 @@ class GoaSourceTests(unittest.TestCase):
             run_goa_source(goa_config(), busctl, google)
         self.assertEqual(str(context.exception), ALL_ACCOUNTS_FAILED_MESSAGE)
 
+    def test_single_account_needing_attention_fails_with_reauth_hint(self):
+        busctl = FakeBusctl(
+            {MANAGED_KEY: managed_objects(goa_account_objects(ACCOUNT_ONE, "eu@gmail.com", attention_needed=True))}
+        )
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_goa_source(goa_config(), busctl, FakeGoogle({}))
+        self.assertEqual(
+            str(context.exception),
+            "conta eu@gmail.com precisa entrar de novo em Configurações → Contas Online",
+        )
+
+    def test_all_accounts_needing_attention_join_their_warnings(self):
+        busctl = FakeBusctl(
+            {
+                MANAGED_KEY: managed_objects(
+                    goa_account_objects(ACCOUNT_ONE, "eu@gmail.com", attention_needed=True),
+                    goa_account_objects(ACCOUNT_TWO, "trabalho@empresa.com", attention_needed=True),
+                ),
+            }
+        )
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_goa_source(goa_config(), busctl, FakeGoogle({}))
+        self.assertEqual(
+            str(context.exception),
+            "conta eu@gmail.com precisa entrar de novo em Configurações → Contas Online; "
+            "conta trabalho@empresa.com precisa entrar de novo em Configurações → Contas Online",
+        )
+
     def test_busctl_failure_on_managed_objects_propagates(self):
         busctl = FakeBusctl({MANAGED_KEY: calendar_widget.SourceError("sem barramento")})
         with self.assertRaises(calendar_widget.SourceError) as context:
@@ -1283,7 +1311,8 @@ class MainTests(unittest.TestCase):
 
 TSV_HEADER = "id\tstart_date\tstart_time\tend_date\tend_time\ttitle\tlocation\tcalendar"
 GCALCLI_MISSING_BINARY = "gcalcli não encontrado no PATH; veja a seção gcalcli do README"
-GCALCLI_NOT_RESPONDING = "gcalcli não respondeu; rode `gcalcli init` no terminal (seção gcalcli do README)"
+GCALCLI_UNEXECUTABLE = "gcalcli não pôde ser executado; veja a seção gcalcli do README"
+GCALCLI_NOT_RESPONDING ="gcalcli não respondeu; rode `gcalcli init` no terminal (seção gcalcli do README)"
 
 
 class FakeGcalcli:
@@ -1421,6 +1450,11 @@ class GcalcliSourceTests(unittest.TestCase):
             run_gcalcli_source(FakeGcalcli(error=FileNotFoundError()))
         self.assertEqual(str(context.exception), GCALCLI_MISSING_BINARY)
 
+    def test_unexecutable_binary_names_the_readme_section(self):
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_gcalcli_source(FakeGcalcli(error=PermissionError()))
+        self.assertEqual(str(context.exception), GCALCLI_UNEXECUTABLE)
+
     def test_timeout_suggests_init(self):
         error = subprocess.TimeoutExpired(["gcalcli"], calendar_widget.GCALCLI_TIMEOUT_SECONDS)
         with self.assertRaises(calendar_widget.SourceError) as context:
@@ -1446,6 +1480,7 @@ class GcalcliSourceTests(unittest.TestCase):
             ["gcalcli", "agenda"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=calendar_widget.GCALCLI_TIMEOUT_SECONDS,
             stdin=subprocess.DEVNULL,
         )

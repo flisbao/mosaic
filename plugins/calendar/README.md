@@ -55,7 +55,7 @@ Use uma fonte por widget. Para ver duas fontes, crie dois widgets com `id` difer
    ```
 
 3. Se usar `inherit_env`, liste a variável nele, pois o widget não enxerga o ambiente do shell sem isso.
-4. Para várias agendas, use vários links: `CALENDAR_ICS_URL_ENV = "CALENDAR_ICS_PERSONAL,CALENDAR_ICS_TRABALHO"`, ou um arquivo com um link por linha em `CALENDAR_ICS_URL_FILE`. Links `webcal://` são aceitos e convertidos para `https://`.
+4. Para várias agendas, use vários links: `CALENDAR_ICS_URL_ENV = "CALENDAR_ICS_PERSONAL,CALENDAR_ICS_TRABALHO"`, ou um arquivo com um link por linha em `CALENDAR_ICS_URL_FILE`. Links `webcal://` são aceitos e convertidos para `https://`. Os links são baixados um depois do outro, e cada um tem até 15 s para responder: com vários links, aumente `timeout_seconds` (o pior caso é 15 s por link, somados).
 5. **Workspace**: administradores de contas Google Workspace podem desativar o link ICS. Se o link não funcionar e a sua conta for do trabalho, peça ao administrador ou use GOA ou gcalcli.
 6. **Link vazado**: no Google Agenda, em **Integrar agenda**, redefina o endereço secreto. O link antigo deixa de funcionar; atualize a variável de ambiente com o novo.
 7. **Convites recusados** aparecem na agenda: o formato ICS não diz qual participante é você, então o plugin não consegue filtrar convites recusados.
@@ -132,6 +132,8 @@ mosaic check python3 plugins/calendar/calendar_widget.py --env CALENDAR_SOURCE=g
 
 Para a fonte ICS, exporte `CALENDAR_ICS_PERSONAL` no shell antes do comando e passe `--env CALENDAR_SOURCE=ics --env CALENDAR_ICS_URL_ENV=CALENDAR_ICS_PERSONAL`. Evite pôr o próprio link em `--env`, porque ele ficaria no histórico do shell. A saída de erro nunca mostra o link.
 
+Atenção: `mosaic check` passa todo o ambiente do shell e **não aplica `inherit_env`**. Por isso, um check que passa não prova que o widget real enxerga variáveis como `CALENDAR_ICS_PERSONAL` ou `DBUS_SESSION_BUS_ADDRESS`. Liste-as em `inherit_env` do widget, como nas seções de cada fonte.
+
 ## Problemas comuns
 
 **Fonte ICS**
@@ -147,8 +149,8 @@ Para a fonte ICS, exporte `CALENDAR_ICS_PERSONAL` no shell antes do comando e pa
 - `nenhuma conta Google com agenda no GNOME Online Accounts`: a conta não existe ou a Agenda está desligada nela.
 - `não foi possível consultar o GNOME Online Accounts pelo D-Bus`: falta `DBUS_SESSION_BUS_ADDRESS` em `inherit_env`, ou o widget roda fora da sessão gráfica.
 - `não foi possível consultar a API do Google Agenda`: sem rede, ou o token expirou.
-- `nenhuma conta Google respondeu`: todas as contas falharam; veja os avisos.
-- `conta X precisa entrar de novo em Configurações → Contas Online` (aviso): estado `AttentionNeeded`. Entre de novo na conta.
+- `nenhuma conta Google respondeu; veja a seção GOA do README`: todas as contas falharam por outro motivo, como rede ou token expirado. Confira a conexão e aguarde a próxima atualização.
+- `conta X precisa entrar de novo em Configurações → Contas Online`: estado `AttentionNeeded`. Com outras contas funcionando, aparece como aviso; se todas as contas falharam e alguma precisa de novo login, é esta a mensagem de erro (com várias contas, as mensagens vêm separadas por `; `). Entre de novo na conta indicada.
 - `conta X indisponível` (aviso): uma conta falhou e as outras foram mostradas.
 
 **Fonte gcalcli**
