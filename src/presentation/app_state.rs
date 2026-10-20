@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
@@ -15,7 +15,10 @@ use crate::domain::widget::{
 };
 use crate::presentation::key_input::KeyInput;
 
+mod alert_queue;
 mod focus_navigation;
+
+use alert_queue::AlertQueue;
 
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
 pub const PAGE_JUMP_ITEMS: usize = 10;
@@ -72,7 +75,7 @@ pub struct AppState {
     mode: Mode,
     notice: Option<String>,
     pomodoro: Option<PomodoroTimer>,
-    alerts: VecDeque<AlertMessage>,
+    alerts: AlertQueue,
     pending_actions: HashSet<WidgetId>,
 }
 
@@ -88,7 +91,7 @@ impl AppState {
             mode: Mode::Browsing,
             notice: None,
             pomodoro: None,
-            alerts: VecDeque::new(),
+            alerts: AlertQueue::default(),
             pending_actions: HashSet::new(),
         }
     }
@@ -123,13 +126,11 @@ impl AppState {
     }
 
     pub fn pending_alert_count(&self) -> usize {
-        self.alerts.len()
+        self.alerts.pending_count()
     }
 
     pub fn show_alert(&mut self, message: AlertMessage) {
-        if self.alerts.len() < MAXIMUM_QUEUED_ALERTS {
-            self.alerts.push_back(message);
-        }
+        self.alerts.push(message);
     }
 
     pub fn advance_pomodoro(&mut self, elapsed: Duration) -> Option<AlertMessage> {
@@ -263,7 +264,7 @@ impl AppState {
 
     pub fn handle_key(&mut self, key: KeyInput) -> Option<Command> {
         self.notice = None;
-        if self.alerts.pop_front().is_some() {
+        if self.alerts.dismiss_front() {
             return None;
         }
         match std::mem::replace(&mut self.mode, Mode::Browsing) {
