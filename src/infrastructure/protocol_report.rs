@@ -274,12 +274,7 @@ impl Reader {
         (self.error_count() == errors_before).then_some(value)
     }
 
-    pub(super) fn capped<'a>(
-        &mut self,
-        entries: &'a [Value],
-        limit: usize,
-        path: &str,
-    ) -> &'a [Value] {
+    fn capped<'a>(&mut self, entries: &'a [Value], limit: usize, path: &str) -> &'a [Value] {
         if entries.len() <= limit {
             return entries;
         }
