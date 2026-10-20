@@ -751,6 +751,19 @@ mod tests {
     }
 
     #[test]
+    fn signal_process_group_kills_the_whole_group_without_an_external_program() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let mut command = shell(&grandchild_script(&pid_file));
+        isolate_process_group(&mut command);
+        let mut leader = command.spawn().unwrap();
+        assert!(wait_until(|| pid_file_is_written(&pid_file)));
+        signal_process_group(leader.id());
+        leader.wait().unwrap();
+        assert!(wait_until_gone(&read_grandchild_pid(&pid_file)));
+    }
+
+    #[test]
     fn safe_process_group_never_targets_unsafe_ids() {
         assert!(safe_process_group(0).is_none());
         assert!(safe_process_group(1).is_none());
