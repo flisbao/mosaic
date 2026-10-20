@@ -3,7 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
@@ -35,6 +35,16 @@ def snapshot(events=(), warnings=()):
 
 def summary_rows(snapshot_data):
     return snapshot_data["summary"]["blocks"][0]["rows"]
+
+
+def parse_events(*lines, zone=ZONE):
+    text = "\r\n".join(["BEGIN:VCALENDAR", "BEGIN:VEVENT", *lines, "END:VEVENT", "END:VCALENDAR"])
+    events, _ = calendar_widget.parse_ics(text, zone)
+    return events
+
+
+def parse_event(*lines, zone=ZONE):
+    return parse_events(*lines, zone=zone)[0]
 
 
 class ConfigTests(unittest.TestCase):
@@ -159,6 +169,131 @@ class LocalZoneTests(unittest.TestCase):
         with mock.patch.object(calendar_widget, "LOCALTIME_LINK", "/nao/existe/localtime"):
             zone = calendar_widget.local_zone({"TZ": "Nowhere/Land"})
         self.assertIsInstance(zone, tzinfo)
+
+
+class IcsParserTests(unittest.TestCase):
+    def test_unfolds_lines_and_unescapes_text(self):
+        text = (
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20261020T130000Z\r\n"
+            "SUMMARY:Reuni\r\n ão\\, sala 2\\nandar 3\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        )
+        events, _ = calendar_widget.parse_ics(text, ZONE)
+        self.assertEqual(events[0].summary, "Reunião, sala 2\nandar 3")
+
+    def test_escaped_semicolon_and_backslash_are_unescaped(self):
+        event_ = parse_event("DTSTART:20261020T090000", "LOCATION:Sala A\\; porta\\\\fundos")
+        self.assertEqual(event_.location, "Sala A; porta\\fundos")
+
+    def test_uid_and_location_are_read(self):
+        event_ = parse_event("UID:abc-123", "DTSTART:20261020T090000", "LOCATION:Sala 2")
+        self.assertEqual((event_.uid, event_.location), ("abc-123", "Sala 2"))
+
+    def test_utc_tzid_floating_and_date_values(self):
+        utc = parse_event("DTSTART:20261020T130000Z")
+        self.assertEqual(utc.start, datetime(2026, 10, 20, 13, tzinfo=timezone.utc))
+        self.assertIs(utc.start.tzinfo, timezone.utc)
+        named = parse_event('DTSTART;TZID="America/New_York":20261020T090000')
+        self.assertEqual(named.start, datetime(2026, 10, 20, 9, tzinfo=ZoneInfo("America/New_York")))
+        self.assertEqual(named.start.tzinfo.key, "America/New_York")
+        floating = parse_event("DTSTART:20261020T090000")
+        self.assertEqual(floating.start, at(20, 9))
+        self.assertEqual(floating.start.tzinfo.key, ZONE.key)
+        whole_day = parse_event("DTSTART;VALUE=DATE:20261020")
+        self.assertEqual(whole_day.start, date(2026, 10, 20))
+
+    def test_unknown_tzid_falls_back_to_local_zone(self):
+        event_ = parse_event("DTSTART;TZID=W. Europe Standard Time:20261020T090000")
+        self.assertEqual(event_.start, at(20, 9))
+        self.assertEqual(event_.start.tzinfo.key, ZONE.key)
+
+    def test_dtend_is_read_and_duration_is_none(self):
+        event_ = parse_event("DTSTART:20261020T090000", "DTEND:20261020T100000")
+        self.assertEqual(event_.end, at(20, 10))
+        self.assertIsNone(event_.duration)
+
+    def test_duration_instead_of_dtend(self):
+        timed = parse_event("DTSTART:20261020T090000", "DURATION:PT1H30M")
+        self.assertIsNone(timed.end)
+        self.assertEqual(timed.duration, timedelta(hours=1, minutes=30))
+        whole_day = parse_event("DTSTART;VALUE=DATE:20261020", "DURATION:P1D")
+        self.assertEqual(whole_day.duration, timedelta(days=1))
+
+    def test_exdate_lists_rdate_recurrence_id_and_status(self):
+        event_ = parse_event(
+            "DTSTART:20261020T090000",
+            'EXDATE;TZID="America/Sao_Paulo":20261021T090000,20261028T090000',
+            "RDATE:20261030T120000Z",
+            'RECURRENCE-ID;TZID="America/Sao_Paulo":20261021T090000',
+            "STATUS:CANCELLED",
+            "RRULE:FREQ=WEEKLY;BYDAY=TU",
+        )
+        self.assertEqual(event_.exdates, [at(21, 9), at(28, 9)])
+        self.assertEqual(event_.rdates, [datetime(2026, 10, 30, 12, tzinfo=timezone.utc)])
+        self.assertEqual(event_.recurrence_id, at(21, 9))
+        self.assertEqual(event_.status, "CANCELLED")
+        self.assertEqual(event_.rrule, "FREQ=WEEKLY;BYDAY=TU")
+
+    def test_defaults_when_properties_are_absent(self):
+        event_ = parse_event("DTSTART:20261020T090000")
+        self.assertEqual((event_.uid, event_.summary, event_.location), ("", "", ""))
+        self.assertIsNone(event_.end)
+        self.assertIsNone(event_.duration)
+        self.assertIsNone(event_.rrule)
+        self.assertIsNone(event_.recurrence_id)
+        self.assertEqual((event_.exdates, event_.rdates), ([], []))
+        self.assertEqual(event_.status, "CONFIRMED")
+
+    def test_calendar_name(self):
+        _, name = calendar_widget.parse_ics("BEGIN:VCALENDAR\r\nX-WR-CALNAME:Pessoal\r\nEND:VCALENDAR\r\n", ZONE)
+        self.assertEqual(name, "Pessoal")
+        _, missing = calendar_widget.parse_ics("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", ZONE)
+        self.assertEqual(missing, "")
+
+    def test_empty_text_has_no_events_and_no_name(self):
+        self.assertEqual(calendar_widget.parse_ics("", ZONE), ([], ""))
+
+    def test_events_inside_other_components_are_ignored(self):
+        text = "\r\n".join([
+            "BEGIN:VCALENDAR",
+            "BEGIN:VTIMEZONE",
+            "TZID:America/Sao_Paulo",
+            "BEGIN:STANDARD",
+            "DTSTART:19700101T000000",
+            "END:STANDARD",
+            "END:VTIMEZONE",
+            "BEGIN:VEVENT",
+            "UID:a",
+            "DTSTART:20261020T090000",
+            "SUMMARY:Real",
+            "BEGIN:VALARM",
+            "ACTION:DISPLAY",
+            "DTSTART:20261019T000000",
+            "SUMMARY:Alarme",
+            "END:VALARM",
+            "END:VEVENT",
+            "END:VCALENDAR",
+        ])
+        events, _ = calendar_widget.parse_ics(text, ZONE)
+        self.assertEqual([item.summary for item in events], ["Real"])
+
+    def test_event_without_valid_dtstart_is_skipped(self):
+        text = "\r\n".join([
+            "BEGIN:VCALENDAR",
+            "BEGIN:VEVENT",
+            "SUMMARY:Sem início",
+            "END:VEVENT",
+            "BEGIN:VEVENT",
+            "DTSTART:20261399T090000",
+            "SUMMARY:Data inválida",
+            "END:VEVENT",
+            "BEGIN:VEVENT",
+            "DTSTART:20261020T090000",
+            "SUMMARY:Com início",
+            "END:VEVENT",
+            "END:VCALENDAR",
+        ])
+        events, _ = calendar_widget.parse_ics(text, ZONE)
+        self.assertEqual([item.summary for item in events], ["Com início"])
 
 
 class WindowTests(unittest.TestCase):
