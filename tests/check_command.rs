@@ -133,7 +133,7 @@ fn check_malformed_env_exits_two() {
 }
 
 #[test]
-fn check_legacy_kanban_output_is_valid() {
+fn check_kanban_output_is_clean() {
     if Command::new("python3").arg("--version").output().is_err() {
         return;
     }
@@ -149,6 +149,7 @@ fn check_legacy_kanban_output_is_valid() {
     );
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
     assert!(!stdout(&output).contains("ERRO"));
+    assert!(!stdout(&output).contains("AVISO"));
 }
 
 #[test]

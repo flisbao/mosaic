@@ -71,7 +71,9 @@ mod tests {
     use super::*;
     use crate::domain::blocks::{lines::WidgetLine, Block};
     use crate::domain::widget::{ActionScope, Flag};
-    use crate::infrastructure::protocol_report::MAXIMUM_BLOCKS_PER_WIDGET;
+    use crate::infrastructure::protocol_report::{
+        MAXIMUM_BLOCKS_PER_WIDGET, MAXIMUM_ITEMS_PER_SECTION,
+    };
 
     fn summary_lines(snapshot: &WidgetSnapshot) -> Vec<&WidgetLine> {
         snapshot
@@ -248,16 +250,23 @@ mod tests {
 
     #[test]
     fn many_errors_are_summarised_in_a_bounded_number_of_notices() {
-        let broken = vec!["1"; 5000].join(",");
+        const BROKEN_SECTIONS: usize = 5;
+        let broken_blocks = vec!["1"; MAXIMUM_BLOCKS_PER_WIDGET * 2].join(",");
+        let broken_items = vec!["1"; MAXIMUM_ITEMS_PER_SECTION].join(",");
+        let broken_section = format!(r#"{{"heading":"h","items":[{broken_items}]}}"#);
+        let broken_sections = vec![broken_section; BROKEN_SECTIONS].join(",");
         let json = format!(
-            r#"{{"summary":{{"title":"K","blocks":[{broken},
-                {{"type":"lines","lines":[{{"text":"ok"}}]}}]}}}}"#
+            r#"{{"summary":{{"title":"K","blocks":[{broken_blocks}]}},"detail":[{broken_sections}]}}"#
         );
         let started = std::time::Instant::now();
         let snapshot = parse_snapshot(&json).unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
-        assert!(snapshot.summary.blocks.len() <= MAXIMUM_BLOCKS_PER_WIDGET + MAXIMUM_ERROR_NOTICES);
-        assert!(summary_lines(&snapshot).len() <= MAXIMUM_ERROR_NOTICES);
+        assert_eq!(snapshot.summary.blocks.len(), MAXIMUM_ERROR_NOTICES);
+        let notices = summary_lines(&snapshot);
+        assert_eq!(notices.len(), MAXIMUM_ERROR_NOTICES);
+        assert!(notices[MAXIMUM_ERROR_NOTICES - 1]
+            .text
+            .starts_with("… e mais"));
     }
 
     #[test]

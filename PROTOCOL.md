@@ -92,7 +92,7 @@ O excesso é cortado (não rejeitado) e o `mosaic check` avisa; por isso o esque
 **Erros:**
 - JSON inválido, raiz que não é objeto ou `summary.title` ausente: o widget inteiro mostra o erro.
 - Bloco malformado (não é objeto, sem `type`, lista que não é lista, linha sem `text`, tipo de valor errado): só esse bloco é descartado e o widget ganha a linha `⚠ bloco inválido: <caminho>: <motivo>`. Veja o caminho em `mosaic check`, por exemplo `summary.blocks[2].rows[1].text`.
-- Tipo de bloco, tom, flag ou campo desconhecido: ignorado, com aviso no `mosaic check`.
+- Tipo de bloco, tom ou flag desconhecido: ignorado, com aviso no `mosaic check`. Campo desconhecido: aviso na raiz, em `summary`, nas seções, nos itens, nas ações e em `mini`; dentro das entradas de um bloco (`lines`, `rows`, `stat`, `table`) é ignorado em silêncio.
 
 ## 5. Avisos (`alerts`)
 
@@ -116,7 +116,7 @@ ERRO summary.blocks[0].rows[2].text: campo obrigatório ausente
 AVISO summary.extra: campo desconhecido
 
 Agenda
-  09:00  Daily
+09:00 Daily
 ```
 
 Saída `0` sem erros (avisos são permitidos), `1` com erros e `2` para uso incorreto, o que serve para testar o widget em integração contínua. Os widgets `plugins/gallery.py` e `plugins/gallery.js` mostram todos os blocos e servem de ponto de partida.
