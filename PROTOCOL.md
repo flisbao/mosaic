@@ -51,13 +51,13 @@ Um bloco é um objeto com `type`, empilhado na ordem em que aparece.
 | `type` | Campos | Descrição |
 | --- | --- | --- |
 | `lines` | `lines`: `{ "text", "tone"?, "flag"? }` | linhas de texto |
-| `rows` | `rows`: `{ "text", "time"?, "marker"?, "tags"?, "tone"?, "flag"? }` | agenda e listas; `marker` é **um** caractere; `tags` são `{ "text", "tone"? }` alinhadas à direita |
+| `rows` | `rows`: `{ "text", "time"?, "tags"?, "tone"?, "flag"? }` | agenda e listas; `tags` são `{ "text", "tone"? }` alinhadas à direita |
 | `stat` | `items`: `{ "value", "label", "tone"? }`, `hint`? | indicadores lado a lado; quebram de linha se não couberem |
 | `table` | `columns`: `{ "title", "align"?: "left" \| "right" }`, `rows`: lista de listas | célula é um texto ou `{ "text", "tone"?, "flag"? }` |
 
 ```json
 { "type": "rows", "rows": [
-  { "time": "10:30", "text": "Revisão", "tone": "current", "marker": "▶",
+  { "time": "10:30", "text": "Revisão", "tone": "current",
     "tags": [ { "text": "agora", "tone": "ok" } ] }
 ] }
 { "type": "table",

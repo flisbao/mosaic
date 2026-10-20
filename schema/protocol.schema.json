@@ -54,7 +54,6 @@
         "text": { "$ref": "#/$defs/text" },
         "tags": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/tag" } },
         "tone": { "$ref": "#/$defs/tone" },
-        "marker": { "type": "string", "minLength": 1, "maxLength": 1 },
         "flag": { "$ref": "#/$defs/flag" }
       }
     },

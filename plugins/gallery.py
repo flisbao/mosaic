@@ -20,7 +20,6 @@ def agenda_rows():
             "time": "10:30",
             "text": "Revisão de código",
             "tone": "current",
-            "marker": "▶",
             "tags": [{"text": "agora", "tone": "ok"}],
         },
         {

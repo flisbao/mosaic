@@ -14,6 +14,6 @@ fn renders_every_block_type_from_the_valid_all_blocks_fixture() {
     let lines = render_blocks(&parsed.snapshot.summary.blocks, 40);
     assert_eq!(
         lines_to_plain_text(&lines),
-        vec!["resumo", "  09:00 Daily", "1 item", "A", "x"]
+        vec!["resumo", "09:00 Daily", "1 item", "A", "x"]
     );
 }

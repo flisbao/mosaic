@@ -68,7 +68,6 @@ mod tests {
                 text: "linha".to_string(),
                 tags: vec![],
                 tone: Tone::Normal,
-                marker: None,
                 flag: None,
             }]),
             Block::Stat {

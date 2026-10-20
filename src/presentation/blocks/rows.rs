@@ -1,6 +1,5 @@
 use ratatui::style::Style;
 use ratatui::text::Line;
-use unicode_width::UnicodeWidthChar;
 
 use super::BlockRenderer;
 use crate::domain::blocks::{
@@ -11,9 +10,6 @@ use crate::presentation::text_fit::{
     clip_pieces, display_width, fit_pieces, flagged, pieces_width, tone_style, truncate_to_width,
     Piece, TAG_SEPARATOR,
 };
-
-const BLANK_MARKER: &str = "  ";
-const MARKER_COLUMN_WIDTH: usize = 2;
 
 pub struct RowsRenderer;
 
@@ -38,20 +34,9 @@ fn render_rows(rows: &[Row], width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn marker_text(marker: Option<char>) -> String {
-    let Some(marker) = marker else {
-        return BLANK_MARKER.to_string();
-    };
-    match marker.width().unwrap_or(0) {
-        0 => BLANK_MARKER.to_string(),
-        marker_width if marker_width >= MARKER_COLUMN_WIDTH => marker.to_string(),
-        _ => format!("{marker} "),
-    }
-}
-
 fn render_row(row: &Row, time_width: usize, width: usize) -> Line<'static> {
     let row_style = tone_style(row.tone);
-    let mut pieces: Vec<Piece> = vec![(marker_text(row.marker), row_style)];
+    let mut pieces: Vec<Piece> = vec![];
     if time_width > 0 {
         let time = row.time.as_deref().unwrap_or("");
         let padding = " ".repeat(time_width.saturating_sub(display_width(time)));

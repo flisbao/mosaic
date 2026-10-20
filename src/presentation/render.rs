@@ -1392,7 +1392,6 @@ mod tests {
                     tone: widget_content::Tone::Warn,
                 }],
                 tone: widget_content::Tone::Normal,
-                marker: Some('▶'),
                 flag: None,
             }]),
             blocks::Block::Stat {
@@ -1410,7 +1409,7 @@ mod tests {
     fn home_box_renders_rows_and_stat_blocks() {
         let state = state_with(vec![entry_with_blocks(rows_and_stat_blocks())]);
         let text = screen(&state, 100, 30);
-        assert!(text.contains("▶ 09:00 Daily"), "{text}");
+        assert!(text.contains("09:00 Daily"), "{text}");
         assert!(text.contains("[agora]"), "{text}");
         assert!(text.contains("3 reuniões"), "{text}");
         assert!(text.contains("hoje"), "{text}");

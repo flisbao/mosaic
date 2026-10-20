@@ -82,7 +82,7 @@ mod tests {
         }
     }
 
-    fn row(time: Option<&str>, text: &str, tags: &[&str], marker: Option<char>) -> Row {
+    fn row(time: Option<&str>, text: &str, tags: &[&str]) -> Row {
         Row {
             time: time.map(str::to_string),
             text: text.to_string(),
@@ -94,7 +94,6 @@ mod tests {
                 })
                 .collect(),
             tone: Tone::Normal,
-            marker,
             flag: None,
         }
     }
@@ -114,10 +113,7 @@ mod tests {
     fn one_block_of_each_kind() -> Vec<Block> {
         vec![
             Block::Lines(vec![line("a", None), line("b", None), line("c", None)]),
-            Block::Rows(vec![
-                row(Some("1"), "x", &[], None),
-                row(None, "y", &[], None),
-            ]),
+            Block::Rows(vec![row(Some("1"), "x", &[]), row(None, "y", &[])]),
             Block::Stat {
                 items: vec![StatItem {
                     value: "1".to_string(),
@@ -194,35 +190,27 @@ mod tests {
     #[test]
     fn rows_align_the_time_column() {
         let blocks = [Block::Rows(vec![
-            row(Some("9:00"), "um", &[], None),
-            row(Some("10:30"), "dois", &[], None),
-            row(None, "tres", &[], None),
+            row(Some("9:00"), "um", &[]),
+            row(Some("10:30"), "dois", &[]),
+            row(None, "tres", &[]),
         ])];
         assert_eq!(
             plain(&blocks, 30),
-            vec!["  9:00  um", "  10:30 dois", "        tres"]
+            vec!["9:00  um", "10:30 dois", "      tres"]
         );
     }
 
     #[test]
     fn rows_right_align_tags() {
-        let blocks = [Block::Rows(vec![row(
-            None,
-            "reunião",
-            &["agora", "x"],
-            None,
-        )])];
-        let expected = format!("  reunião{}[agora] [x]", " ".repeat(10));
+        let blocks = [Block::Rows(vec![row(None, "reunião", &["agora", "x"])])];
+        let expected = format!("reunião{}[agora] [x]", " ".repeat(12));
         assert_eq!(plain(&blocks, 30), vec![expected]);
     }
 
     #[test]
-    fn rows_marker_is_shown_or_replaced_by_spaces() {
-        let blocks = [Block::Rows(vec![
-            row(None, "a", &[], Some('▶')),
-            row(None, "b", &[], None),
-        ])];
-        assert_eq!(plain(&blocks, 10), vec!["▶ a", "  b"]);
+    fn rows_start_at_the_first_column() {
+        let blocks = [Block::Rows(vec![row(None, "a", &[]), row(None, "b", &[])])];
+        assert_eq!(plain(&blocks, 10), vec!["a", "b"]);
     }
 
     #[test]
@@ -231,20 +219,14 @@ mod tests {
             None,
             "reunião longa demais",
             &["agora"],
-            None,
         )])];
         let lines = plain(&blocks, 18);
-        assert_eq!(lines, vec!["  reunião… [agora]"]);
+        assert_eq!(lines, vec!["reunião l… [agora]"]);
     }
 
     #[test]
     fn rows_cut_tags_when_even_they_do_not_fit() {
-        let blocks = [Block::Rows(vec![row(
-            None,
-            "texto",
-            &["muito-longa"],
-            None,
-        )])];
+        let blocks = [Block::Rows(vec![row(None, "texto", &["muito-longa"])])];
         let lines = plain(&blocks, 8);
         assert!(display_width(&lines[0]) <= 8, "{:?}", lines);
         assert!(lines[0].contains('['));
@@ -260,9 +242,8 @@ mod tests {
                     Some("12:34:56.789"),
                     &wide,
                     &["etiqueta-longa", "日本", "x"],
-                    Some('日'),
                 ),
-                row(None, "curto", &["a"], None),
+                row(None, "curto", &["a"]),
             ]),
         ];
         for width in 0..=40 {
@@ -273,7 +254,7 @@ mod tests {
 
     #[test]
     fn width_zero_and_one_do_not_panic() {
-        let blocks = [Block::Rows(vec![row(Some("1"), "a", &["t"], Some('x'))])];
+        let blocks = [Block::Rows(vec![row(Some("1"), "a", &["t"])])];
         assert!(render_blocks(&blocks, 0).is_empty());
         assert!(widest(&plain(&blocks, 1)) <= 1);
     }
@@ -496,12 +477,7 @@ mod tests {
         let heart = "❤\u{FE0F}".repeat(3);
         let blocks = [
             Block::Lines(vec![line(&heart, Some(Flag::Updated))]),
-            Block::Rows(vec![row(
-                Some("❤\u{FE0F}"),
-                &heart,
-                &["❤\u{FE0F}"],
-                Some('❤'),
-            )]),
+            Block::Rows(vec![row(Some("❤\u{FE0F}"), &heart, &["❤\u{FE0F}"])]),
             stat(vec![stat_item(&heart, &heart)], Some(&heart)),
             table(
                 vec![column(&heart, Align::Left), column(&heart, Align::Right)],

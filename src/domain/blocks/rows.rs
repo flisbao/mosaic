@@ -15,6 +15,5 @@ pub struct Row {
     pub text: String,
     pub tags: Vec<Tag>,
     pub tone: Tone,
-    pub marker: Option<char>,
     pub flag: Option<Flag>,
 }

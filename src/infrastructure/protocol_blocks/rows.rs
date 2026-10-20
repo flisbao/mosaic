@@ -35,7 +35,6 @@ fn parse_row(reader: &mut Reader, entry: &Value, path: &str) -> Option<Row> {
         time: reader.optional_text(object, "time", path),
         tags: parse_tags(reader, object, path),
         tone: reader.tone(object, path),
-        marker: parse_marker(reader, object, path),
         flag: reader.flag(object, path),
     })
 }
@@ -64,19 +63,4 @@ fn parse_tag(reader: &mut Reader, entry: &Value, path: &str) -> Option<Tag> {
     };
     let tone = reader.tone(tag, path);
     Some(Tag { text, tone })
-}
-
-fn parse_marker(reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<char> {
-    let text = reader.optional_text(object, "marker", path)?;
-    let mut characters = text.chars();
-    match (characters.next(), characters.next()) {
-        (Some(marker), None) => Some(marker),
-        _ => {
-            reader.warning(
-                &child_path(path, "marker"),
-                "precisa ter exatamente um caractere; ignorado",
-            );
-            None
-        }
-    }
 }

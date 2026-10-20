@@ -997,7 +997,7 @@ mod tests {
     fn rows_block_parses_all_fields() {
         let parsed = summary_with_blocks(
             r#"[{"type":"rows","rows":[{"time":"09:00","text":"Daily","tone":"current",
-                "marker":"▶","flag":"warning","tags":[{"text":"agora","tone":"danger"}]}]}]"#,
+                "flag":"warning","tags":[{"text":"agora","tone":"danger"}]}]}]"#,
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
         let expected = Block::Rows(vec![Row {
@@ -1008,7 +1008,6 @@ mod tests {
                 tone: Tone::Danger,
             }],
             tone: Tone::Current,
-            marker: Some('▶'),
             flag: Some(Flag::Warning),
         }]);
         assert_eq!(first_block(&parsed), &expected);
@@ -1031,20 +1030,17 @@ mod tests {
     }
 
     #[test]
-    fn marker_must_be_a_single_character() {
-        for marker in ["", "ab", "  "] {
-            let parsed = summary_with_blocks(&format!(
-                r#"[{{"type":"rows","rows":[{{"text":"x","marker":"{marker}"}}]}}]"#
-            ));
-            let Block::Rows(rows) = first_block(&parsed) else {
-                panic!("esperava rows");
-            };
-            assert_eq!(rows[0].marker, None, "{marker:?}");
-            assert_eq!(
-                paths(&parsed, Severity::Warning),
-                vec!["summary.blocks[0].rows[0].marker"]
-            );
-        }
+    fn row_marker_from_older_widgets_is_ignored() {
+        let parsed = summary_with_blocks(r#"[{"type":"rows","rows":[{"text":"x","marker":"▶"}]}]"#);
+        assert!(
+            paths(&parsed, Severity::Error).is_empty(),
+            "{:?}",
+            parsed.problems
+        );
+        let Block::Rows(rows) = first_block(&parsed) else {
+            panic!("esperava rows");
+        };
+        assert_eq!(rows[0].text, "x");
     }
 
     #[test]
