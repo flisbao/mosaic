@@ -1370,7 +1370,10 @@ def _is_all_day(row):
 def _all_day_end(row, start, zone):
     if not row["end_date"]:
         return start + timedelta(days=1)
-    return datetime.combine(_gcalcli_day(row["end_date"]), time.min, tzinfo=zone)
+    end_day = _gcalcli_day(row["end_date"])
+    if end_day <= start.date():
+        return start + timedelta(days=1)
+    return datetime.combine(end_day, time.min, tzinfo=zone)
 
 
 def _gcalcli_day(text):

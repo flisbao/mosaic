@@ -1360,6 +1360,26 @@ class GcalcliSourceTests(unittest.TestCase):
             ],
         )
 
+    def test_all_day_row_with_end_date_equal_to_start_is_one_day(self):
+        result = run_gcalcli_source(FakeGcalcli(output=tsv("d4\t2026-10-20\t\t2026-10-20\t\tHoje\t\t")))
+        self.assertEqual(
+            [(e.start, e.end, e.all_day) for e in result.events],
+            [(at(20, 0), at(21, 0), True)],
+        )
+        self.assertEqual(len(calendar_widget.visible_events(result.events, NOW, WINDOW_END)), 1)
+
+    def test_all_day_row_with_end_date_before_start_is_one_day(self):
+        result = run_gcalcli_source(FakeGcalcli(output=tsv("d5\t2026-10-20\t\t2026-10-19\t\tOntem\t\t")))
+        self.assertEqual(
+            [(e.start, e.end, e.all_day) for e in result.events],
+            [(at(20, 0), at(21, 0), True)],
+        )
+        self.assertEqual(len(calendar_widget.visible_events(result.events, NOW, WINDOW_END)), 1)
+
+    def test_all_day_row_with_garbage_end_date_is_skipped_with_warning(self):
+        result = run_gcalcli_source(FakeGcalcli(output=tsv("d6\t2026-10-20\t\tlixo\t\tRuim\t\t")))
+        self.assertEqual((result.events, result.warnings), ([], ["linha do gcalcli ignorada"]))
+
     def test_missing_id_uses_title_and_start(self):
         row = "\t2026-10-20\t14:00\t2026-10-20\t15:00\tReunião\t\t"
         result = run_gcalcli_source(FakeGcalcli(output=tsv(row)))
