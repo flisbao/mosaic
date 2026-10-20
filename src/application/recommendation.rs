@@ -107,19 +107,11 @@ pub fn build_plan(
 }
 
 fn selected_lines(context: &WidgetContext) -> Vec<String> {
-    if context.state.is_failing() {
-        return Vec::new();
-    }
-    let Some(snapshot) = context.state.snapshot() else {
+    let Some(snapshot) = context.state.usable_snapshot() else {
         return Vec::new();
     };
-    let Some(sections) = &snapshot.detail else {
-        return Vec::new();
-    };
-    sections
-        .iter()
-        .filter(|section| context.selection.sections.contains(&section.heading))
-        .flat_map(|section| section.items.iter())
+    snapshot
+        .items_in_sections(&context.selection.sections)
         .take(context.selection.max_items)
         .map(|item| format_item_line(item, context.selection.max_characters_per_item))
         .collect()

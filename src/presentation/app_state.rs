@@ -239,31 +239,17 @@ impl AppState {
     }
 
     pub fn detail_items(&self) -> Vec<&DetailItem> {
-        let Some(record) = self.focused_record() else {
-            return Vec::new();
-        };
-        if record.is_failing() {
-            return Vec::new();
-        }
-        let Some(snapshot) = record.snapshot() else {
-            return Vec::new();
-        };
-        snapshot
-            .detail
-            .iter()
-            .flatten()
-            .flat_map(|section| section.items.iter())
-            .collect()
+        self.focused_record()
+            .and_then(WidgetRecord::usable_snapshot)
+            .map(|snapshot| snapshot.detail_items().collect())
+            .unwrap_or_default()
     }
 
     pub fn available_actions(&self) -> Vec<ActionSpec> {
-        let Some(record) = self.focused_record() else {
-            return Vec::new();
-        };
-        if record.is_failing() {
-            return Vec::new();
-        }
-        let Some(snapshot) = record.snapshot() else {
+        let Some(snapshot) = self
+            .focused_record()
+            .and_then(WidgetRecord::usable_snapshot)
+        else {
             return Vec::new();
         };
         let item_selected = self.selected_detail_item_id().is_some();
