@@ -1,6 +1,7 @@
 pub mod alert_tracker;
 pub mod check_report;
 pub mod execute_action;
+pub mod launch_spec;
 pub mod llm;
 pub mod pomodoro_notifications;
 pub mod ports;

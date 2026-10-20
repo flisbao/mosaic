@@ -14,6 +14,7 @@ use chrono::NaiveDateTime;
 use crossterm::event::{self, Event};
 use mosaic::application::alert_tracker::AlertTracker;
 use mosaic::application::execute_action::execute_confirmed;
+use mosaic::application::launch_spec::WidgetLaunchSpec;
 use mosaic::application::llm::{execute_recommendation, LlmRunner, RecommendationStore};
 use mosaic::application::pomodoro_notifications::Notifier;
 use mosaic::application::ports::{Cancellable, Clock, WidgetRunner};
@@ -210,9 +211,9 @@ fn build_services(
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
     let working_directory = directory.to_path_buf();
-    let factory: RunnerFactory = Box::new(move |settings| {
+    let factory: RunnerFactory = Box::new(move |spec| {
         Arc::new(PluginRunner::new(
-            settings.clone(),
+            spec.command.clone(),
             working_directory.clone(),
         )) as Arc<dyn WidgetRunner>
     });
@@ -223,9 +224,14 @@ fn build_services(
         Arc::clone(&shutdown),
     );
     let mut generations = WidgetGenerations::default();
+    let launch_specs: Vec<WidgetLaunchSpec> = config
+        .widgets
+        .iter()
+        .map(WidgetSettings::launch_spec)
+        .collect();
     apply_plan(
         &startup_plan(&config.widgets),
-        &config.widgets,
+        &launch_specs,
         &mut runtime,
         &mut generations,
     );

@@ -5,10 +5,10 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+use mosaic::application::launch_spec::ProviderCommand;
 use mosaic::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use mosaic::domain::action::ProposedAction;
 use mosaic::domain::widget::{ActionScope, ActionSpec, WidgetId, WidgetSnapshot};
-use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 
 const TOKEN: &str = "TOKEN-E2E-XYZ";
@@ -60,22 +60,16 @@ fn jira_runner(server: &FakeJira, state_dir: &Path, mode: &str, token: &str) -> 
         ("JIRA_BASE_URL", format!("http://127.0.0.1:{}", server.port)),
         ("JIRA_STATE_DIR", state_dir.to_string_lossy().to_string()),
     ];
-    let settings = WidgetSettings {
-        id: WidgetId::new("jira"),
-        command: "python3".to_string(),
+    let command = ProviderCommand {
+        program: "python3".to_string(),
         args: vec![plugin.to_string_lossy().to_string()],
         env: environment
             .iter()
             .map(|(name, value)| (name.to_string(), value.clone()))
             .collect(),
-        interval_seconds: 120,
-        interval_adjusted: false,
-        timeout_seconds: 30,
-        span: 1,
-        max_items: None,
-        llm_selection: default_llm_selection(vec!["Sem dono".to_string()]),
+        timeout: std::time::Duration::from_secs(30),
     };
-    PluginRunner::new(settings, state_dir.to_path_buf())
+    PluginRunner::new(command, state_dir.to_path_buf())
 }
 
 fn summary_texts(snapshot: &WidgetSnapshot) -> Vec<String> {

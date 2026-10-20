@@ -4,18 +4,18 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::application::launch_spec::WidgetLaunchSpec;
 use crate::application::ports::{Cancellable, WidgetRunner};
 use crate::application::refresh::refresh_widget;
 use crate::application::reload::{Generation, WidgetLifecycle, WidgetUpdate};
 use crate::application::shutdown::ShutdownCoordinator;
 use crate::application::widget_notices::with_interval_notice;
 use crate::domain::widget::WidgetId;
-use crate::infrastructure::config::WidgetSettings;
 use crate::infrastructure::refresh_signal::{refresh_channel, RefreshSignal, RefreshWake};
 
 const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
 
-pub type RunnerFactory = Box<dyn Fn(&WidgetSettings) -> Arc<dyn WidgetRunner> + Send + Sync>;
+pub type RunnerFactory = Box<dyn Fn(&WidgetLaunchSpec) -> Arc<dyn WidgetRunner> + Send + Sync>;
 
 struct UpdateSink<E> {
     sender: Sender<E>,
@@ -77,16 +77,28 @@ fn shutdown_key(id: &WidgetId) -> String {
 }
 
 impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
-    type Spec = WidgetSettings;
+    type Spec = WidgetLaunchSpec;
 
-    fn start(&mut self, settings: &WidgetSettings, generation: Generation) {
-        let id = settings.id.clone();
-        let runner = (self.factory)(settings);
+    fn start(&mut self, spec: &WidgetLaunchSpec, generation: Generation) {
+        let id = spec.id.clone();
+        let runner = (self.factory)(spec);
         self.shutdown.register(
             &shutdown_key(&id),
             Arc::clone(&runner) as Arc<dyn Cancellable>,
         );
-        let signal = spawn_refresher(settings, generation, Arc::clone(&runner), self.sink.clone());
+        let interval = spec.schedule.interval;
+        let interval_notice = spec
+            .schedule
+            .interval_adjusted
+            .then_some(spec.schedule.interval.as_secs());
+        let signal = spawn_refresher(
+            id.clone(),
+            generation,
+            Arc::clone(&runner),
+            interval,
+            interval_notice,
+            self.sink.clone(),
+        );
         self.runners.insert(id.clone(), runner);
         self.refresh_signals.insert(id, signal);
     }
@@ -99,16 +111,13 @@ impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
 }
 
 fn spawn_refresher<E: Send + 'static>(
-    settings: &WidgetSettings,
+    id: WidgetId,
     generation: Generation,
     runner: Arc<dyn WidgetRunner>,
+    interval: Duration,
+    interval_notice: Option<u64>,
     sink: UpdateSink<E>,
 ) -> RefreshSignal {
-    let id = settings.id.clone();
-    let interval = Duration::from_secs(settings.interval_seconds);
-    let interval_notice = settings
-        .interval_adjusted
-        .then_some(settings.interval_seconds);
     let (signal, waiter) = refresh_channel();
     thread::spawn(move || loop {
         let refreshed = refresh_widget(runner.as_ref());
@@ -138,12 +147,12 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::application::launch_spec::{ProviderCommand, WidgetSchedule};
     use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
     use crate::application::refresh::fakes::snapshot_titled;
     use crate::application::reload::WidgetGenerations;
     use crate::domain::action::{ActionOutcome, ConfirmedAction};
     use crate::domain::widget::WidgetSnapshot;
-    use crate::infrastructure::config::default_llm_selection;
 
     const RECEIVE_LIMIT: Duration = Duration::from_secs(2);
 
@@ -177,18 +186,19 @@ mod tests {
         }
     }
 
-    fn settings(id: &str) -> WidgetSettings {
-        WidgetSettings {
+    fn settings(id: &str) -> WidgetLaunchSpec {
+        WidgetLaunchSpec {
             id: WidgetId::new(id),
-            command: "ignorado".to_string(),
-            args: vec![],
-            env: vec![],
-            interval_seconds: 30,
-            interval_adjusted: false,
-            timeout_seconds: 5,
-            span: 1,
-            max_items: None,
-            llm_selection: default_llm_selection(vec![]),
+            command: ProviderCommand {
+                program: "ignorado".to_string(),
+                args: vec![],
+                env: vec![],
+                timeout: Duration::from_secs(5),
+            },
+            schedule: WidgetSchedule {
+                interval: Duration::from_secs(30),
+                interval_adjusted: false,
+            },
         }
     }
 

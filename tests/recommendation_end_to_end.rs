@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::NaiveDate;
+use mosaic::application::launch_spec::ProviderCommand;
 use mosaic::application::llm::{
     execute_recommendation, LlmError, RecommendationOutcome, RecommendationStore,
 };
@@ -13,7 +14,6 @@ use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContex
 use mosaic::application::recommendation_view::recommendation_snapshot;
 use mosaic::application::refresh::refresh_widget;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
-use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::llm_cli::ClaudeCli;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::FileRecommendationStore;
@@ -40,19 +40,13 @@ fn now() -> chrono::NaiveDateTime {
 
 fn kanban_runner(root: &Path) -> PluginRunner {
     let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/kanban.py");
-    let settings = WidgetSettings {
-        id: WidgetId::new("kanban"),
-        command: "python3".to_string(),
+    let command = ProviderCommand {
+        program: "python3".to_string(),
         args: vec![plugin.to_string_lossy().to_string()],
         env: vec![("KANBAN_DIR".to_string(), root.to_string_lossy().to_string())],
-        interval_seconds: 30,
-        interval_adjusted: false,
-        timeout_seconds: 10,
-        span: 1,
-        max_items: None,
-        llm_selection: default_llm_selection(vec!["inbox".to_string()]),
+        timeout: std::time::Duration::from_secs(10),
     };
-    PluginRunner::new(settings, root.to_path_buf())
+    PluginRunner::new(command, root.to_path_buf())
 }
 
 fn kanban_root(directory: &Path) -> PathBuf {

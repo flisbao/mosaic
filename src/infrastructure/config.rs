@@ -5,9 +5,10 @@ use std::time::Duration;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::application::launch_spec::{ProviderCommand, WidgetLaunchSpec, WidgetSchedule};
 use crate::application::recommendation::LlmSelection;
-use crate::application::reload::{PreparedWidgets, WidgetSpec};
-use crate::application::reload_plan::{plan_reload, WidgetIdentity};
+use crate::application::reload::PreparedWidgets;
+use crate::application::reload_plan::plan_reload;
 use crate::domain::pomodoro::{PomodoroSettings, SECONDS_PER_MINUTE};
 use crate::domain::widget::WidgetId;
 
@@ -71,6 +72,22 @@ impl WidgetSettings {
             span: DEFAULT_SPAN,
             max_items: None,
             llm_selection: default_llm_selection(Vec::new()),
+        }
+    }
+
+    pub fn launch_spec(&self) -> WidgetLaunchSpec {
+        WidgetLaunchSpec {
+            id: self.id.clone(),
+            command: ProviderCommand {
+                program: self.command.clone(),
+                args: self.args.clone(),
+                env: self.env.clone(),
+                timeout: Duration::from_secs(self.timeout_seconds),
+            },
+            schedule: WidgetSchedule {
+                interval: Duration::from_secs(self.interval_seconds),
+                interval_adjusted: self.interval_adjusted,
+            },
         }
     }
 }
@@ -625,37 +642,21 @@ pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
 pub fn prepare_reload(
     current: &[WidgetSettings],
     text: &str,
-) -> Result<PreparedWidgets<WidgetSettings, AppConfig>, ConfigError> {
+) -> Result<PreparedWidgets<WidgetLaunchSpec, AppConfig>, ConfigError> {
     let config = parse_config(text)?;
-    let current_identities: Vec<WidgetIdentity> =
-        current.iter().map(WidgetIdentity::from).collect();
-    let next_identities: Vec<WidgetIdentity> =
-        config.widgets.iter().map(WidgetIdentity::from).collect();
+    let current_identities: Vec<WidgetLaunchSpec> =
+        current.iter().map(WidgetSettings::launch_spec).collect();
+    let next_identities: Vec<WidgetLaunchSpec> = config
+        .widgets
+        .iter()
+        .map(WidgetSettings::launch_spec)
+        .collect();
+    let plan = plan_reload(&current_identities, &next_identities);
     Ok(PreparedWidgets {
-        plan: plan_reload(&current_identities, &next_identities),
-        specs: config.widgets.clone(),
+        plan,
+        specs: next_identities,
         config,
     })
-}
-
-impl WidgetSpec for WidgetSettings {
-    fn widget_id(&self) -> &WidgetId {
-        &self.id
-    }
-}
-
-impl From<&WidgetSettings> for WidgetIdentity {
-    fn from(settings: &WidgetSettings) -> Self {
-        Self {
-            id: settings.id.clone(),
-            command: settings.command.clone(),
-            args: settings.args.clone(),
-            env: settings.env.clone(),
-            interval_seconds: settings.interval_seconds,
-            interval_adjusted: settings.interval_adjusted,
-            timeout_seconds: settings.timeout_seconds,
-        }
-    }
 }
 
 fn describe_parse_error(text: &str, error: &toml::de::Error) -> String {
@@ -682,6 +683,30 @@ fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn widget_settings_project_to_a_launch_spec() {
+        let config = parse_config(
+            "[[widgets]]\nid = \"jira\"\ncommand = \"python3\"\nargs = [\"jira.py\"]\ninterval_seconds = 10\ntimeout_seconds = 7\n[widgets.env]\nTOKEN = \"abc\"\n",
+        )
+        .unwrap();
+
+        let spec = config.widgets[0].launch_spec();
+
+        assert_eq!(spec.id, WidgetId::new("jira"));
+        assert_eq!(spec.command.program, "python3");
+        assert_eq!(spec.command.args, vec!["jira.py".to_string()]);
+        assert_eq!(
+            spec.command.env,
+            vec![("TOKEN".to_string(), "abc".to_string())]
+        );
+        assert_eq!(spec.command.timeout, Duration::from_secs(7));
+        assert_eq!(
+            spec.schedule.interval,
+            Duration::from_secs(MINIMUM_INTERVAL_SECONDS)
+        );
+        assert!(spec.schedule.interval_adjusted);
+    }
 
     #[test]
     fn parses_full_widget_with_env() {

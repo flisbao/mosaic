@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use mosaic::application::check_report::{build_check_report, SnapshotParseFailure};
-use mosaic::domain::widget::{WidgetId, WidgetSnapshot};
+use mosaic::application::launch_spec::ProviderCommand;
+use mosaic::domain::widget::WidgetSnapshot;
 use mosaic::infrastructure::config::{
-    config_directory, config_file_path, parse_config, read_config_file, ConfigError, WidgetSettings,
+    config_directory, config_file_path, parse_config, read_config_file, ConfigError,
 };
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
@@ -13,7 +15,6 @@ use thiserror::Error;
 
 const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
 const CHECK_ENV_FLAG: &str = "--env";
-const CHECK_WIDGET_ID: &str = "check";
 const CHECK_TIMEOUT_SECONDS: u64 = 10;
 const CHECK_PREVIEW_WIDTH: usize = 60;
 const EXIT_CODE_USAGE: u8 = 2;
@@ -91,17 +92,14 @@ pub fn run(arguments: &[String]) -> ExitCode {
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
-    let settings = WidgetSettings {
-        timeout_seconds: CHECK_TIMEOUT_SECONDS,
-        ..WidgetSettings::for_command(
-            WidgetId::new(CHECK_WIDGET_ID),
-            invocation.command,
-            invocation.args,
-            invocation.env,
-        )
+    let command = ProviderCommand {
+        program: invocation.command,
+        args: invocation.args,
+        env: invocation.env,
+        timeout: Duration::from_secs(CHECK_TIMEOUT_SECONDS),
     };
     let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let runner = PluginRunner::new(settings, working_directory);
+    let runner = PluginRunner::new(command, working_directory);
     let parse = |json: &str| {
         parse_snapshot_report(json).map_err(|error| SnapshotParseFailure(error.to_string()))
     };

@@ -1,15 +1,5 @@
+use crate::application::launch_spec::WidgetLaunchSpec;
 use crate::domain::widget::WidgetId;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WidgetIdentity {
-    pub id: WidgetId,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
-    pub interval_seconds: u64,
-    pub interval_adjusted: bool,
-    pub timeout_seconds: u64,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WidgetChange {
@@ -24,7 +14,7 @@ pub struct ReloadPlan {
     pub changes: Vec<(WidgetId, WidgetChange)>,
 }
 
-pub fn plan_reload(current: &[WidgetIdentity], next: &[WidgetIdentity]) -> ReloadPlan {
+pub fn plan_reload(current: &[WidgetLaunchSpec], next: &[WidgetLaunchSpec]) -> ReloadPlan {
     let updated = next
         .iter()
         .map(|widget| (widget.id.clone(), change_for(current, widget)));
@@ -47,7 +37,7 @@ impl ReloadPlan {
     }
 }
 
-fn change_for(current: &[WidgetIdentity], next: &WidgetIdentity) -> WidgetChange {
+fn change_for(current: &[WidgetLaunchSpec], next: &WidgetLaunchSpec) -> WidgetChange {
     match current.iter().find(|widget| widget.id == next.id) {
         None => WidgetChange::Add,
         Some(previous) if previous == next => WidgetChange::Keep,
@@ -58,6 +48,9 @@ fn change_for(current: &[WidgetIdentity], next: &WidgetIdentity) -> WidgetChange
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    use crate::application::launch_spec::{ProviderCommand, WidgetSchedule};
 
     const COMMAND: &str = "python3";
     const INTERVAL_SECONDS: u64 = 60;
@@ -65,17 +58,21 @@ mod tests {
     const TIMEOUT_SECONDS: u64 = 5;
     const CHANGED_TIMEOUT_SECONDS: u64 = 9;
 
-    type Mutation = fn(&mut WidgetIdentity);
+    type Mutation = fn(&mut WidgetLaunchSpec);
 
-    fn identity(id: &str) -> WidgetIdentity {
-        WidgetIdentity {
+    fn identity(id: &str) -> WidgetLaunchSpec {
+        WidgetLaunchSpec {
             id: WidgetId::new(id),
-            command: COMMAND.to_string(),
-            args: vec!["jira.py".to_string(), "my-tasks".to_string()],
-            env: vec![("TOKEN".to_string(), "abc".to_string())],
-            interval_seconds: INTERVAL_SECONDS,
-            interval_adjusted: false,
-            timeout_seconds: TIMEOUT_SECONDS,
+            command: ProviderCommand {
+                program: COMMAND.to_string(),
+                args: vec!["jira.py".to_string(), "my-tasks".to_string()],
+                env: vec![("TOKEN".to_string(), "abc".to_string())],
+                timeout: Duration::from_secs(TIMEOUT_SECONDS),
+            },
+            schedule: WidgetSchedule {
+                interval: Duration::from_secs(INTERVAL_SECONDS),
+                interval_adjusted: false,
+            },
         }
     }
 
@@ -96,17 +93,21 @@ mod tests {
     #[test]
     fn changed_command_args_env_interval_or_timeout_restart() {
         let cases: Vec<(&str, Mutation)> = vec![
-            ("command", |widget| widget.command = "sh".to_string()),
-            ("args", |widget| widget.args.push("--all".to_string())),
-            ("env", |widget| widget.env.clear()),
+            ("command", |widget| {
+                widget.command.program = "sh".to_string()
+            }),
+            ("args", |widget| {
+                widget.command.args.push("--all".to_string())
+            }),
+            ("env", |widget| widget.command.env.clear()),
             ("interval", |widget| {
-                widget.interval_seconds = CHANGED_INTERVAL_SECONDS
+                widget.schedule.interval = Duration::from_secs(CHANGED_INTERVAL_SECONDS)
             }),
             ("interval_adjusted", |widget| {
-                widget.interval_adjusted = true
+                widget.schedule.interval_adjusted = true
             }),
             ("timeout", |widget| {
-                widget.timeout_seconds = CHANGED_TIMEOUT_SECONDS
+                widget.command.timeout = Duration::from_secs(CHANGED_TIMEOUT_SECONDS)
             }),
         ];
         for (field, change) in cases {

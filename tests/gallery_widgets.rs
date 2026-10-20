@@ -3,11 +3,10 @@
 use std::path::Path;
 use std::process::Command;
 
+use mosaic::application::launch_spec::ProviderCommand;
 use mosaic::application::ports::SourceError;
 use mosaic::domain::blocks::{Block, BLOCK_TYPE_NAMES};
 use mosaic::domain::snapshot_report::Severity;
-use mosaic::domain::widget::WidgetId;
-use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 
@@ -17,19 +16,13 @@ fn interpreter_is_available(command: &str) -> bool {
 
 fn gallery_output(command: &str, script: &str) -> Result<String, SourceError> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let settings = WidgetSettings {
-        id: WidgetId::new("gallery"),
-        command: command.to_string(),
+    let provider = ProviderCommand {
+        program: command.to_string(),
         args: vec![root.join(script).to_string_lossy().to_string()],
         env: vec![],
-        interval_seconds: 30,
-        interval_adjusted: false,
-        timeout_seconds: 10,
-        span: 1,
-        max_items: None,
-        llm_selection: default_llm_selection(vec![]),
+        timeout: std::time::Duration::from_secs(10),
     };
-    PluginRunner::new(settings, root.to_path_buf()).raw_snapshot_output()
+    PluginRunner::new(provider, root.to_path_buf()).raw_snapshot_output()
 }
 
 fn block_type_names(blocks: &[Block]) -> Vec<&'static str> {
