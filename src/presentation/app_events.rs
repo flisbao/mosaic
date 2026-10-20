@@ -22,6 +22,7 @@ pub enum AppEvent {
     RecommendationFinished(Result<RecommendationOutcome, LlmError>),
     Input(KeyInput),
     TerminalResized,
+    TerminalReadFailed(String),
 }
 
 pub struct EventContext<'a> {
@@ -70,7 +71,7 @@ pub fn apply_event(
         AppEvent::RecommendationFinished(result) => {
             apply_recommendation_result(state, context, result, now)
         }
-        AppEvent::Input(_) | AppEvent::TerminalResized => {}
+        AppEvent::Input(_) | AppEvent::TerminalResized | AppEvent::TerminalReadFailed(_) => {}
     }
 }
 

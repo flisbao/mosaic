@@ -348,6 +348,9 @@ impl App {
                         }
                     }
                     AppEvent::TerminalResized => {}
+                    AppEvent::TerminalReadFailed(message) => {
+                        return Err(std::io::Error::other(message).into());
+                    }
                     other => self.apply_app_event(other, &mut alert_tracker),
                 }
             }
@@ -413,19 +416,33 @@ impl App {
 
 fn spawn_input_reader(sender: SyncSender<AppEvent>) {
     thread::spawn(move || {
-        while let Ok(terminal_event) = event::read() {
-            let app_event = match terminal_event {
-                Event::Key(key) => from_crossterm(key).map(AppEvent::Input),
-                Event::Resize(_, _) => Some(AppEvent::TerminalResized),
-                _ => None,
-            };
-            if let Some(app_event) = app_event {
-                if sender.send(app_event).is_err() {
-                    break;
-                }
+        read_input_events(&sender, event::read);
+    });
+}
+
+fn read_input_events(
+    read_event_sender: &SyncSender<AppEvent>,
+    mut read_event: impl FnMut() -> std::io::Result<Event>,
+) {
+    loop {
+        let terminal_event = match read_event() {
+            Ok(terminal_event) => terminal_event,
+            Err(error) => {
+                let _ = read_event_sender.send(AppEvent::TerminalReadFailed(error.to_string()));
+                break;
+            }
+        };
+        let app_event = match terminal_event {
+            Event::Key(key) => from_crossterm(key).map(AppEvent::Input),
+            Event::Resize(_, _) => Some(AppEvent::TerminalResized),
+            _ => None,
+        };
+        if let Some(app_event) = app_event {
+            if read_event_sender.send(app_event).is_err() {
+                break;
             }
         }
-    });
+    }
 }
 
 fn stored_recommendation_record(
@@ -599,5 +616,24 @@ fn describe_target(config: &LlmConfig) -> String {
     match &config.model {
         Some(model) => format!("{harness}/{model}"),
         None => harness.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod input_reader_tests {
+    use super::*;
+    use std::sync::mpsc::sync_channel;
+
+    #[test]
+    fn input_reader_reports_terminal_read_errors() {
+        let (sender, receiver) = sync_channel(EVENT_QUEUE_CAPACITY);
+        let mut reads = [Err(std::io::Error::other("read failed"))].into_iter();
+
+        read_input_events(&sender, || reads.next().unwrap());
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AppEvent::TerminalReadFailed(message)) if message == "read failed"
+        ));
     }
 }
