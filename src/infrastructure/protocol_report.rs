@@ -5,14 +5,15 @@ use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, SummaryLine,
     WidgetSnapshot, MAXIMUM_MINI_TEXT_CHARACTERS, MAXIMUM_MINI_VALUE_CHARACTERS,
 };
-use crate::domain::widget_content::{clean_text, clean_text_limited, Alert, AlertLevel, Tone};
+use crate::domain::widget_content::{
+    clean_text, clean_text_limited, Alert, AlertLevel, Tone, MAXIMUM_TEXT_CHARACTERS,
+};
 use crate::infrastructure::plugin_protocol::ProtocolError;
 use crate::infrastructure::protocol_blocks::find_parser;
 
 pub use crate::domain::snapshot_report::{ParsedSnapshot, Problem, Severity};
 
 pub const SUPPORTED_PROTOCOL_VERSION: u64 = 1;
-pub const MAXIMUM_TEXT_CHARACTERS: usize = 500;
 pub const MAXIMUM_ALERT_ID_CHARACTERS: usize = 100;
 pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
 pub const MAXIMUM_BLOCKS_PER_WIDGET: usize = 20;

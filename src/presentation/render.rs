@@ -11,7 +11,7 @@ use crate::domain::layout::{
     arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
     TOP_BAR_HEIGHT,
 };
-use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer};
+use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer, SECONDS_PER_MINUTE};
 use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
@@ -30,7 +30,6 @@ const FOCUS_MINIMUM_WIDTH: u16 = FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWA
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
 const MODAL_FRAME_THICKNESS: u16 = 2;
 const MINIMUM_DRAWABLE_SIDE: u16 = 3;
-const SECONDS_PER_MINUTE: u64 = 60;
 const ALERT_DISMISS_HINT: &str = "Qualquer tecla fecha";
 const WRAP_CONTINUATION_INDENT: &str = "  ";
 const SELECTION_MARKER: &str = "> ";

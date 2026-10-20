@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::application::llm::{RecommendationStore, StoreError, StoredRecommendation};
 use crate::infrastructure::private_directory::prepare_private_directory;
 
-const APP_DIRECTORY_NAME: &str = "mosaic";
-const FILE_NAME: &str = "recommendation.json";
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 const RECOMMENDATION_FILE_MODE: u32 = 0o600;
 pub const MAXIMUM_RECOMMENDATION_FILE_BYTES: u64 = 1_048_576;
@@ -82,12 +80,6 @@ fn open_private_file(path: &Path) -> std::io::Result<File> {
 #[cfg(not(unix))]
 fn open_private_file(path: &Path) -> std::io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
-}
-
-pub fn default_recommendation_path() -> Option<PathBuf> {
-    dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .map(|directory| directory.join(APP_DIRECTORY_NAME).join(FILE_NAME))
 }
 
 impl RecommendationStore for FileRecommendationStore {
@@ -257,7 +249,7 @@ mod tests {
 
     #[test]
     fn default_path_ends_with_app_directory_and_file_name() {
-        if let Some(path) = default_recommendation_path() {
+        if let Some(path) = crate::infrastructure::app_paths::recommendation_file() {
             assert!(path.ends_with("mosaic/recommendation.json"));
         }
     }

@@ -5,11 +5,10 @@ use std::time::Duration;
 use crate::application::ports::{ActionExecutor, Cancellable, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
-use crate::domain::widget_content::clean_text_limited;
+use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::config::WidgetSettings;
 use crate::infrastructure::plugin_protocol::parse_snapshot;
 use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
-use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 

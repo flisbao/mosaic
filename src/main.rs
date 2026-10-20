@@ -27,6 +27,7 @@ use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
+use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, load_config, prepare_reload, read_config_file,
     reload_notice, retain_restart_sections, AppConfig, ConfigError, Harness, LlmConfig,
@@ -37,7 +38,7 @@ use mosaic::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
 use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::{
-    default_recommendation_path, FileRecommendationStore, NullRecommendationStore,
+    FileRecommendationStore, NullRecommendationStore,
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
@@ -55,8 +56,6 @@ use thiserror::Error;
 
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
-const APP_DIRECTORY_NAME: &str = "mosaic";
-const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório de estado do usuário";
 const NO_STATE_DIRECTORY_STORE_WARNING: &str =
     "recomendações não serão salvas: não há diretório de estado do usuário";
@@ -273,13 +272,10 @@ fn share_llm_runner<T: LlmRunner + Cancellable + 'static>(
 }
 
 fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<LlmServices> {
-    let Some(state_directory) = dirs::state_dir().or_else(dirs::data_local_dir) else {
+    let Some(working_directory) = llm_working_directory() else {
         warnings.push(NO_STATE_DIRECTORY_LLM_WARNING.to_string());
         return None;
     };
-    let working_directory = state_directory
-        .join(APP_DIRECTORY_NAME)
-        .join(LLM_WORKING_DIRECTORY_NAME);
     let timeout = Duration::from_secs(config.llm.timeout_seconds);
     let (runner, cancellable) = match config.llm.harness {
         Harness::Claude => share_llm_runner(ClaudeCli::new(
@@ -294,7 +290,7 @@ fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<
             timeout,
         )),
     };
-    let store: Arc<dyn RecommendationStore> = match default_recommendation_path() {
+    let store: Arc<dyn RecommendationStore> = match recommendation_file() {
         Some(path) => Arc::new(FileRecommendationStore::new(path)),
         None => {
             warnings.push(NO_STATE_DIRECTORY_STORE_WARNING.to_string());

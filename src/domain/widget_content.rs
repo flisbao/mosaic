@@ -1,4 +1,5 @@
 pub const ELLIPSIS: char = '…';
+pub const MAXIMUM_TEXT_CHARACTERS: usize = 500;
 
 const TONES: [(&str, Tone); 6] = [
     ("normal", Tone::Normal),

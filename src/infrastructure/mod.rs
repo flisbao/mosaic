@@ -1,3 +1,4 @@
+pub mod app_paths;
 pub mod config;
 pub mod default_files;
 pub mod llm_cli;

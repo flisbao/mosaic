@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+pub const SECONDS_PER_MINUTE: u64 = 60;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Focus,

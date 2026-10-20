@@ -4,10 +4,9 @@ use std::time::Duration;
 
 use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
 use crate::application::ports::Cancellable;
-use crate::domain::widget_content::clean_text_limited;
+use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::private_directory::prepare_private_directory;
 use crate::infrastructure::process::{run_process, CancelFlag, ProcessError, ProcessLimits};
-use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 

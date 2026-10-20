@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::application::recommendation::LlmSelection;
 use crate::application::reload::{PreparedWidgets, WidgetSpec};
 use crate::application::reload_plan::{plan_reload, WidgetIdentity};
-use crate::domain::pomodoro::PomodoroSettings;
+use crate::domain::pomodoro::{PomodoroSettings, SECONDS_PER_MINUTE};
 use crate::domain::widget::WidgetId;
 
 pub const MINIMUM_INTERVAL_SECONDS: u64 = 30;
@@ -24,16 +24,15 @@ pub const DEFAULT_SHORT_BREAK_MINUTES: u64 = 5;
 pub const DEFAULT_LONG_BREAK_MINUTES: u64 = 15;
 pub const DEFAULT_CYCLES_BEFORE_LONG_BREAK: u32 = 4;
 pub const DEFAULT_LLM_TIMEOUT_SECONDS: u64 = 120;
-pub const DEFAULT_PRIORITY_PROMPT: &str = "prompts/prioridade.md";
+pub const DEFAULT_PRIORITY_PROMPT: &str =
+    crate::infrastructure::app_paths::PRIORITY_PROMPT_RELATIVE_PATH;
 pub const DEFAULT_SUGGESTIONS: [&str; 3] = ["Beber água", "Levantar e alongar", "Tomar um café"];
 pub const IMPLICIT_TAB_NAME: &str = "Mosaic";
 const RELOAD_DONE_NOTICE: &str = "Configuração recarregada";
 const RESTART_REQUIRED_NOTICE: &str = "só valem após reiniciar";
 const WARNING_SEPARATOR: &str = " | ";
 
-const CONFIG_DIRECTORY_NAME: &str = "mosaic";
 const CONFIG_FILE_NAME: &str = "config.toml";
-const SECONDS_PER_MINUTE: u64 = 60;
 const POMODORO_SECTION: &str = "pomodoro";
 const LEGACY_NOTIFY_COMMAND_WARNING: &str =
     "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
@@ -576,9 +575,7 @@ fn at_most(
 }
 
 pub fn config_directory() -> Result<PathBuf, ConfigError> {
-    dirs::config_dir()
-        .map(|directory| directory.join(CONFIG_DIRECTORY_NAME))
-        .ok_or(ConfigError::MissingConfigDirectory)
+    crate::infrastructure::app_paths::config_directory().ok_or(ConfigError::MissingConfigDirectory)
 }
 
 pub fn config_file_path(directory: &Path) -> PathBuf {
