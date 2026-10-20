@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,6 +50,7 @@ use mosaic::presentation::app_events::{
 };
 use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::{from_crossterm, KeyInput};
+use mosaic::presentation::redraw_policy::{clock_changes_what_is_drawn, needs_time_redraw};
 use mosaic::presentation::reload_notice::reload_notice;
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
@@ -58,7 +59,7 @@ use mosaic::presentation::tab_layout::{
 use ratatui::crossterm::event::{self, Event};
 use thiserror::Error;
 
-const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const EVENT_WAIT_LIMIT: Duration = Duration::from_millis(250);
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
 const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório de estado do usuário";
 const NO_STATE_DIRECTORY_STORE_WARNING: &str =
@@ -319,51 +320,63 @@ fn build_notifier(config: &AppConfig, shutdown: &ShutdownCoordinator) -> Composi
 
 impl App {
     fn run_event_loop(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<(), AppError> {
+        spawn_input_reader(self.events.sender.clone());
         let mut last_tick = Instant::now();
+        let mut last_drawn = self.clock.now();
+        let mut needs_redraw = true;
         let mut alert_tracker = AlertTracker::new();
         loop {
             if should_stop(&self.services.termination) {
                 return Ok(());
             }
-            self.apply_pending_events(&mut alert_tracker);
+            let mut app_events = Vec::new();
+            match self.events.receiver.recv_timeout(EVENT_WAIT_LIMIT) {
+                Ok(app_event) => app_events.push(app_event),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            }
+            app_events.extend(self.events.receiver.try_iter());
+            needs_redraw |= !app_events.is_empty();
+            for app_event in app_events {
+                match app_event {
+                    AppEvent::Input(input) => {
+                        if let Some(Command::Quit) = self.handle_input(input) {
+                            return Ok(());
+                        }
+                    }
+                    AppEvent::TerminalResized => {}
+                    other => self.apply_app_event(other, &mut alert_tracker),
+                }
+            }
             let elapsed = last_tick.elapsed();
             last_tick = Instant::now();
             if let Some(alert) = self.state.advance_pomodoro(elapsed) {
                 self.services.notifier.notify(&alert);
+                needs_redraw = true;
             }
-            terminal.draw(|frame| {
-                render(frame, &self.state, self.spans.as_slice(), self.clock.now())
-            })?;
-            if !event::poll(INPUT_POLL_INTERVAL)? {
-                continue;
-            }
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            let Some(input) = from_crossterm(key) else {
-                continue;
-            };
-            if let Some(Command::Quit) = self.handle_input(input) {
-                return Ok(());
+            let now = self.clock.now();
+            let ticking = clock_changes_what_is_drawn(&self.state);
+            if needs_redraw || needs_time_redraw(last_drawn, now, ticking) {
+                terminal.draw(|frame| render(frame, &self.state, self.spans.as_slice(), now))?;
+                last_drawn = now;
+                needs_redraw = false;
             }
         }
     }
 
-    fn apply_pending_events(&mut self, alert_tracker: &mut AlertTracker) {
-        while let Ok(app_event) = self.events.receiver.try_recv() {
-            let context = EventContext {
-                generations: &self.services.generations,
-                notifier: &self.services.notifier,
-                recommendation_store: self.services.llm.as_ref().map(|llm| llm.store.as_ref()),
-            };
-            apply_event(
-                &mut self.state,
-                app_event,
-                &context,
-                alert_tracker,
-                self.clock.now(),
-            );
-        }
+    fn apply_app_event(&mut self, app_event: AppEvent, alert_tracker: &mut AlertTracker) {
+        let context = EventContext {
+            generations: &self.services.generations,
+            notifier: &self.services.notifier,
+            recommendation_store: self.services.llm.as_ref().map(|llm| llm.store.as_ref()),
+        };
+        apply_event(
+            &mut self.state,
+            app_event,
+            &context,
+            alert_tracker,
+            self.clock.now(),
+        );
     }
 
     fn handle_input(&mut self, input: KeyInput) -> Option<Command> {
@@ -393,6 +406,23 @@ impl App {
         }
         None
     }
+}
+
+fn spawn_input_reader(sender: Sender<AppEvent>) {
+    thread::spawn(move || {
+        while let Ok(terminal_event) = event::read() {
+            let app_event = match terminal_event {
+                Event::Key(key) => from_crossterm(key).map(AppEvent::Input),
+                Event::Resize(_, _) => Some(AppEvent::TerminalResized),
+                _ => None,
+            };
+            if let Some(app_event) = app_event {
+                if sender.send(app_event).is_err() {
+                    break;
+                }
+            }
+        }
+    });
 }
 
 fn stored_recommendation_record(
