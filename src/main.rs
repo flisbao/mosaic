@@ -44,7 +44,7 @@ use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime, WidgetUpdate};
 use mosaic::presentation::app_events::{apply_event, stored_ia_result, AppEvent, EventContext};
 use mosaic::presentation::app_state::{AppState, Command};
-use mosaic::presentation::key_input::from_crossterm;
+use mosaic::presentation::key_input::{from_crossterm, KeyInput};
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
@@ -90,6 +90,19 @@ struct Services {
     config: AppConfig,
 }
 
+struct EventChannel {
+    sender: Sender<AppEvent>,
+    receiver: mpsc::Receiver<AppEvent>,
+}
+
+struct App {
+    state: AppState,
+    spans: Vec<u16>,
+    services: Services,
+    events: EventChannel,
+    clock: SystemClock,
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().map(String::as_str) == Some(CHECK_SUBCOMMAND) {
@@ -110,22 +123,20 @@ fn run() -> Result<(), AppError> {
     let config = load_config(&directory)?;
     let termination = termination_requested()?;
     let (sender, receiver) = mpsc::channel();
-    let mut services = build_services(&config, &directory, &sender, Arc::clone(&termination));
-    let clock = SystemClock;
-    let (mut state, mut spans) = initial_state(&config, &services, &clock);
+    let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
+    let (state, spans) = initial_state(&config, &services, &SystemClock);
+    let mut app = App {
+        state,
+        spans,
+        services,
+        events: EventChannel { sender, receiver },
+        clock: SystemClock,
+    };
 
     let mut terminal = ratatui::init();
-    let result = event_loop(
-        &mut terminal,
-        &mut state,
-        &mut spans,
-        &clock,
-        &mut services,
-        &sender,
-        &receiver,
-    );
+    let result = app.run_event_loop(&mut terminal);
     ratatui::restore();
-    services.shutdown.shutdown();
+    app.services.shutdown.shutdown();
     result
 }
 
@@ -324,57 +335,81 @@ fn build_notifier(config: &AppConfig, shutdown: &ShutdownCoordinator) -> Composi
     CompositeNotifier::new(notifiers)
 }
 
-fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    state: &mut AppState,
-    spans: &mut Vec<u16>,
-    clock: &dyn Clock,
-    services: &mut Services,
-    sender: &Sender<AppEvent>,
-    receiver: &mpsc::Receiver<AppEvent>,
-) -> Result<(), AppError> {
-    let mut last_tick = Instant::now();
-    let mut alert_tracker = AlertTracker::new();
-    loop {
-        if should_stop(&services.termination) {
-            return Ok(());
-        }
-        while let Ok(app_event) = receiver.try_recv() {
-            let context = EventContext {
-                generations: &services.generations,
-                notifier: &services.notifier,
-                recommendation_store: services.llm.as_ref().map(|llm| llm.store.as_ref()),
+impl App {
+    fn run_event_loop(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<(), AppError> {
+        let mut last_tick = Instant::now();
+        let mut alert_tracker = AlertTracker::new();
+        loop {
+            if should_stop(&self.services.termination) {
+                return Ok(());
+            }
+            self.apply_pending_events(&mut alert_tracker);
+            let elapsed = last_tick.elapsed();
+            last_tick = Instant::now();
+            if let Some(alert) = self.state.advance_pomodoro(elapsed) {
+                self.services.notifier.notify(&alert);
+            }
+            terminal.draw(|frame| {
+                render(frame, &self.state, self.spans.as_slice(), self.clock.now())
+            })?;
+            if !event::poll(INPUT_POLL_INTERVAL)? {
+                continue;
+            }
+            let Event::Key(key) = event::read()? else {
+                continue;
             };
-            apply_event(state, app_event, &context, &mut alert_tracker, clock.now());
-        }
-        let elapsed = last_tick.elapsed();
-        last_tick = Instant::now();
-        if let Some(alert) = state.advance_pomodoro(elapsed) {
-            services.notifier.notify(&alert);
-        }
-        terminal.draw(|frame| render(frame, state, spans.as_slice(), clock.now()))?;
-        if !event::poll(INPUT_POLL_INTERVAL)? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        let Some(input) = from_crossterm(key) else {
-            continue;
-        };
-        match state.handle_key(input) {
-            Some(Command::Quit) => return Ok(()),
-            Some(Command::RefreshAll) => services.runtime.trigger_all(),
-            Some(Command::ReloadConfig) => reload_config(state, services, spans),
-            Some(Command::Execute(action)) => spawn_action(action, state, services, sender),
-            Some(Command::RequestRecommendation) => {
-                request_recommendation(state, services, clock, sender)
+            let Some(input) = from_crossterm(key) else {
+                continue;
+            };
+            if let Some(Command::Quit) = self.handle_input(input) {
+                return Ok(());
             }
-            Some(Command::SendRecommendation(plan)) => {
-                start_recommendation(state, services, plan, clock, sender)
-            }
-            None => {}
         }
+    }
+
+    fn apply_pending_events(&mut self, alert_tracker: &mut AlertTracker) {
+        while let Ok(app_event) = self.events.receiver.try_recv() {
+            let context = EventContext {
+                generations: &self.services.generations,
+                notifier: &self.services.notifier,
+                recommendation_store: self.services.llm.as_ref().map(|llm| llm.store.as_ref()),
+            };
+            apply_event(
+                &mut self.state,
+                app_event,
+                &context,
+                alert_tracker,
+                self.clock.now(),
+            );
+        }
+    }
+
+    fn handle_input(&mut self, input: KeyInput) -> Option<Command> {
+        let command = self.state.handle_key(input)?;
+        match command {
+            Command::Quit => return Some(Command::Quit),
+            Command::RefreshAll => self.services.runtime.trigger_all(),
+            Command::ReloadConfig => {
+                reload_config(&mut self.state, &mut self.services, &mut self.spans)
+            }
+            Command::Execute(action) => {
+                spawn_action(action, &mut self.state, &self.services, &self.events.sender)
+            }
+            Command::RequestRecommendation => request_recommendation(
+                &mut self.state,
+                &self.services,
+                &self.clock,
+                &self.events.sender,
+            ),
+            Command::SendRecommendation(plan) => start_recommendation(
+                &mut self.state,
+                &self.services,
+                plan,
+                &self.clock,
+                &self.events.sender,
+            ),
+        }
+        None
     }
 }
 
