@@ -121,7 +121,7 @@ struct CapturedOutput {
 }
 
 pub fn run_process(
-    mut command: Command,
+    command: Command,
     stdin_text: Option<&str>,
     limits: &ProcessLimits,
     cancel: &CancelFlag,
@@ -129,29 +129,9 @@ pub fn run_process(
     if cancel.is_cancelled() {
         return Err(cancelled_error());
     }
-    let program = command.get_program().to_string_lossy().to_string();
-    let deadline = Instant::now()
-        .checked_add(limits.timeout)
-        .ok_or_else(|| ProcessError::new(INVALID_TIMEOUT_MESSAGE))?;
-    isolate_process_group(&mut command);
-    let mut child = command
-        .stdin(if stdin_text.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| ProcessError {
-            message: format!("não foi possível iniciar '{program}': {error}"),
-            program_not_found: error.kind() == std::io::ErrorKind::NotFound,
-        })?;
-    if let (Some(text), Some(mut stdin)) = (stdin_text.map(str::to_string), child.stdin.take()) {
-        thread::spawn(move || {
-            let _ = stdin.write_all(text.as_bytes());
-        });
-    }
+    let deadline = deadline_after(limits.timeout)?;
+    let mut child = spawn_isolated(command, stdin_text.is_some())?;
+    feed_stdin(&mut child, stdin_text);
     cancel.register_child(child.id());
     let stdout = capture(child.stdout.take(), limits.maximum_output_bytes, true);
     let stderr = capture(
@@ -164,15 +144,51 @@ pub fn run_process(
     let stdout_bytes = join_output(stdout, limits, deadline, cancel)?;
     let stderr_bytes = join_output(stderr, limits, deadline, cancel)?;
     if !status.success() {
-        let message = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
-        return Err(ProcessError::new(if message.is_empty() {
-            format!("processo terminou com falha ({status})")
-        } else {
-            message
-        }));
+        return Err(failure_error(status, &stderr_bytes));
     }
     String::from_utf8(stdout_bytes)
         .map_err(|_| ProcessError::new("saída do processo não é UTF-8 válido".to_string()))
+}
+
+fn deadline_after(timeout: Duration) -> Result<Instant, ProcessError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| ProcessError::new(INVALID_TIMEOUT_MESSAGE))
+}
+
+fn spawn_isolated(mut command: Command, has_stdin: bool) -> Result<Child, ProcessError> {
+    let program = command.get_program().to_string_lossy().to_string();
+    isolate_process_group(&mut command);
+    command
+        .stdin(if has_stdin {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| ProcessError {
+            message: format!("não foi possível iniciar '{program}': {error}"),
+            program_not_found: error.kind() == std::io::ErrorKind::NotFound,
+        })
+}
+
+fn feed_stdin(child: &mut Child, stdin_text: Option<&str>) {
+    if let (Some(text), Some(mut stdin)) = (stdin_text.map(str::to_string), child.stdin.take()) {
+        thread::spawn(move || {
+            let _ = stdin.write_all(text.as_bytes());
+        });
+    }
+}
+
+fn failure_error(status: ExitStatus, stderr_bytes: &[u8]) -> ProcessError {
+    let message = String::from_utf8_lossy(stderr_bytes).trim().to_string();
+    ProcessError::new(if message.is_empty() {
+        format!("processo terminou com falha ({status})")
+    } else {
+        message
+    })
 }
 
 fn wait_for_exit(
@@ -405,6 +421,22 @@ mod tests {
             }
             canceller.cancel();
         })
+    }
+
+    #[test]
+    fn failure_error_prefers_stderr_and_falls_back_to_the_status() {
+        let status = shell("exit 3").status().unwrap();
+
+        assert_eq!(failure_error(status, b"  boom \n").to_string(), "boom");
+        assert!(failure_error(status, b"")
+            .to_string()
+            .contains("processo terminou com falha"));
+    }
+
+    #[test]
+    fn deadline_after_rejects_an_unrepresentable_timeout() {
+        assert!(deadline_after(Duration::MAX).is_err());
+        assert!(deadline_after(Duration::from_secs(1)).is_ok());
     }
 
     #[test]
