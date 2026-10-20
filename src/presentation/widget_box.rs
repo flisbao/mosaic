@@ -5,9 +5,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
-use crate::domain::layout::{visible_item_capacity, MINIMUM_BOX_HEIGHT};
 use crate::domain::widget::WidgetRecord;
 use crate::presentation::app_state::WidgetEntry;
+use crate::presentation::grid_layout::{visible_item_capacity, MINIMUM_BOX_HEIGHT};
 use crate::presentation::text_fit::{display_width, truncate_to_width};
 use crate::presentation::widget_view::render_blocks;
 

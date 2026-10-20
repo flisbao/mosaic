@@ -7,11 +7,11 @@ use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
-use crate::domain::shortcuts::assign_shortcuts;
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, WidgetId, WidgetRecord, WidgetSnapshot,
 };
 use crate::presentation::key_input::KeyInput;
+use crate::presentation::shortcuts::assign_shortcuts;
 
 mod alert_queue;
 mod focus_navigation;

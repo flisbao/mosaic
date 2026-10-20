@@ -7,14 +7,14 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::application::pomodoro_notifications::{phase_label, AlertMessage};
-use crate::domain::layout::{
-    arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
-    TOP_BAR_HEIGHT,
-};
 use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer, SECONDS_PER_MINUTE};
 use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
+use crate::presentation::grid_layout::{
+    arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
+    TOP_BAR_HEIGHT,
+};
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
     box_block, box_body, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
