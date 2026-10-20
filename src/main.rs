@@ -112,32 +112,7 @@ fn run() -> Result<(), AppError> {
     let (sender, receiver) = mpsc::channel();
     let mut services = build_services(&config, &directory, &sender, Arc::clone(&termination));
     let clock = SystemClock;
-    let ia_record = services
-        .llm
-        .as_ref()
-        .map(|llm| stored_ia_record(llm.store.as_ref(), clock.now()));
-    let TabLayout {
-        entries,
-        tabs,
-        mut spans,
-    } = build_tab_views(
-        &widget_placements(&config),
-        &tab_placements(&config),
-        ia_record,
-    );
-    let mut state = AppState::new(entries, tabs);
-    let warnings: Vec<String> = config
-        .warnings
-        .iter()
-        .chain(&services.startup_warnings)
-        .cloned()
-        .collect();
-    if let Some(notice) = startup_notice(&warnings) {
-        state.show_notice(notice);
-    }
-    if config.pomodoro.enabled {
-        state = state.with_pomodoro(PomodoroTimer::new(config.pomodoro.settings()));
-    }
+    let (mut state, mut spans) = initial_state(&config, &services, &clock);
 
     let mut terminal = ratatui::init();
     let result = event_loop(
@@ -152,6 +127,43 @@ fn run() -> Result<(), AppError> {
     ratatui::restore();
     services.shutdown.shutdown();
     result
+}
+
+fn initial_state(
+    config: &AppConfig,
+    services: &Services,
+    clock: &dyn Clock,
+) -> (AppState, Vec<u16>) {
+    let ia_record = services
+        .llm
+        .as_ref()
+        .map(|llm| stored_ia_record(llm.store.as_ref(), clock.now()));
+    let TabLayout {
+        entries,
+        tabs,
+        spans,
+    } = build_tab_views(
+        &widget_placements(config),
+        &tab_placements(config),
+        ia_record,
+    );
+    let mut state = AppState::new(entries, tabs);
+    if let Some(notice) = startup_notice(&startup_warnings(config, services)) {
+        state.show_notice(notice);
+    }
+    if config.pomodoro.enabled {
+        state = state.with_pomodoro(PomodoroTimer::new(config.pomodoro.settings()));
+    }
+    (state, spans)
+}
+
+fn startup_warnings(config: &AppConfig, services: &Services) -> Vec<String> {
+    config
+        .warnings
+        .iter()
+        .chain(&services.startup_warnings)
+        .cloned()
+        .collect()
 }
 
 fn widget_placements(config: &AppConfig) -> Vec<WidgetPlacement> {
@@ -448,6 +460,50 @@ fn spawn_action(
     });
 }
 
+#[derive(Debug, Error)]
+#[error("Não foi possível ler {path}: {source}")]
+struct PriorityCriteriaUnreadable {
+    path: String,
+    source: std::io::Error,
+}
+
+fn read_priority_criteria(
+    config_directory: &Path,
+    config: &LlmConfig,
+) -> Result<String, PriorityCriteriaUnreadable> {
+    let prompt_path = config_directory.join(&config.priority_prompt);
+    fs::read_to_string(&prompt_path).map_err(|source| PriorityCriteriaUnreadable {
+        path: prompt_path.display().to_string(),
+        source,
+    })
+}
+
+fn widget_contexts<'a>(
+    state: &'a AppState,
+    selections: &'a HashMap<String, LlmSelection>,
+) -> Vec<WidgetContext<'a>> {
+    state
+        .entries()
+        .iter()
+        .filter_map(|entry| {
+            Some(WidgetContext {
+                widget_id: &entry.id,
+                selection: selections.get(entry.id.as_str())?,
+                state: &entry.record,
+            })
+        })
+        .collect()
+}
+
+fn confirmation_text(plan: &RecommendationPlan, config: &LlmConfig) -> String {
+    format!(
+        "Enviar {} itens (~{} tokens, estimativa) para {}?",
+        plan.item_count,
+        plan.estimated_tokens,
+        describe_target(config)
+    )
+}
+
 fn request_recommendation(
     state: &mut AppState,
     services: &Services,
@@ -458,40 +514,22 @@ fn request_recommendation(
         state.show_notice(LLM_DISABLED_NOTICE.to_string());
         return;
     };
-    let prompt_path = services.config_directory.join(&llm.config.priority_prompt);
-    let criteria = match fs::read_to_string(&prompt_path) {
+    let criteria = match read_priority_criteria(&services.config_directory, &llm.config) {
         Ok(criteria) => criteria,
         Err(error) => {
-            state.show_notice(format!(
-                "Não foi possível ler {}: {error}",
-                prompt_path.display()
-            ));
+            state.show_notice(error.to_string());
             return;
         }
     };
-    let plan = {
-        let contexts: Vec<WidgetContext> = state
-            .entries()
-            .iter()
-            .filter_map(|entry| {
-                Some(WidgetContext {
-                    widget_id: &entry.id,
-                    selection: llm.selections.get(entry.id.as_str())?,
-                    state: &entry.record,
-                })
-            })
-            .collect();
-        build_plan(&criteria, clock.now(), &contexts)
-    };
+    let plan = build_plan(
+        &criteria,
+        clock.now(),
+        &widget_contexts(state, &llm.selections),
+    );
     match plan {
         Err(error) => state.show_notice(error.to_string()),
         Ok(plan) if llm.config.confirm_before_send => {
-            let text = format!(
-                "Enviar {} itens (~{} tokens, estimativa) para {}?",
-                plan.item_count,
-                plan.estimated_tokens,
-                describe_target(&llm.config)
-            );
+            let text = confirmation_text(&plan, &llm.config);
             state.ask_send_confirmation(text, plan);
         }
         Ok(plan) => start_recommendation(state, services, plan, clock, sender),
@@ -531,5 +569,53 @@ fn describe_target(config: &LlmConfig) -> String {
     match &config.model {
         Some(model) => format!("{harness}/{model}"),
         None => harness.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn llm_config(model: Option<&str>) -> LlmConfig {
+        LlmConfig {
+            enabled: true,
+            harness: Harness::Claude,
+            model: model.map(str::to_string),
+            max_budget_usd: None,
+            timeout_seconds: 5,
+            confirm_before_send: true,
+            priority_prompt: "prompts/prioridade.md".to_string(),
+        }
+    }
+
+    #[test]
+    fn confirmation_text_names_the_item_count_the_estimate_and_the_target() {
+        let plan = RecommendationPlan {
+            prompt: "p".to_string(),
+            item_count: 3,
+            estimated_tokens: 40,
+        };
+
+        assert_eq!(
+            confirmation_text(&plan, &llm_config(Some("haiku"))),
+            "Enviar 3 itens (~40 tokens, estimativa) para claude/haiku?"
+        );
+        assert_eq!(
+            confirmation_text(&plan, &llm_config(None)),
+            "Enviar 3 itens (~40 tokens, estimativa) para claude?"
+        );
+    }
+
+    #[test]
+    fn missing_priority_prompt_reports_its_path() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let error = read_priority_criteria(directory.path(), &llm_config(None)).unwrap_err();
+
+        assert!(
+            error.to_string().starts_with("Não foi possível ler "),
+            "{error}"
+        );
+        assert!(error.to_string().contains("prioridade.md"), "{error}");
     }
 }
