@@ -10,6 +10,7 @@ pub enum RefreshWake {
     Closed,
 }
 
+#[derive(Clone)]
 pub struct RefreshSignal {
     sender: SyncSender<()>,
 }
@@ -75,5 +76,15 @@ mod tests {
         let (signal, waiter) = refresh_channel();
         drop(waiter);
         signal.request();
+    }
+
+    #[test]
+    fn cloned_signals_share_one_pending_refresh() {
+        let (signal, waiter) = refresh_channel();
+        let copy = signal.clone();
+        signal.request();
+        copy.request();
+        assert_eq!(waiter.wait(SHORT_INTERVAL), RefreshWake::Requested);
+        assert_eq!(waiter.wait(SHORT_INTERVAL), RefreshWake::IntervalElapsed);
     }
 }

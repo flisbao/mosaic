@@ -1,7 +1,5 @@
-use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
-use crate::application::refresh::refresh_widget;
+use crate::application::ports::ActionExecutor;
 use crate::domain::action::ConfirmedAction;
-use crate::domain::widget::WidgetSnapshot;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionNotice {
@@ -9,22 +7,17 @@ pub enum ActionNotice {
     Failed(String),
 }
 
-pub fn execute_confirmed(
-    executor: &dyn ActionExecutor,
-    source: &dyn WidgetSource,
-    action: ConfirmedAction,
-) -> (ActionNotice, Result<WidgetSnapshot, SourceError>) {
-    let notice = match executor.execute(&action) {
+pub fn execute_confirmed(executor: &dyn ActionExecutor, action: ConfirmedAction) -> ActionNotice {
+    match executor.execute(&action) {
         Ok(outcome) => ActionNotice::Succeeded(outcome.message),
         Err(error) => ActionNotice::Failed(error.to_string()),
-    };
-    (notice, refresh_widget(source))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::refresh::fakes::{snapshot_titled, FakeSource};
+    use crate::application::ports::SourceError;
     use crate::domain::action::{ActionOutcome, ConfirmedAction, ProposedAction};
     use crate::domain::widget::{ActionScope, ActionSpec, WidgetId};
 
@@ -50,28 +43,22 @@ mod tests {
     }
 
     #[test]
-    fn success_returns_message_and_refreshed_state() {
+    fn success_returns_the_message() {
         let executor = FakeExecutor(Ok(ActionOutcome {
             message: "movido".to_string(),
         }));
-        let source = FakeSource::returning(Ok(snapshot_titled("Kanban")));
 
-        let (notice, state) = execute_confirmed(&executor, &source, confirmed());
+        let notice = execute_confirmed(&executor, confirmed());
 
         assert_eq!(notice, ActionNotice::Succeeded("movido".to_string()));
-        assert_eq!(state, Ok(snapshot_titled("Kanban")));
-        assert_eq!(source.call_count(), 1);
     }
 
     #[test]
-    fn failure_returns_error_notice_and_still_refreshes() {
+    fn failure_returns_an_error_notice() {
         let executor = FakeExecutor(Err(SourceError::Failed("destino existe".to_string())));
-        let source = FakeSource::returning(Ok(snapshot_titled("Kanban")));
 
-        let (notice, state) = execute_confirmed(&executor, &source, confirmed());
+        let notice = execute_confirmed(&executor, confirmed());
 
         assert_eq!(notice, ActionNotice::Failed("destino existe".to_string()));
-        assert_eq!(state, Ok(snapshot_titled("Kanban")));
-        assert_eq!(source.call_count(), 1);
     }
 }

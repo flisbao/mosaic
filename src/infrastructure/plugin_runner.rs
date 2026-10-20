@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Mutex, PoisonError};
 
 use crate::application::launch_spec::ProviderCommand;
 use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
@@ -19,6 +20,7 @@ pub struct PluginRunner {
     command: ProviderCommand,
     working_directory: PathBuf,
     cancel_flag: CancelFlag,
+    invocation_lock: Mutex<()>,
 }
 
 impl PluginRunner {
@@ -27,10 +29,15 @@ impl PluginRunner {
             command,
             working_directory,
             cancel_flag: CancelFlag::default(),
+            invocation_lock: Mutex::new(()),
         }
     }
 
     fn run(&self, extra_args: &[&str], stdin_text: Option<&str>) -> Result<String, SourceError> {
+        let _one_invocation_at_a_time = self
+            .invocation_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let mut command = Command::new(&self.command.program);
         command
             .args(&self.command.args)
@@ -106,6 +113,8 @@ fn action_parameters(action: &ConfirmedAction) -> String {
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -392,5 +401,26 @@ mod tests {
         let runner = runner(directory.path(), "exec sleep 30", 60);
         runner.cancel();
         assert_eq!(runner.snapshot().unwrap_err(), SourceError::Cancelled);
+    }
+
+    #[test]
+    fn snapshot_and_action_never_overlap() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = r#"if ! mkdir busy.lock 2>/dev/null; then echo overlap >> overlaps.txt; fi
+sleep 0.3
+rmdir busy.lock 2>/dev/null
+case "$1" in
+  snapshot) printf '{"summary":{"title":"T","lines":[]} }';;
+  *) cat > /dev/null; echo feito;;
+esac"#;
+        let runner = Arc::new(runner(directory.path(), script, 5));
+        let snapshot_runner = Arc::clone(&runner);
+        let snapshot_thread = thread::spawn(move || snapshot_runner.snapshot().unwrap());
+        thread::sleep(Duration::from_millis(100));
+
+        runner.execute(&move_action("{}", None)).unwrap();
+        snapshot_thread.join().unwrap();
+
+        assert!(!directory.path().join("overlaps.txt").exists());
     }
 }

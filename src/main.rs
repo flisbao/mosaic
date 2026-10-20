@@ -21,7 +21,7 @@ use mosaic::application::recommendation::{LlmSelection, RecommendationPlan, Widg
 use mosaic::application::recommendation_request::{
     prepare_recommendation, RecommendationStep, SendPolicy,
 };
-use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetUpdate};
+use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::domain::action::ConfirmedAction;
@@ -458,22 +458,19 @@ fn spawn_action(
     sender: &Sender<AppEvent>,
 ) {
     let widget = action.widget().clone();
-    let (Some(runner), Some(generation)) = (
+    let (Some(runner), Some(refresh)) = (
         services.runtime.runner(&widget),
-        services.generations.current(&widget),
+        services.runtime.refresh_signal(&widget),
     ) else {
         state.finish_action(&widget);
         return;
     };
     let runner = Arc::clone(runner);
-    spawn_event_task(sender, move || {
-        let (notice, result) = execute_confirmed(runner.as_ref(), runner.as_ref(), action);
-        let update = WidgetUpdate {
-            id: widget,
-            generation,
-            result,
-        };
-        AppEvent::ActionFinished { update, notice }
+    let sender = sender.clone();
+    thread::spawn(move || {
+        let notice = execute_confirmed(runner.as_ref(), action);
+        let _ = sender.send(AppEvent::ActionFinished(widget, notice));
+        refresh.request();
     });
 }
 

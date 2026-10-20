@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
 use mosaic::application::launch_spec::ProviderCommand;
+use mosaic::application::ports::WidgetSource;
 use mosaic::application::refresh::refresh_widget;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
@@ -76,7 +77,8 @@ fn confirmed_move_renames_the_item_and_refreshes_the_widget() {
     let Some(Command::Execute(confirmed)) = app.handle_key(KeyInput::Character('s')) else {
         panic!("esperava Command::Execute");
     };
-    let (notice, state) = execute_confirmed(&runner, &runner, confirmed);
+    let notice = execute_confirmed(&runner, confirmed);
+    let state = runner.snapshot();
 
     assert!(matches!(notice, ActionNotice::Succeeded(_)), "{notice:?}");
     assert!(root.join("done/a.md").is_file());

@@ -16,10 +16,7 @@ const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 
 pub enum AppEvent {
     WidgetUpdated(WidgetUpdate),
-    ActionFinished {
-        update: WidgetUpdate,
-        notice: ActionNotice,
-    },
+    ActionFinished(WidgetId, ActionNotice),
     RecommendationFinished(Result<RecommendationOutcome, LlmError>),
 }
 
@@ -62,9 +59,8 @@ pub fn apply_event(
         AppEvent::WidgetUpdated(update) => {
             apply_widget_update(state, context, tracker, update, now)
         }
-        AppEvent::ActionFinished { update, notice } => {
-            state.finish_action(&update.id);
-            apply_widget_update(state, context, tracker, update, now);
+        AppEvent::ActionFinished(id, notice) => {
+            state.finish_action(&id);
             state.show_notice(describe_notice(notice));
         }
         AppEvent::RecommendationFinished(result) => {

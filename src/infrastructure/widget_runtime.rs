@@ -65,6 +65,10 @@ impl<E: Send + 'static> WidgetRuntime<E> {
         self.runners.get(id)
     }
 
+    pub fn refresh_signal(&self, id: &WidgetId) -> Option<RefreshSignal> {
+        self.refresh_signals.get(id).cloned()
+    }
+
     pub fn trigger_all(&self) {
         for signal in self.refresh_signals.values() {
             signal.request();
@@ -258,5 +262,18 @@ mod tests {
 
         assert_eq!(fake.request_cancels.load(Ordering::SeqCst), 1);
         assert!(runtime.runner(&WidgetId::new("a")).is_none());
+    }
+
+    #[test]
+    fn refresh_signal_exists_only_while_the_widget_runs() {
+        let fake = Arc::new(FakeRunner::default());
+        let (mut runtime, _receiver, _shutdown) = runtime_with(&fake);
+        assert!(runtime.refresh_signal(&WidgetId::new("a")).is_none());
+
+        runtime.start(&settings("a"), generation());
+        assert!(runtime.refresh_signal(&WidgetId::new("a")).is_some());
+
+        runtime.retire(&WidgetId::new("a"));
+        assert!(runtime.refresh_signal(&WidgetId::new("a")).is_none());
     }
 }
