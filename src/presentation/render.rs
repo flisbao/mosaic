@@ -683,7 +683,7 @@ mod tests {
                 DetailItem {
                     id: Some("inbox/a.md".to_string()),
                     text: "Tarefa A".to_string(),
-                    flag: Some(Flag::Warning),
+                    flag: Some(Flag::Attention),
                     meta: vec![],
                 },
                 DetailItem {
@@ -1254,7 +1254,7 @@ mod tests {
                     .map(|item| DetailItem {
                         id: None,
                         text: format!("item {item} da secao {section} {}", "palavra ".repeat(item)),
-                        flag: (item % 3 == 0).then_some(Flag::Warning),
+                        flag: (item % 3 == 0).then_some(Flag::Attention),
                         meta: vec![],
                     })
                     .collect(),
@@ -1440,7 +1440,7 @@ mod tests {
                     plain_line("inbox 3"),
                     SummaryLine {
                         text: "atenção".to_string(),
-                        flag: Some(Flag::Warning),
+                        flag: Some(Flag::Attention),
                     },
                 ],
             )),

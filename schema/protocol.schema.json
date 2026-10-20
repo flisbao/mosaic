@@ -18,7 +18,7 @@
       "enum": ["normal", "muted", "ok", "warn", "danger", "current"],
       "default": "normal"
     },
-    "flag": { "enum": ["updated", "warning"] },
+    "flag": { "enum": ["updated", "attention"] },
     "mini": {
       "type": "object",
       "required": ["value", "text"],

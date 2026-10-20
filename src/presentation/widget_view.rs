@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn lines_block_renders_flag_before_text() {
         let blocks = [Block::Lines(vec![
-            line("alfa", Some(Flag::Warning)),
+            line("alfa", Some(Flag::Attention)),
             line("beta", None),
         ])];
         assert_eq!(plain(&blocks, 20), vec!["⚠ alfa", "beta"]);
@@ -422,7 +422,7 @@ mod tests {
         let flagged_cell = Cell {
             text: "x".to_string(),
             tone: Tone::Danger,
-            flag: Some(Flag::Warning),
+            flag: Some(Flag::Attention),
         };
         let blocks = [table(
             vec![column("A", Align::Left)],

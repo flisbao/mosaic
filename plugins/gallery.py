@@ -41,7 +41,7 @@ def team_table():
         ],
         "rows": [
             ["Ana", "3", {"text": "ok", "tone": "ok"}],
-            ["Bruno", "5", {"text": "parado", "tone": "danger", "flag": "warning"}],
+            ["Bruno", "5", {"text": "parado", "tone": "danger", "flag": "attention"}],
             ["Carla", "2", {"text": "revisão", "tone": "warn"}],
         ],
     }

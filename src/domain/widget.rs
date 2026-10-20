@@ -6,7 +6,7 @@ use chrono::{NaiveDateTime, TimeDelta};
 use crate::domain::blocks::{lines::WidgetLine, Block};
 use crate::domain::widget_content::{Alert, Tone};
 
-const FLAGS: [(&str, Flag); 2] = [("updated", Flag::Updated), ("warning", Flag::Warning)];
+const FLAGS: [(&str, Flag); 2] = [("updated", Flag::Updated), ("attention", Flag::Attention)];
 
 pub const FLAG_NAMES: [&str; 2] = flag_names();
 
@@ -48,7 +48,7 @@ impl WidgetId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flag {
     Updated,
-    Warning,
+    Attention,
 }
 
 impl Flag {
@@ -62,7 +62,7 @@ impl Flag {
     pub fn symbol(self) -> char {
         match self {
             Flag::Updated => '●',
-            Flag::Warning => '⚠',
+            Flag::Attention => '⚠',
         }
     }
 }
@@ -302,13 +302,14 @@ mod tests {
     }
 
     #[test]
-    fn flag_parse_accepts_known_names_only() {
+    fn flag_parse_accepts_attention_and_rejects_warning() {
         for name in FLAG_NAMES {
             assert!(Flag::parse(name).is_some(), "{name}");
         }
         assert_eq!(Flag::parse("updated"), Some(Flag::Updated));
-        assert_eq!(Flag::parse("warning"), Some(Flag::Warning));
-        assert_eq!(Flag::parse("Warning"), None);
+        assert_eq!(Flag::parse("attention"), Some(Flag::Attention));
+        assert_eq!(Flag::parse("warning"), None);
+        assert_eq!(Flag::parse("Attention"), None);
         assert_eq!(Flag::parse("x"), None);
     }
     use crate::domain::blocks::{lines::WidgetLine, Block};
@@ -341,11 +342,11 @@ mod tests {
     #[test]
     fn notice_becomes_the_first_block_when_blocks_exist() {
         let mut target = summary(vec![], vec![Block::Lines(vec![widget_line("x")])]);
-        target.put_notice_first("aviso".to_string(), Tone::Warn, Some(Flag::Warning));
+        target.put_notice_first("aviso".to_string(), Tone::Warn, Some(Flag::Attention));
         let expected = Block::Lines(vec![WidgetLine {
             text: "aviso".to_string(),
             tone: Tone::Warn,
-            flag: Some(Flag::Warning),
+            flag: Some(Flag::Attention),
         }]);
         assert_eq!(target.blocks[0], expected);
         assert!(target.lines.is_empty());
@@ -365,12 +366,12 @@ mod tests {
     fn display_blocks_converts_legacy_lines() {
         let legacy = vec![SummaryLine {
             text: "velho".to_string(),
-            flag: Some(Flag::Warning),
+            flag: Some(Flag::Attention),
         }];
         let expected = Block::Lines(vec![WidgetLine {
             text: "velho".to_string(),
             tone: Tone::Normal,
-            flag: Some(Flag::Warning),
+            flag: Some(Flag::Attention),
         }]);
         assert_eq!(summary(legacy, vec![]).display_blocks(), vec![expected]);
     }
@@ -396,7 +397,7 @@ mod tests {
     #[test]
     fn flag_symbols_match_spec() {
         assert_eq!(Flag::Updated.symbol(), '●');
-        assert_eq!(Flag::Warning.symbol(), '⚠');
+        assert_eq!(Flag::Attention.symbol(), '⚠');
     }
 
     fn seconds_after(base: NaiveDateTime, seconds: i64) -> NaiveDateTime {

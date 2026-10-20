@@ -23,7 +23,7 @@ pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
     for notice in error_notices(&parsed.problems).into_iter().rev() {
         snapshot
             .summary
-            .put_notice_first(notice, Tone::Warn, Some(Flag::Warning));
+            .put_notice_first(notice, Tone::Warn, Some(Flag::Attention));
     }
     Ok(snapshot)
 }
@@ -88,7 +88,7 @@ mod tests {
         let snapshot = parse_snapshot(
             r#"{"summary":{"title":"K","lines":[{"text":"x","flag":"updated"}]},
                 "detail":{"sections":[{"heading":"inbox","items":[
-                    {"id":"inbox/a.md","text":"Tarefa A","flag":"warning"},
+                    {"id":"inbox/a.md","text":"Tarefa A","flag":"attention"},
                     {"text":"sem id"}]}]}}"#,
         )
         .unwrap();
@@ -96,7 +96,7 @@ mod tests {
         let sections = snapshot.detail.unwrap();
         assert_eq!(sections[0].heading, "inbox");
         assert_eq!(sections[0].items[0].id.as_deref(), Some("inbox/a.md"));
-        assert_eq!(sections[0].items[0].flag, Some(Flag::Warning));
+        assert_eq!(sections[0].items[0].flag, Some(Flag::Attention));
         assert_eq!(sections[0].items[1].id, None);
     }
 
@@ -188,7 +188,7 @@ mod tests {
             first.text,
             "bloco inválido: protocol: precisa ser um número inteiro positivo"
         );
-        assert_eq!(first.flag, Some(Flag::Warning));
+        assert_eq!(first.flag, Some(Flag::Attention));
         assert_eq!(snapshot.summary.lines[1].text, "ok");
     }
 
@@ -203,7 +203,7 @@ mod tests {
             first.text,
             "mini inválido: mini.value: precisa ter conteúdo"
         );
-        assert_eq!(first.flag, Some(Flag::Warning));
+        assert_eq!(first.flag, Some(Flag::Attention));
     }
 
     #[test]

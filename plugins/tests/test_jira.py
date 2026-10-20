@@ -1203,7 +1203,7 @@ class MainTests(unittest.TestCase):
             self.assertIsInstance(snapshot["summary"]["title"], str)
             for line in snapshot["summary"]["lines"]:
                 self.assertIsInstance(line["text"], str)
-                self.assertIn(line.get("flag"), (None, "updated", "warning"))
+                self.assertIn(line.get("flag"), (None, "updated", "attention"))
             for section in snapshot["detail"]["sections"]:
                 self.assertIsInstance(section["heading"], str)
                 for item in section["items"]:

@@ -62,11 +62,11 @@ Um bloco é um objeto com `type`, empilhado na ordem em que aparece.
 ] }
 { "type": "table",
   "columns": [ { "title": "Pessoa" }, { "title": "Em andamento", "align": "right" } ],
-  "rows": [ [ "Ana", "3" ], [ { "text": "Bia", "tone": "danger", "flag": "warning" }, "5" ] ] }
+  "rows": [ [ "Ana", "3" ], [ { "text": "Bia", "tone": "danger", "flag": "attention" }, "5" ] ] }
 ```
 
 **Tons:** `normal` (padrão do terminal), `muted` (cinza), `ok` (verde), `warn` (amarelo), `danger` (vermelho), `current` (ciano em negrito). As cores são fixas.
-**Flags:** `updated` (`●`) e `warning` (`⚠`).
+**Flags:** `updated` (`●`) e `attention` (`⚠`).
 
 ## 4. Limites, texto e erros
 

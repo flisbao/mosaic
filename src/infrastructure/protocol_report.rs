@@ -646,7 +646,7 @@ mod tests {
         let parsed = report(
             r#"{"summary":{"title":"K","lines":[{"text":"x","flag":"updated"}]},
                 "detail":{"sections":[{"heading":"h","items":[
-                    {"id":"a","text":"A","flag":"warning","meta":{"p":"alta"}}]}]},
+                    {"id":"a","text":"A","flag":"attention","meta":{"p":"alta"}}]}]},
                 "actions":[{"id":"move","label":"Mover","applies_to":"item","params":{"to":"done"}}]}"#,
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
@@ -997,7 +997,7 @@ mod tests {
     fn rows_block_parses_all_fields() {
         let parsed = summary_with_blocks(
             r#"[{"type":"rows","rows":[{"time":"09:00","text":"Daily","tone":"current",
-                "flag":"warning","tags":[{"text":"agora","tone":"danger"}]}]}]"#,
+                "flag":"attention","tags":[{"text":"agora","tone":"danger"}]}]}]"#,
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
         let expected = Block::Rows(vec![Row {
@@ -1008,7 +1008,7 @@ mod tests {
                 tone: Tone::Danger,
             }],
             tone: Tone::Current,
-            flag: Some(Flag::Warning),
+            flag: Some(Flag::Attention),
         }]);
         assert_eq!(first_block(&parsed), &expected);
     }
@@ -1107,6 +1107,22 @@ mod tests {
             paths(&parsed, Severity::Warning),
             vec!["summary.blocks[0].lines[0].tone"]
         );
+    }
+
+    #[test]
+    fn old_warning_flag_is_ignored_with_a_warning() {
+        let parsed =
+            summary_with_blocks(r#"[{"type":"lines","lines":[{"text":"x","flag":"warning"}]}]"#);
+        let Block::Lines(lines) = first_block(&parsed) else {
+            panic!("esperava lines");
+        };
+        assert_eq!(lines[0].text, "x");
+        assert_eq!(lines[0].flag, None);
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["summary.blocks[0].lines[0].flag"]
+        );
+        assert_eq!(parsed.problems[0].message, "flag desconhecida: warning");
     }
 
     #[test]
@@ -1265,7 +1281,7 @@ mod tests {
     fn table_cell_can_be_a_plain_string_or_an_object() {
         let parsed = summary_with_blocks(
             r#"[{"type":"table","columns":[{"title":"A"},{"title":"B"}],
-                "rows":[["x",{"text":"y","tone":"danger","flag":"warning"}]]}]"#,
+                "rows":[["x",{"text":"y","tone":"danger","flag":"attention"}]]}]"#,
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
         let Block::Table { rows, .. } = first_block(&parsed) else {
@@ -1277,7 +1293,7 @@ mod tests {
             Cell {
                 text: "y".to_string(),
                 tone: Tone::Danger,
-                flag: Some(Flag::Warning),
+                flag: Some(Flag::Attention),
             }
         );
     }
