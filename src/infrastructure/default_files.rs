@@ -81,6 +81,25 @@ priority_prompt = "prompts/prioridade.md"
 # JIRA_EMAIL = "voce@empresa.com"
 # JIRA_TOKEN_ENV = "JIRA_TOKEN_EMPRESA"
 
+# --- Agenda Google (descomente uma opção; passo a passo em plugins/calendar/README.md no repositório) ---
+# Link ICS secreto, guardado numa variável de ambiente:
+#   export CALENDAR_ICS_PERSONAL="https://calendar.google.com/calendar/ical/.../basic.ics"
+# [[widgets]]
+# id = "agenda"
+# command = "python3"
+# args = ["plugins/calendar/calendar_widget.py"]
+# interval_seconds = 300
+# timeout_seconds = 20
+# inherit_env = ["CALENDAR_ICS_PERSONAL"]
+#
+# [widgets.env]
+# CALENDAR_SOURCE = "ics"
+# CALENDAR_ICS_URL_ENV = "CALENDAR_ICS_PERSONAL"
+#
+# GNOME Online Accounts: troque as duas linhas de [widgets.env] por CALENDAR_SOURCE = "goa"
+# e use inherit_env = ["DBUS_SESSION_BUS_ADDRESS"].
+# gcalcli: CALENDAR_SOURCE = "gcalcli" (rode `gcalcli init` antes).
+
 # --- Galeria de blocos (descomente para ver todos os blocos; veja PROTOCOL.md) ---
 # [[widgets]]
 # id = "gallery-python"
@@ -97,11 +116,15 @@ priority_prompt = "prompts/prioridade.md"
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
 
-const BUNDLED_PLUGINS: [(&str, &str); 6] = [
+const BUNDLED_PLUGINS: [(&str, &str); 7] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
     ("example.py", include_str!("../../plugins/example.py")),
     ("example.js", include_str!("../../plugins/example.js")),
     ("jira.py", include_str!("../../plugins/jira.py")),
+    (
+        "calendar/calendar_widget.py",
+        include_str!("../../plugins/calendar/calendar_widget.py"),
+    ),
     ("gallery.py", include_str!("../../plugins/gallery.py")),
     ("gallery.js", include_str!("../../plugins/gallery.js")),
 ];
@@ -123,6 +146,9 @@ pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError
     create_private_directory(&plugins_directory)?;
     for (name, content) in BUNDLED_PLUGINS {
         let plugin_path = plugins_directory.join(name);
+        if let Some(plugin_directory) = plugin_path.parent() {
+            create_private_directory(plugin_directory)?;
+        }
         write_private_file(&plugin_path, content)?;
     }
     let prompt_path = directory.join(PRIORITY_PROMPT_RELATIVE_PATH);
@@ -283,6 +309,22 @@ mod tests {
             .widgets
             .iter()
             .all(|widget| !widget.id.as_str().starts_with("gallery")));
+    }
+
+    #[test]
+    fn install_creates_calendar_plugin_in_its_own_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(install_defaults_if_missing(directory.path()).unwrap());
+        let plugin = directory.path().join("plugins/calendar/calendar_widget.py");
+        let installed = std::fs::read_to_string(plugin).unwrap();
+        assert!(installed.contains("def main("));
+    }
+
+    #[test]
+    fn default_config_has_commented_calendar_widget() {
+        let text = default_config_text();
+        assert!(text.contains("# args = [\"plugins/calendar/calendar_widget.py\"]"));
+        assert!(text.contains("# CALENDAR_SOURCE = \"ics\""));
     }
 
     #[test]
