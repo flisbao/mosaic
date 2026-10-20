@@ -136,6 +136,35 @@ fn check_never_opens_the_terminal() {
     assert!(!stdout(&output).contains('\u{1b}'));
 }
 
+#[test]
+fn check_cwd_flag_runs_the_provider_in_the_given_directory() {
+    let outer = tempfile::tempdir().unwrap();
+    let inner = outer.path().join("config");
+    fs::create_dir(&inner).unwrap();
+    write_widget(
+        &inner,
+        r#"{"summary":{"title":"Agenda","blocks":[{"type":"lines","lines":[{"text":"olá"}]}]}}"#,
+    );
+    let output = run_check(
+        outer.path(),
+        &["--cwd", inner.to_str().unwrap(), "sh", "widget.sh"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+#[test]
+fn check_timeout_flag_limits_the_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("slow.sh"), "sleep 5\n").unwrap();
+    let output = run_check(directory.path(), &["--timeout", "1", "sh", "slow.sh"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("tempo limite de 1s"),
+        "{}",
+        stdout(&output)
+    );
+}
+
 fn run_mosaic(working_directory: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .args(arguments)

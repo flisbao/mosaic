@@ -20,7 +20,7 @@ O Mosaic roda `command` + `args` do widget com um argumento a mais:
 | `<comando> snapshot` | a cada `interval_seconds` e quando o usuário aperta `r` | um JSON na saída padrão |
 | `<comando> action <id>` | quando o usuário confirma uma ação (parâmetros em JSON na entrada padrão) | uma mensagem curta de texto |
 
-O processo recebe o ambiente do Mosaic mais `[widgets.env]` e roda no diretório onde o Mosaic foi iniciado. A saída vai até **1 MiB** e o widget tem `timeout_seconds` (padrão 5 s) para responder; código de saída diferente de zero, tempo esgotado ou saída grande demais viram um erro no widget. `interval_seconds` abaixo de **30** sobe para 30 (o widget avisa); a tecla `r` não tem esse limite.
+O processo recebe o ambiente do Mosaic mais `[widgets.env]` e roda no diretório de configuração do Mosaic (a pasta que contém o `config.toml`). A saída vai até **1 MiB** e o widget tem `timeout_seconds` (padrão 5 s) para responder; código de saída diferente de zero, tempo esgotado ou saída grande demais viram um erro no widget. `interval_seconds` abaixo de **30** sobe para 30 (o widget avisa); a tecla `r` não tem esse limite.
 
 ## 2. Snapshot
 
@@ -103,10 +103,10 @@ O excesso é cortado e o `mosaic check` avisa.
 ## 6. Testando o widget: `mosaic check`
 
 ```sh
-mosaic check <comando> [args...] [--env NOME=valor]...
+mosaic check <comando> [args...] [--env NOME=valor]... [--timeout SEGUNDOS] [--cwd DIRETORIO]
 ```
 
-Roda `snapshot` com as mesmas regras do Mosaic, sem abrir o terminal, e imprime os problemas e a prévia do widget em 60 colunas:
+Roda `snapshot` com as mesmas regras de saída, tempo e protocolo do Mosaic (`--timeout` tem o mesmo padrão de `timeout_seconds`: 5 s), sem abrir o terminal. Por padrão o provider roda no diretório **atual**; use `--cwd ~/.config/mosaic` para reproduzir o diretório em que o Mosaic o executa, e imprime os problemas e a prévia do widget em 60 colunas:
 
 ```text
 ERRO summary.blocks[0].rows[2].text: campo obrigatório ausente
