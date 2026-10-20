@@ -15,8 +15,8 @@ impl BlockParser for LinesParser {
         "lines"
     }
 
-    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Block {
-        Block::Lines(parse_lines(reader, object, path))
+    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block> {
+        reader.accepting_no_errors(|reader| Block::Lines(parse_lines(reader, object, path)))
     }
 }
 

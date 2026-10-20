@@ -15,7 +15,7 @@ use table::TableParser;
 
 pub(super) trait BlockParser: Sync {
     fn type_name(&self) -> &'static str;
-    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Block;
+    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block>;
 }
 
 const PARSERS: [&dyn BlockParser; 4] = [&LinesParser, &RowsParser, &StatParser, &TableParser];

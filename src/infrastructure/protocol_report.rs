@@ -270,6 +270,15 @@ impl Reader {
             .count()
     }
 
+    pub(super) fn accepting_no_errors<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> Option<T> {
+        let errors_before = self.error_count();
+        let value = parse(self);
+        (self.error_count() == errors_before).then_some(value)
+    }
+
     pub(super) fn capped<'a>(
         &mut self,
         entries: &'a [Value],
@@ -349,9 +358,7 @@ impl Reader {
             self.warning(path, &message);
             return None;
         };
-        let errors_before = self.error_count();
-        let block = parser.parse(self, object, path);
-        (self.error_count() == errors_before).then_some(block)
+        parser.parse(self, object, path)
     }
 
     fn mini(&mut self, root: &Map<String, Value>) -> Option<Mini> {
@@ -641,6 +648,24 @@ mod tests {
             .filter(|problem| problem.severity == severity)
             .map(|problem| problem.path.clone())
             .collect()
+    }
+
+    #[test]
+    fn accepting_no_errors_discards_the_value_only_when_an_error_was_reported() {
+        let mut reader = Reader::default();
+
+        let with_warning = reader.accepting_no_errors(|reader| {
+            reader.warning("a", "aviso");
+            1
+        });
+        let with_error = reader.accepting_no_errors(|reader| {
+            reader.error("b", "erro");
+            2
+        });
+
+        assert_eq!(with_warning, Some(1));
+        assert_eq!(with_error, None);
+        assert_eq!(reader.problems.len(), 2);
     }
 
     #[test]

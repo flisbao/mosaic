@@ -16,8 +16,8 @@ impl BlockParser for RowsParser {
         "rows"
     }
 
-    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Block {
-        Block::Rows(parse_rows(reader, object, path))
+    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block> {
+        reader.accepting_no_errors(|reader| Block::Rows(parse_rows(reader, object, path)))
     }
 }
 
