@@ -437,6 +437,177 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(data["summary"]["title"], "Agenda")
 
 
+NEW_YORK = ZoneInfo("America/New_York")
+
+
+def parse_calendar(*blocks):
+    lines = ["BEGIN:VCALENDAR"]
+    for block in blocks:
+        lines += ["BEGIN:VEVENT", *block, "END:VEVENT"]
+    lines.append("END:VCALENDAR")
+    events, _ = calendar_widget.parse_ics("\r\n".join(lines), ZONE)
+    return events
+
+
+def sao_paulo_series(rule, *extra, uid="serie", summary="Série", start="20261014T090000", end="20261014T093000"):
+    return [
+        f"UID:{uid}",
+        f"SUMMARY:{summary}",
+        f"DTSTART;TZID=America/Sao_Paulo:{start}",
+        f"DTEND;TZID=America/Sao_Paulo:{end}",
+        f"RRULE:{rule}",
+        *extra,
+    ]
+
+
+def occurrences(lines, window_start=NOW, window_end=WINDOW_END, zone=ZONE):
+    return calendar_widget.expand_occurrences(parse_event(*lines), window_start, window_end, zone)
+
+
+def in_window(blocks, window_start=NOW, window_end=WINDOW_END, calendar="Pessoal"):
+    return calendar_widget.ics_events_in_window(parse_calendar(*blocks), calendar, window_start, window_end, ZONE)
+
+
+class RecurrenceTests(unittest.TestCase):
+    def test_daily_with_interval_and_count(self):
+        found = occurrences(sao_paulo_series("FREQ=DAILY;INTERVAL=2;COUNT=5", end="20261014T103000"))
+        self.assertEqual(found, [at(20, 9), at(22, 9)])
+
+    def test_weekly_byday_with_until(self):
+        lines = sao_paulo_series(
+            "FREQ=WEEKLY;BYDAY=MO,WE,FR;UNTIL=20261023T235959Z", start="20261019T080000", end="20261019T083000"
+        )
+        found = occurrences(lines, window_end=datetime(2026, 11, 2, tzinfo=ZONE))
+        self.assertEqual(found, [at(21, 8), at(23, 8)])
+
+    def test_until_in_utc_is_compared_in_the_start_time_zone(self):
+        lines = sao_paulo_series("FREQ=DAILY;UNTIL=20261022T115959Z", start="20261021T090000", end="20261021T100000")
+        self.assertEqual(occurrences(lines), [at(21, 9)])
+
+    def test_monthly_positional_byday(self):
+        lines = sao_paulo_series("FREQ=MONTHLY;BYDAY=-1FR", start="20260102T100000", end="20260102T110000")
+        self.assertEqual(occurrences(lines), [])
+        end_of_month = datetime(2026, 11, 1, tzinfo=ZONE)
+        self.assertEqual(occurrences(lines, at(27, 0), end_of_month), [at(30, 10)])
+
+    def test_monthly_bymonthday_skips_missing_days_and_counts_from_the_end(self):
+        thirty_first = sao_paulo_series("FREQ=MONTHLY;BYMONTHDAY=31", start="20260131T100000", end="20260131T110000")
+        september = (datetime(2026, 9, 25, tzinfo=ZONE), datetime(2026, 10, 5, tzinfo=ZONE))
+        self.assertEqual(occurrences(thirty_first, *september), [])
+        last_day = sao_paulo_series("FREQ=MONTHLY;BYMONTHDAY=-1", start="20260131T100000", end="20260131T110000")
+        self.assertEqual(occurrences(last_day, at(25, 0), datetime(2026, 11, 2, tzinfo=ZONE)), [at(31, 10)])
+
+    def test_yearly_bymonth_and_bymonthday(self):
+        lines = sao_paulo_series("FREQ=YEARLY;BYMONTH=10,11;BYMONTHDAY=22", start="20240222T090000", end="20240222T100000")
+        self.assertEqual(occurrences(lines), [at(22, 9)])
+        november = datetime(2026, 11, 22, 8, tzinfo=ZONE), datetime(2026, 11, 23, tzinfo=ZONE)
+        self.assertEqual(occurrences(lines, *november), [datetime(2026, 11, 22, 9, tzinfo=ZONE)])
+
+    def test_wkst_changes_biweekly_weeks(self):
+        window = datetime(1997, 8, 1, tzinfo=NEW_YORK), datetime(1997, 9, 1, tzinfo=NEW_YORK)
+        expected = {"MO": [5, 10, 19, 24], "SU": [5, 17, 19, 31]}
+        for week_start, days in expected.items():
+            lines = [
+                "DTSTART;TZID=America/New_York:19970805T090000",
+                f"RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=4;BYDAY=TU,SU;WKST={week_start}",
+            ]
+            found = occurrences(lines, *window, zone=NEW_YORK)
+            self.assertEqual(found, [datetime(1997, 8, day, 9, tzinfo=NEW_YORK) for day in days])
+
+    def test_weekly_keeps_wall_clock_across_dst(self):
+        lines = ["DTSTART;TZID=America/New_York:20270308T090000", "RRULE:FREQ=WEEKLY"]
+        window = datetime(2027, 3, 15, tzinfo=NEW_YORK), datetime(2027, 3, 22, tzinfo=NEW_YORK)
+        found = occurrences(lines, *window, zone=NEW_YORK)
+        self.assertEqual(found, [datetime(2027, 3, 15, 9, tzinfo=NEW_YORK)])
+        self.assertEqual(found[0].astimezone(timezone.utc).hour, 13)
+
+    def test_long_running_daily_from_years_ago(self):
+        lines = sao_paulo_series("FREQ=DAILY", start="20100101T090000", end="20100101T093000")
+        found = occurrences(lines)
+        self.assertEqual(found, [at(day, 9) for day in range(21, 26)])
+
+    def test_unsupported_part_raises(self):
+        rules = [
+            "FREQ=DAILY;BYSETPOS=1",
+            "FREQ=DAILY;BYHOUR=9",
+            "FREQ=YEARLY;BYWEEKNO=20",
+            "FREQ=YEARLY;BYYEARDAY=100",
+            "FREQ=HOURLY",
+            "FREQ=WEEKLY;BYDAY=1MO",
+            "INTERVAL=2",
+        ]
+        for rule in rules:
+            with self.subTest(rule=rule), self.assertRaises(calendar_widget.UnsupportedRule):
+                occurrences(sao_paulo_series(rule))
+
+    def test_exdate_removes_and_rdate_adds(self):
+        lines = sao_paulo_series(
+            "FREQ=DAILY;COUNT=5",
+            "EXDATE;TZID=America/Sao_Paulo:20261022T090000",
+            "RDATE;TZID=America/Sao_Paulo:20261024T090000",
+            start="20261019T090000",
+            end="20261019T093000",
+        )
+        self.assertEqual(occurrences(lines), [at(21, 9), at(23, 9), at(24, 9)])
+
+    def test_recurrence_id_override_moves_and_cancelled_override_removes(self):
+        master = sao_paulo_series("FREQ=DAILY;COUNT=4", uid="a", summary="Original", start="20261021T090000", end="20261021T100000")
+        moved = [
+            "UID:a",
+            "SUMMARY:Movido",
+            "RECURRENCE-ID;TZID=America/Sao_Paulo:20261022T090000",
+            "DTSTART;TZID=America/Sao_Paulo:20261022T150000",
+            "DTEND;TZID=America/Sao_Paulo:20261022T160000",
+        ]
+        removed = [
+            "UID:a",
+            "SUMMARY:Removido",
+            "STATUS:cancelled",
+            "RECURRENCE-ID;TZID=America/Sao_Paulo:20261023T090000",
+            "DTSTART;TZID=America/Sao_Paulo:20261023T090000",
+        ]
+        result = in_window([master, moved, removed])
+        found = [(item.title, item.start) for item in sorted(result.events, key=lambda item: item.start)]
+        self.assertEqual(found, [("Original", at(21, 9)), ("Movido", at(22, 15)), ("Original", at(24, 9))])
+
+    def test_unsupported_rule_becomes_warning_and_others_survive(self):
+        yoga = sao_paulo_series("FREQ=DAILY;BYSETPOS=1", uid="ioga", summary="Ioga")
+        simple = ["UID:s", "SUMMARY:Simples", "DTSTART;TZID=America/Sao_Paulo:20261021T090000", "DTEND;TZID=America/Sao_Paulo:20261021T100000"]
+        result = in_window([yoga, simple])
+        self.assertEqual(result.warnings, ["repetição não suportada em “Ioga”"])
+        self.assertEqual([item.title for item in result.events], ["Simples"])
+
+    def test_event_ids_are_uid_and_start(self):
+        timed = ["UID:x", "SUMMARY:Um", "DTSTART:20261021T120000Z", "DTEND:20261021T130000Z"]
+        all_day = ["UID:y", "SUMMARY:Dois", "DTSTART;VALUE=DATE:20261021"]
+        result = in_window([timed, all_day])
+        ids = {item.title: item.id for item in result.events}
+        self.assertEqual(ids, {"Um": "x@2026-10-21T12:00:00+00:00", "Dois": "y@2026-10-21"})
+
+    def test_long_event_ids_are_shortened_deterministically(self):
+        long_uid = "u" * 300
+
+        def ids_for(start):
+            block = [f"UID:{long_uid}", "SUMMARY:Longo", f"DTSTART:{start}", "DTEND:20261022T130000Z"]
+            return [item.id for item in in_window([block]).events]
+
+        first = ids_for("20261021T120000Z")
+        self.assertEqual(len(first[0]), 200)
+        self.assertEqual(first, ids_for("20261021T120000Z"))
+        self.assertNotEqual(first, ids_for("20261021T120100Z"))
+
+    def test_all_day_event_becomes_local_midnight_range(self):
+        block = ["UID:d", "SUMMARY:Feriado", "LOCATION:Casa", "DTSTART;VALUE=DATE:20261021", "DTEND;VALUE=DATE:20261023"]
+        (item,) = in_window([block], calendar="Pessoal").events
+        self.assertEqual((item.start, item.end), (at(21, 0), at(23, 0)))
+        self.assertEqual((item.all_day, item.location, item.calendar, item.cancelled), (True, "Casa", "Pessoal", False))
+
+    def test_cancelled_status_is_case_insensitive(self):
+        block = ["UID:c", "SUMMARY:Cancelado", "STATUS:Cancelled", "DTSTART:20261021T120000Z", "DTEND:20261021T130000Z"]
+        (item,) = in_window([block]).events
+        self.assertTrue(item.cancelled)
+
+
 class MainTests(unittest.TestCase):
     def test_usage_error_returns_2(self):
         stderr = io.StringIO()

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import math
@@ -10,7 +11,7 @@ import os
 import re
 import sys
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -94,6 +95,37 @@ ICS_VALUE_LIST_SEPARATOR = ","
 ICS_PERIOD_SEPARATOR = "/"
 ICS_ESCAPE_PATTERN = re.compile(r"\\([\\;,nN])")
 ICS_ESCAPES = {"\\": "\\", ";": ";", ",": ",", "n": ICS_LINE_FEED, "N": ICS_LINE_FEED}
+ICS_CANCELLED_STATUS = "CANCELLED"
+
+MAXIMUM_RECURRENCE_ITERATIONS = 100_000
+MAXIMUM_ITEM_ID_LENGTH = 200
+ITEM_ID_DIGEST_LENGTH = 16
+ITEM_ID_DIGEST_SEPARATOR = "#"
+ITEM_ID_TEMPLATE = "{uid}@{start}"
+UNSUPPORTED_RULE_WARNING = "repetição não suportada em “{title}”"
+MONTHS_IN_YEAR = 12
+MAXIMUM_MONTH_DAY = 31
+RULE_FREQUENCY = "FREQ"
+RULE_INTERVAL = "INTERVAL"
+RULE_COUNT = "COUNT"
+RULE_UNTIL = "UNTIL"
+RULE_BY_DAY = "BYDAY"
+RULE_BY_MONTH_DAY = "BYMONTHDAY"
+RULE_BY_MONTH = "BYMONTH"
+RULE_WEEK_START = "WKST"
+RULE_SUPPORTED_PARTS = frozenset(
+    (RULE_FREQUENCY, RULE_INTERVAL, RULE_COUNT, RULE_UNTIL, RULE_BY_DAY, RULE_BY_MONTH_DAY, RULE_BY_MONTH, RULE_WEEK_START)
+)
+FREQUENCY_DAILY = "DAILY"
+FREQUENCY_WEEKLY = "WEEKLY"
+FREQUENCY_MONTHLY = "MONTHLY"
+FREQUENCY_YEARLY = "YEARLY"
+RULE_FREQUENCIES = (FREQUENCY_DAILY, FREQUENCY_WEEKLY, FREQUENCY_MONTHLY, FREQUENCY_YEARLY)
+POSITIONAL_FREQUENCIES = (FREQUENCY_MONTHLY, FREQUENCY_YEARLY)
+WEEKDAY_CODES = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+DEFAULT_WEEK_START = "MO"
+DEFAULT_INTERVAL = "1"
+BY_DAY_PATTERN = re.compile(r"([+-]?\d{1,2})?(" + "|".join(WEEKDAY_CODES) + ")")
 ICS_DURATION_PATTERN = re.compile(
     r"(?P<sign>[+-])?P(?=\d|T\d)"
     r"(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?"
@@ -106,6 +138,10 @@ class ConfigError(Exception):
 
 
 class SourceError(Exception):
+    pass
+
+
+class UnsupportedRule(Exception):
     pass
 
 
@@ -552,6 +588,329 @@ def _parse_duration(raw):
         seconds=int(match.group("seconds") or 0),
     )
     return -amount if match.group("sign") == "-" else amount
+
+
+@dataclass(frozen=True)
+class _Rule:
+    frequency: str
+    interval: int
+    count: int | None
+    until: datetime | date | None
+    weekdays: list[tuple[int | None, int]]
+    month_days: list[int]
+    months: list[int]
+    week_start: int
+
+
+def _parse_rule(text, zone):
+    try:
+        rule = _build_rule(_rule_parts(text), zone)
+    except ValueError as error:
+        raise UnsupportedRule(str(error)) from None
+    if _has_unsupported_combination(rule):
+        raise UnsupportedRule(text)
+    return rule
+
+
+def _rule_parts(text):
+    parts = {}
+    for item in text.split(ICS_PARAMETER_SEPARATOR):
+        name, assignment, value = item.partition(ICS_PARAMETER_ASSIGNMENT)
+        if not assignment:
+            raise ValueError(item)
+        parts[name.strip().upper()] = value.strip().upper()
+    unsupported = set(parts) - RULE_SUPPORTED_PARTS
+    if unsupported:
+        raise ValueError(ICS_VALUE_LIST_SEPARATOR.join(sorted(unsupported)))
+    return parts
+
+
+def _build_rule(parts, zone):
+    frequency = parts.get(RULE_FREQUENCY)
+    if frequency not in RULE_FREQUENCIES:
+        raise ValueError(str(frequency))
+    count = parts.get(RULE_COUNT)
+    return _Rule(
+        frequency=frequency,
+        interval=_positive_integer(parts.get(RULE_INTERVAL, DEFAULT_INTERVAL)),
+        count=None if count is None else _positive_integer(count),
+        until=_rule_until(parts.get(RULE_UNTIL), zone),
+        weekdays=_parse_weekdays(parts.get(RULE_BY_DAY, "")),
+        month_days=_parse_numbers(parts.get(RULE_BY_MONTH_DAY, ""), -MAXIMUM_MONTH_DAY, MAXIMUM_MONTH_DAY),
+        months=_parse_numbers(parts.get(RULE_BY_MONTH, ""), 1, MONTHS_IN_YEAR),
+        week_start=WEEKDAY_CODES.index(parts.get(RULE_WEEK_START, DEFAULT_WEEK_START)),
+    )
+
+
+def _positive_integer(raw):
+    value = int(raw)
+    if value < 1:
+        raise ValueError(raw)
+    return value
+
+
+def _rule_until(raw, zone):
+    if raw is None:
+        return None
+    moment = _parse_moment({}, raw, zone)
+    if moment is None:
+        raise ValueError(raw)
+    return moment
+
+
+def _parse_weekdays(raw):
+    weekdays = []
+    for item in _split_list(raw):
+        match = BY_DAY_PATTERN.fullmatch(item)
+        if match is None:
+            raise ValueError(item)
+        position = match.group(1)
+        weekdays.append((None if position is None else int(position), WEEKDAY_CODES.index(match.group(2))))
+    return weekdays
+
+
+def _parse_numbers(raw, minimum, maximum):
+    numbers = [int(item) for item in _split_list(raw)]
+    if any(number == 0 or not minimum <= number <= maximum for number in numbers):
+        raise ValueError(raw)
+    return numbers
+
+
+def _split_list(raw):
+    return [item.strip() for item in raw.split(ICS_VALUE_LIST_SEPARATOR) if item.strip()]
+
+
+def _has_unsupported_combination(rule):
+    positioned = any(position is not None for position, _ in rule.weekdays)
+    if positioned and (rule.frequency not in POSITIONAL_FREQUENCIES or rule.month_days):
+        return True
+    return rule.frequency == FREQUENCY_WEEKLY and bool(rule.month_days)
+
+
+def _rule_starts(rule, anchor, timezone_):
+    produced = 0
+    until = _naive_until(rule.until, timezone_)
+    for period in range(MAXIMUM_RECURRENCE_ITERATIONS):
+        try:
+            days = _period_days(rule, anchor.date(), period * rule.interval)
+        except (ValueError, OverflowError):
+            return
+        for day in days:
+            start = datetime.combine(day, anchor.time())
+            if start < anchor:
+                continue
+            if until is not None and start > until:
+                return
+            yield start
+            produced += 1
+            if rule.count is not None and produced >= rule.count:
+                return
+    raise UnsupportedRule(RULE_FREQUENCY)
+
+
+def _naive_until(until, timezone_):
+    if until is None:
+        return None
+    if isinstance(until, datetime) and timezone_ is not None:
+        return until.astimezone(timezone_).replace(tzinfo=None)
+    day = until.date() if isinstance(until, datetime) else until
+    return datetime.combine(day, time.max)
+
+
+def _period_days(rule, anchor_day, offset):
+    handlers = {
+        FREQUENCY_DAILY: _daily_days,
+        FREQUENCY_WEEKLY: _weekly_days,
+        FREQUENCY_MONTHLY: _monthly_days,
+        FREQUENCY_YEARLY: _yearly_days,
+    }
+    return sorted(set(handlers[rule.frequency](rule, anchor_day, offset)))
+
+
+def _daily_days(rule, anchor_day, offset):
+    day = anchor_day + timedelta(days=offset)
+    return [day] if _passes_limits(rule, day) else []
+
+
+def _passes_limits(rule, day):
+    if rule.months and day.month not in rule.months:
+        return False
+    if rule.month_days and day not in _month_day_dates(rule.month_days, day.year, day.month):
+        return False
+    return not rule.weekdays or day.weekday() in {weekday for _, weekday in rule.weekdays}
+
+
+def _weekly_days(rule, anchor_day, offset):
+    week_start = anchor_day - timedelta(days=(anchor_day.weekday() - rule.week_start) % DAYS_IN_WEEK)
+    first = week_start + timedelta(weeks=offset)
+    weekdays = {weekday for _, weekday in rule.weekdays} or {anchor_day.weekday()}
+    days = [first + timedelta(days=index) for index in range(DAYS_IN_WEEK)]
+    return [day for day in days if day.weekday() in weekdays and (not rule.months or day.month in rule.months)]
+
+
+def _monthly_days(rule, anchor_day, offset):
+    year, month = _shift_month(anchor_day.year, anchor_day.month, offset)
+    if rule.months and month not in rule.months:
+        return []
+    return _days_of_month(rule, anchor_day, year, month)
+
+
+def _yearly_days(rule, anchor_day, offset):
+    year = anchor_day.year + offset
+    if rule.weekdays and not rule.month_days and not rule.months:
+        return _weekday_dates(date(year, 1, 1), date(year, MONTHS_IN_YEAR, MAXIMUM_MONTH_DAY), rule.weekdays)
+    days = []
+    for month in rule.months or [anchor_day.month]:
+        days += _days_of_month(rule, anchor_day, year, month)
+    return days
+
+
+def _shift_month(year, month, offset):
+    extra_years, month_index = divmod(month - 1 + offset, MONTHS_IN_YEAR)
+    return year + extra_years, month_index + 1
+
+
+def _days_of_month(rule, anchor_day, year, month):
+    if rule.month_days:
+        days = _month_day_dates(rule.month_days, year, month)
+        return [day for day in days if _matches_weekdays(rule, day)]
+    if rule.weekdays:
+        return _weekday_dates(date(year, month, 1), _last_day(year, month), rule.weekdays)
+    return _month_day_dates([anchor_day.day], year, month)
+
+
+def _matches_weekdays(rule, day):
+    return not rule.weekdays or day.weekday() in {weekday for _, weekday in rule.weekdays}
+
+
+def _last_day(year, month):
+    next_year, next_month = _shift_month(year, month, 1)
+    return date(next_year, next_month, 1) - timedelta(days=1)
+
+
+def _month_day_dates(month_days, year, month):
+    length = _last_day(year, month).day
+    resolved = [number if number > 0 else length + 1 + number for number in month_days]
+    return [date(year, month, number) for number in resolved if 1 <= number <= length]
+
+
+def _weekday_dates(first, last, weekdays):
+    days = []
+    for position, weekday in weekdays:
+        start = first + timedelta(days=(weekday - first.weekday()) % DAYS_IN_WEEK)
+        matches = [start + timedelta(weeks=index) for index in range((last - start).days // DAYS_IN_WEEK + 1)]
+        days += matches if position is None else _pick_position(matches, position)
+    return days
+
+
+def _pick_position(matches, position):
+    index = position - 1 if position > 0 else position
+    return [matches[index]] if -len(matches) <= index < len(matches) else []
+
+
+def _occurrence_duration(event):
+    all_day = not isinstance(event.start, datetime)
+    if event.end is not None and isinstance(event.end, datetime) != all_day:
+        elapsed = _absolute(event.end) - _absolute(event.start)
+    elif event.duration is not None:
+        elapsed = event.duration
+    else:
+        elapsed = timedelta(days=1) if all_day else timedelta()
+    return max(elapsed, timedelta())
+
+
+def _absolute(moment):
+    return moment.astimezone(timezone.utc) if isinstance(moment, datetime) else moment
+
+
+def _occurrence_bounds(moment, duration, zone):
+    if isinstance(moment, datetime):
+        return moment, (moment.astimezone(timezone.utc) + duration).astimezone(moment.tzinfo)
+    midnight = datetime.combine(moment, time.min)
+    return midnight.replace(tzinfo=zone), (midnight + duration).replace(tzinfo=zone)
+
+
+def _rule_moments(event, zone):
+    if isinstance(event.start, datetime):
+        anchor, timezone_ = event.start.replace(tzinfo=None), event.start.tzinfo
+    else:
+        anchor, timezone_ = datetime.combine(event.start, time.min), None
+    if event.rrule is None:
+        starts = iter([anchor])
+    else:
+        starts = _rule_starts(_parse_rule(event.rrule, zone), anchor, timezone_)
+    for start in starts:
+        yield start.replace(tzinfo=timezone_) if timezone_ else start.date()
+
+
+def expand_occurrences(event, window_start, window_end, zone):
+    duration = _occurrence_duration(event)
+    excluded = set(event.exdates)
+    found = []
+
+    def overlaps(moment):
+        start, end = _occurrence_bounds(moment, duration, zone)
+        return start < window_end and end > window_start
+
+    for moment in _rule_moments(event, zone):
+        if _occurrence_bounds(moment, duration, zone)[0] >= window_end:
+            break
+        if moment not in excluded and overlaps(moment):
+            found.append(moment)
+    extra = [moment for moment in event.rdates if moment not in excluded and moment not in found and overlaps(moment)]
+    return found + extra
+
+
+def ics_events_in_window(events, calendar, window_start, window_end, zone):
+    groups = {}
+    for index, event in enumerate(events):
+        groups.setdefault(event.uid or index, []).append(event)
+    found, warnings = [], []
+    for group in groups.values():
+        try:
+            found += _group_events(group, calendar, window_start, window_end, zone)
+        except UnsupportedRule:
+            title = next((event.summary for event in group if event.recurrence_id is None), group[0].summary)
+            warnings.append(UNSUPPORTED_RULE_WARNING.format(title=title))
+    return SourceResult(events=found, warnings=warnings)
+
+
+def _group_events(group, calendar, window_start, window_end, zone):
+    overridden = {event.recurrence_id for event in group if event.recurrence_id is not None}
+    found = []
+    for event in group:
+        standalone = event.recurrence_id is not None
+        source = replace(event, rrule=None, rdates=[], exdates=[]) if standalone else event
+        if standalone and event.status.upper() == ICS_CANCELLED_STATUS:
+            continue
+        for moment in expand_occurrences(source, window_start, window_end, zone):
+            if standalone or moment not in overridden:
+                found.append(_to_event(event, moment, calendar, zone))
+    return found
+
+
+def _to_event(source, moment, calendar, zone):
+    start, end = _occurrence_bounds(moment, _occurrence_duration(source), zone)
+    return Event(
+        id=_item_id(source.uid, moment),
+        title=source.summary,
+        start=start,
+        end=end,
+        all_day=not isinstance(moment, datetime),
+        location=source.location,
+        calendar=calendar,
+        cancelled=source.status.upper() == ICS_CANCELLED_STATUS,
+    )
+
+
+def _item_id(uid, moment):
+    start = moment.astimezone(timezone.utc).isoformat() if isinstance(moment, datetime) else moment.isoformat()
+    identifier = ITEM_ID_TEMPLATE.format(uid=uid, start=start)
+    if len(identifier) <= MAXIMUM_ITEM_ID_LENGTH:
+        return identifier
+    digest = hashlib.sha1(identifier.encode("utf-8")).hexdigest()[:ITEM_ID_DIGEST_LENGTH]
+    prefix_length = MAXIMUM_ITEM_ID_LENGTH - len(ITEM_ID_DIGEST_SEPARATOR) - ITEM_ID_DIGEST_LENGTH
+    return f"{identifier[:prefix_length]}{ITEM_ID_DIGEST_SEPARATOR}{digest}"
 
 
 def ics_source(config, now, window_end, zone):
