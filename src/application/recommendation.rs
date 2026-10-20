@@ -2,11 +2,11 @@ use chrono::NaiveDateTime;
 use thiserror::Error;
 
 use crate::domain::widget::{DetailItem, WidgetId, WidgetRecord};
+use crate::domain::widget_content::{collapse_whitespace, truncate_characters};
 
 pub const CHARACTERS_PER_TOKEN: usize = 4;
 pub const META_VALUE_MAXIMUM_CHARACTERS: usize = 40;
 
-const ELLIPSIS: char = '…';
 const MISSING_ID_PLACEHOLDER: &str = "-";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,21 +115,6 @@ fn selected_lines(context: &WidgetContext) -> Vec<String> {
         .take(context.selection.max_items)
         .map(|item| format_item_line(item, context.selection.max_characters_per_item))
         .collect()
-}
-
-fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn truncate_characters(text: &str, maximum: usize) -> String {
-    if text.chars().count() <= maximum {
-        return text.to_string();
-    }
-    let mut truncated: String = text.chars().take(maximum.saturating_sub(1)).collect();
-    if maximum > 0 {
-        truncated.push(ELLIPSIS);
-    }
-    truncated
 }
 
 #[cfg(test)]

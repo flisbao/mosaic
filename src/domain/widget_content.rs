@@ -1,4 +1,4 @@
-const ELLIPSIS: char = '…';
+pub const ELLIPSIS: char = '…';
 
 const TONES: [(&str, Tone); 6] = [
     ("normal", Tone::Normal),
@@ -98,19 +98,26 @@ pub fn clean_text(text: &str) -> String {
         })
         .filter(|&character| !character.is_control() && !is_format_character(character))
         .collect();
-    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+    collapse_whitespace(&spaced)
 }
 
-pub fn clean_text_limited(text: &str, limit: usize) -> String {
-    let cleaned = clean_text(text);
-    if cleaned.chars().count() <= limit {
-        return cleaned;
+pub fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn truncate_characters(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
     }
-    let mut truncated: String = cleaned.chars().take(limit.saturating_sub(1)).collect();
+    let mut truncated: String = text.chars().take(limit.saturating_sub(1)).collect();
     if limit > 0 {
         truncated.push(ELLIPSIS);
     }
     truncated
+}
+
+pub fn clean_text_limited(text: &str, limit: usize) -> String {
+    truncate_characters(&clean_text(text), limit)
 }
 
 #[cfg(test)]
@@ -133,6 +140,21 @@ mod tests {
             TONE_NAMES,
             ["normal", "muted", "ok", "warn", "danger", "current"]
         );
+    }
+
+    #[test]
+    fn truncate_characters_cuts_by_characters_and_ends_with_ellipsis() {
+        assert_eq!(truncate_characters("abcdef", 4), "abc…");
+        assert_eq!(truncate_characters("abcd", 4), "abcd");
+        assert_eq!(truncate_characters("日本語日本語", 3), "日本…");
+        assert_eq!(truncate_characters("abc", 0), "");
+        assert_eq!(truncate_characters("", 0), "");
+    }
+
+    #[test]
+    fn collapse_whitespace_joins_words_with_single_spaces() {
+        assert_eq!(collapse_whitespace("  a \n b\t\tc  "), "a b c");
+        assert_eq!(collapse_whitespace("   "), "");
     }
 
     #[test]
