@@ -17,5 +17,7 @@ Task SEC-03: complete (commit 8f1413d; cargo test and clippy passed).
 Task SEC-09: complete (commit 0021e30; Python suite 150 tests, cargo test, and clippy passed).
 Delta SEC-07: complete (commit 5b84b27; real process group test passed).
 Delta SEC-10: complete (commit cf6f704; global Rust verification passed).
-Delta SEC-01: not applied; the plan labels its three additional tests optional, while AR-01 already provides the correction. Cost if omitted: those extra regression cases are not locked into the suite.
+Delta SEC-01: complete (commit a587911; all 36 process tests, full Rust suite, and clippy passed).
 Final review: self-review (no subagent tool allowed by collaboration policy). Global verification passed: cargo fmt --check, cargo clippy --all-targets -- -D warnings, cargo test, plugins Python suite (150 tests). `unsafe` grep only matches the existing test function name `safe_process_group_never_targets_unsafe_ids`.
+
+SEC-06 review: confirmed plan status NÃO EXECUTAR and its explicit no-code-change acceptance criterion. `process_group(0)` preserves the controlling session; complete detachment needs `pre_exec`/unsafe on the pinned stable toolchain. No changes made per plan; retain the accepted residual risk, with SEC-02 environment variables as only partial mitigation.
