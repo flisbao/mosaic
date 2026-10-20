@@ -12,7 +12,7 @@ use crate::domain::layout::{
     TOP_BAR_HEIGHT,
 };
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
-use crate::domain::widget::DetailSection;
+use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
 use crate::presentation::text_fit::{flagged, truncate_to_width};
@@ -240,42 +240,63 @@ fn section_lines(
     let mut item_index = 0;
     let mut selected_row = 0;
     for section in sections {
-        lines.push(Line::styled(
-            truncate_to_width(&section.heading, width),
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+        lines.push(section_heading_line(section, width));
         lines.extend(render_blocks(&section.display_blocks(), width));
         for item in &section.items {
             let is_selected = item_index == selected;
             if is_selected {
                 selected_row = lines.len();
             }
-            let marker = if is_selected {
-                SELECTION_MARKER
-            } else {
-                NO_SELECTION_MARKER
-            };
-            let style = if is_selected {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default()
-            };
-            let wrap_width = width.saturating_sub(WRAP_CONTINUATION_INDENT.width());
-            for (position, piece) in wrap_to_width(&flagged(item.flag, &item.text), wrap_width)
-                .into_iter()
-                .enumerate()
-            {
-                let prefix = if position == 0 {
-                    marker
-                } else {
-                    WRAP_CONTINUATION_INDENT
-                };
-                lines.push(Line::styled(format!("{prefix}{piece}"), style));
-            }
+            lines.extend(item_lines(item, is_selected, width));
             item_index += 1;
         }
     }
     (lines, selected_row)
+}
+
+fn section_heading_line(section: &DetailSection, width: usize) -> Line<'static> {
+    Line::styled(
+        truncate_to_width(&section.heading, width),
+        Style::default().add_modifier(Modifier::BOLD),
+    )
+}
+
+struct ItemAppearance {
+    marker: &'static str,
+    style: Style,
+}
+
+impl ItemAppearance {
+    fn for_selection(is_selected: bool) -> Self {
+        if is_selected {
+            Self {
+                marker: SELECTION_MARKER,
+                style: Style::default().fg(Color::Cyan),
+            }
+        } else {
+            Self {
+                marker: NO_SELECTION_MARKER,
+                style: Style::default(),
+            }
+        }
+    }
+}
+
+fn item_lines(item: &DetailItem, is_selected: bool, width: usize) -> Vec<Line<'static>> {
+    let appearance = ItemAppearance::for_selection(is_selected);
+    let wrap_width = width.saturating_sub(WRAP_CONTINUATION_INDENT.width());
+    wrap_to_width(&flagged(item.flag, &item.text), wrap_width)
+        .into_iter()
+        .enumerate()
+        .map(|(position, piece)| {
+            let prefix = if position == 0 {
+                appearance.marker
+            } else {
+                WRAP_CONTINUATION_INDENT
+            };
+            Line::styled(format!("{prefix}{piece}"), appearance.style)
+        })
+        .collect()
 }
 
 fn render_notice(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -429,6 +450,43 @@ mod tests {
             .unwrap()
             .and_hms_opt(9, 41, 0)
             .unwrap()
+    }
+
+    fn plain(line: &Line) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn detail_item(text: &str) -> DetailItem {
+        DetailItem {
+            id: None,
+            text: text.to_string(),
+            flag: None,
+            meta: vec![],
+        }
+    }
+
+    #[test]
+    fn item_lines_mark_the_selected_item_and_indent_continuations() {
+        let item = detail_item("abcdefghij");
+
+        let selected: Vec<String> = item_lines(&item, true, 8).iter().map(plain).collect();
+        let normal: Vec<String> = item_lines(&item, false, 8).iter().map(plain).collect();
+
+        assert_eq!(selected, vec!["> abcdef", "  ghij"]);
+        assert_eq!(normal, vec!["  abcdef", "  ghij"]);
+    }
+
+    #[test]
+    fn section_heading_line_is_truncated_to_the_width() {
+        let section = DetailSection {
+            heading: "cabeçalho muito longo".to_string(),
+            items: vec![],
+            blocks: vec![],
+        };
+        assert!(plain(&section_heading_line(&section, 8)).chars().count() <= 8);
     }
 
     #[test]
