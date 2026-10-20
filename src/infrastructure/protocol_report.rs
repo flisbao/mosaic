@@ -173,36 +173,36 @@ impl Reader {
         key: &str,
         path: &str,
     ) -> Option<String> {
-        let field_path = child_path(path, key);
+        let text = self.optional_string(object, key, path)?;
+        Some(self.limited(text, &child_path(path, key)))
+    }
+
+    pub(super) fn optional_string<'a>(
+        &mut self,
+        object: &'a Map<String, Value>,
+        key: &str,
+        path: &str,
+    ) -> Option<&'a str> {
         match object.get(key) {
-            Some(Value::String(text)) => Some(self.limited(text, &field_path)),
+            Some(Value::String(text)) => Some(text.as_str()),
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.warning(&field_path, NOT_TEXT_IGNORED_MESSAGE);
+                self.warning(&child_path(path, key), NOT_TEXT_IGNORED_MESSAGE);
                 None
             }
         }
     }
 
     pub(super) fn flag(&mut self, object: &Map<String, Value>, path: &str) -> Option<Flag> {
-        let field_path = child_path(path, "flag");
-        match object.get("flag") {
-            Some(Value::String(name)) => {
-                let flag = parse_flag(name);
-                if flag.is_none() {
-                    self.warning(
-                        &field_path,
-                        &format!("flag desconhecida: {}", clean_text(name)),
-                    );
-                }
-                flag
-            }
-            Some(Value::Null) | None => None,
-            Some(_) => {
-                self.warning(&field_path, NOT_TEXT_IGNORED_MESSAGE);
-                None
-            }
+        let name = self.optional_string(object, "flag", path)?;
+        let flag = parse_flag(name);
+        if flag.is_none() {
+            self.warning(
+                &child_path(path, "flag"),
+                &format!("flag desconhecida: {}", clean_text(name)),
+            );
         }
+        flag
     }
 
     fn protocol_version(&mut self, root: &Map<String, Value>) -> Option<u64> {
@@ -295,7 +295,7 @@ impl Reader {
         &entries[..limit]
     }
 
-    fn parse_each<T>(
+    pub(super) fn parse_each<T>(
         &mut self,
         entries: &[Value],
         limit: usize,
@@ -332,21 +332,16 @@ impl Reader {
     }
 
     pub(super) fn tone(&mut self, object: &Map<String, Value>, path: &str) -> Tone {
-        let tone_path = child_path(path, "tone");
-        match object.get("tone") {
-            Some(Value::String(name)) => Tone::parse(name).unwrap_or_else(|| {
-                self.warning(
-                    &tone_path,
-                    &format!("tom desconhecido: {}", clean_text(name)),
-                );
-                Tone::Normal
-            }),
-            Some(Value::Null) | None => Tone::Normal,
-            Some(_) => {
-                self.warning(&tone_path, NOT_TEXT_IGNORED_MESSAGE);
-                Tone::Normal
-            }
-        }
+        let Some(name) = self.optional_string(object, "tone", path) else {
+            return Tone::Normal;
+        };
+        Tone::parse(name).unwrap_or_else(|| {
+            self.warning(
+                &child_path(path, "tone"),
+                &format!("tom desconhecido: {}", clean_text(name)),
+            );
+            Tone::Normal
+        })
     }
 
     fn blocks(&mut self, object: &Map<String, Value>, path: &str) -> Vec<Block> {
@@ -459,14 +454,7 @@ impl Reader {
         let object = self.object_entry(entry, path)?;
         self.unknown_fields(object, &ITEM_KEYS, path);
         let text = self.required_text(object, "text", path)?;
-        let id = match object.get("id") {
-            Some(Value::String(id)) => Some(id.clone()),
-            Some(Value::Null) | None => None,
-            Some(_) => {
-                self.warning(&child_path(path, "id"), NOT_TEXT_IGNORED_MESSAGE);
-                None
-            }
-        };
+        let id = self.optional_string(object, "id", path).map(str::to_string);
         let flag = self.flag(object, path);
         let meta = self.meta(object, path);
         Some(DetailItem {

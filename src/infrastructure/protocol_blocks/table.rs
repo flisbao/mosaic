@@ -32,20 +32,14 @@ fn parse_columns(reader: &mut Reader, object: &Map<String, Value>, path: &str) -
     if entries.is_empty() && object.get("columns").is_some_and(Value::is_array) {
         reader.error(&columns_path, "precisa ter ao menos uma coluna");
     }
-    let entries = reader.capped(entries, MAXIMUM_TABLE_COLUMNS, &columns_path);
-    let mut columns = vec![];
-    for (index, entry) in entries.iter().enumerate() {
-        let column_path = indexed_path(&columns_path, index);
-        let Some(column) = reader.object_entry(entry, &column_path) else {
-            continue;
-        };
-        let Some(title) = reader.required_text(column, "title", &column_path) else {
-            continue;
-        };
-        let align = parse_align(reader, column, &column_path);
-        columns.push(Column { title, align });
-    }
-    columns
+    reader.parse_each(entries, MAXIMUM_TABLE_COLUMNS, &columns_path, parse_column)
+}
+
+fn parse_column(reader: &mut Reader, entry: &Value, path: &str) -> Option<Column> {
+    let column = reader.object_entry(entry, path)?;
+    let title = reader.required_text(column, "title", path)?;
+    let align = parse_align(reader, column, path);
+    Some(Column { title, align })
 }
 
 fn parse_align(reader: &mut Reader, column: &Map<String, Value>, path: &str) -> Align {
@@ -70,15 +64,12 @@ fn parse_rows(
 ) -> Vec<Vec<Cell>> {
     let rows_path = child_path(path, "rows");
     let entries = reader.required_list(object, "rows", path);
-    let entries = reader.capped(entries, MAXIMUM_LINES_PER_BLOCK, &rows_path);
-    let mut rows = vec![];
-    for (index, entry) in entries.iter().enumerate() {
-        let row_path = indexed_path(&rows_path, index);
-        if let Some(cells) = parse_row(reader, entry, width, &row_path) {
-            rows.push(cells);
-        }
-    }
-    rows
+    reader.parse_each(
+        entries,
+        MAXIMUM_LINES_PER_BLOCK,
+        &rows_path,
+        |reader, entry, row_path| parse_row(reader, entry, width, row_path),
+    )
 }
 
 fn parse_row(reader: &mut Reader, entry: &Value, width: usize, path: &str) -> Option<Vec<Cell>> {
