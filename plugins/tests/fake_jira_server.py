@@ -8,7 +8,6 @@ Variáveis: FAKE_JIRA_EMAIL e FAKE_JIRA_TOKEN definem as credenciais aceitas.
 import base64
 import json
 import os
-import re
 import sys
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -38,7 +37,6 @@ def build_issues(now):
                 "priority": {"name": "High"},
                 "created": timestamp(created),
                 "updated": timestamp(updated),
-                "resolutiondate": timestamp(resolved) if resolved else None,
             },
         }
 
@@ -53,20 +51,21 @@ def build_issues(now):
     ]
 
 
-def changelog_for(issue):
-    resolved = issue["fields"]["resolutiondate"]
-    if not resolved:
-        return {"changelog": {"histories": []}}
-    finished = datetime.strptime(resolved, "%Y-%m-%dT%H:%M:%S.000+0000").replace(tzinfo=timezone.utc)
-    started = finished - timedelta(hours=24)
-    return {
-        "changelog": {
-            "histories": [
-                {"created": timestamp(started), "items": [{"field": "status", "toString": "In Progress"}]},
-                {"created": timestamp(finished), "items": [{"field": "status", "toString": "Done"}]},
-            ]
-        }
-    }
+SEARCH_PATH = "/rest/api/3/search/jql"
+DEFAULT_PAGE_SIZE = 50
+FAILURE_STATUS_BY_MARKER = {"FAIL429": 429, "FAIL500": 500}
+INVALID_JQL_MARKER = "FAIL400"
+INVALID_JQL_MESSAGE = "Erro de sintaxe no JQL"
+
+
+def matching_issues(issues, jql):
+    if "currentUser()" in jql:
+        return [i for i in issues if (i["fields"]["assignee"] or {}).get("accountId") == ME["accountId"]]
+    return issues
+
+
+def parse_offset(token):
+    return int(token) if token and token.isdigit() else 0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -74,27 +73,26 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._send(401, {"message": "unauthorized"})
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != SEARCH_PATH:
+            return self._send(404, {})
         params = dict(urllib.parse.parse_qsl(parsed.query))
-        now = datetime.now(timezone.utc)
-        issues = build_issues(now)
-        if "currentUser()" in params.get("jql", ""):
-            issues = [i for i in issues if (i["fields"]["assignee"] or {}).get("accountId") == ME["accountId"]]
-        path = parsed.path
-        if path == "/rest/api/3/search/jql":
-            return self._send(200, {"issues": issues, "isLast": True})
-        if re.fullmatch(r"/rest/agile/1\.0/board/\d+/issue", path):
-            return self._send(200, {"startAt": 0, "maxResults": 100, "total": len(issues), "issues": issues})
-        if path == "/rest/api/3/status":
-            return self._send(200, [TO_DO | {"id": "1"}, IN_PROGRESS | {"id": "2"}, DONE | {"id": "3"}])
-        if path == "/rest/api/3/myself":
-            return self._send(200, ME)
-        if path == "/rest/api/3/user/search":
-            return self._send(200, [])
-        match = re.fullmatch(r"/rest/api/3/issue/([A-Z]+-\d+)", path)
-        if match:
-            found = next((i for i in build_issues(now) if i["key"] == match.group(1)), None)
-            return self._send(200, changelog_for(found)) if found else self._send(404, {})
-        return self._send(404, {})
+        jql = params.get("jql", "")
+        if INVALID_JQL_MARKER in jql:
+            return self._send(400, {"errorMessages": [INVALID_JQL_MESSAGE]})
+        for marker, status in FAILURE_STATUS_BY_MARKER.items():
+            if marker in jql:
+                return self._send(status, {})
+        issues = matching_issues(build_issues(datetime.now(timezone.utc)), jql)
+        return self._send(200, self._page(issues, params))
+
+    def _page(self, issues, params):
+        offset = parse_offset(params.get("nextPageToken"))
+        page_size = int(params.get("maxResults", DEFAULT_PAGE_SIZE))
+        end = offset + page_size
+        page = {"issues": issues[offset:end], "isLast": end >= len(issues)}
+        if not page["isLast"]:
+            page["nextPageToken"] = str(end)
+        return page
 
     def _authorized(self):
         expected = f"{os.environ['FAKE_JIRA_EMAIL']}:{os.environ['FAKE_JIRA_TOKEN']}".encode()
