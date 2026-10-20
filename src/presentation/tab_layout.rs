@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use crate::application::recommendation_view::IA_WIDGET_ID;
+use crate::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use crate::domain::widget::{WidgetId, WidgetRecord};
 use crate::presentation::app_state::{TabView, WidgetEntry};
 
-pub const IA_TAB_NAME: &str = "IA";
-pub const IA_WIDGET_SPAN: u16 = 1;
-const IA_INTERVAL: Duration = Duration::from_secs(3600);
+pub const RECOMMENDATION_TAB_NAME: &str = "IA";
+pub const RECOMMENDATION_WIDGET_SPAN: u16 = 1;
+const RECOMMENDATION_INTERVAL: Duration = Duration::from_secs(3600);
 const WARNING_SEPARATOR: &str = " | ";
 
 pub struct WidgetPlacement {
@@ -30,7 +30,7 @@ pub struct TabLayout {
 pub fn build_tab_views(
     widgets: &[WidgetPlacement],
     tabs: &[TabPlacement],
-    ia_record: Option<WidgetRecord>,
+    recommendation_record: Option<WidgetRecord>,
 ) -> TabLayout {
     let mut entries: Vec<WidgetEntry> = widgets.iter().map(loading_entry).collect();
     let mut spans: Vec<u16> = widgets.iter().map(|widget| widget.span).collect();
@@ -41,16 +41,16 @@ pub fn build_tab_views(
             entry_indexes: entry_indexes_of(&entries, &tab.widget_ids),
         })
         .collect();
-    if let Some(record) = ia_record {
+    if let Some(record) = recommendation_record {
         entries.push(WidgetEntry {
-            id: WidgetId::new(IA_WIDGET_ID),
+            id: WidgetId::new(RECOMMENDATION_WIDGET_ID),
             record,
-            interval: IA_INTERVAL,
+            interval: RECOMMENDATION_INTERVAL,
             max_items: None,
         });
-        spans.push(IA_WIDGET_SPAN);
+        spans.push(RECOMMENDATION_WIDGET_SPAN);
         tab_views.push(TabView {
-            name: IA_TAB_NAME.to_string(),
+            name: RECOMMENDATION_TAB_NAME.to_string(),
             entry_indexes: vec![entries.len() - 1],
         });
     }
@@ -172,31 +172,46 @@ mod tests {
     }
 
     #[test]
-    fn ia_gets_its_own_trailing_tab_only_when_enabled() {
+    fn recommendation_gets_its_own_trailing_tab_only_when_enabled() {
         let widgets = [widget("a", 1), widget("b", 1)];
         let tabs = [tab("Principal", &["a", "b"])];
 
-        let without_ia = build_tab_views(&widgets, &tabs, None);
-        assert_eq!(names(&without_ia.tabs), vec!["Principal"]);
+        let without_recommendation = build_tab_views(&widgets, &tabs, None);
+        assert_eq!(names(&without_recommendation.tabs), vec!["Principal"]);
 
-        let with_ia = build_tab_views(&widgets, &tabs, Some(WidgetRecord::loading()));
-        assert_eq!(names(&with_ia.tabs), vec!["Principal", IA_TAB_NAME]);
-        assert_eq!(with_ia.tabs[1].entry_indexes, vec![2]);
-        assert_eq!(with_ia.entries[2].id.as_str(), IA_WIDGET_ID);
+        let with_recommendation = build_tab_views(&widgets, &tabs, Some(WidgetRecord::loading()));
+        assert_eq!(
+            names(&with_recommendation.tabs),
+            vec!["Principal", RECOMMENDATION_TAB_NAME]
+        );
+        assert_eq!(with_recommendation.tabs[1].entry_indexes, vec![2]);
+        assert_eq!(
+            with_recommendation.entries[2].id.as_str(),
+            RECOMMENDATION_WIDGET_ID
+        );
     }
 
     #[test]
-    fn spans_follow_entries_and_ia_span_comes_last() {
+    fn spans_follow_entries_and_recommendation_span_comes_last() {
         let widgets = [widget("a", 2), widget("b", 3)];
         let tabs = [tab("Principal", &["a", "b"])];
 
-        let without_ia = build_tab_views(&widgets, &tabs, None);
-        assert_eq!(without_ia.spans, vec![2, 3]);
-        assert_eq!(without_ia.spans.len(), without_ia.entries.len());
+        let without_recommendation = build_tab_views(&widgets, &tabs, None);
+        assert_eq!(without_recommendation.spans, vec![2, 3]);
+        assert_eq!(
+            without_recommendation.spans.len(),
+            without_recommendation.entries.len()
+        );
 
-        let with_ia = build_tab_views(&widgets, &tabs, Some(WidgetRecord::loading()));
-        assert_eq!(with_ia.spans, vec![2, 3, IA_WIDGET_SPAN]);
-        assert_eq!(with_ia.spans.len(), with_ia.entries.len());
+        let with_recommendation = build_tab_views(&widgets, &tabs, Some(WidgetRecord::loading()));
+        assert_eq!(
+            with_recommendation.spans,
+            vec![2, 3, RECOMMENDATION_WIDGET_SPAN]
+        );
+        assert_eq!(
+            with_recommendation.spans.len(),
+            with_recommendation.entries.len()
+        );
     }
 
     #[test]
@@ -273,13 +288,16 @@ mod tests {
     }
 
     #[test]
-    fn config_tab_named_ia_collides_with_the_ia_tab() {
+    fn config_tab_named_after_the_recommendation_tab_collides_with_it() {
         let widgets = [widget("a", 1)];
-        let tabs = [tab(IA_TAB_NAME, &["a"])];
+        let tabs = [tab(RECOMMENDATION_TAB_NAME, &["a"])];
 
         let layout = build_tab_views(&widgets, &tabs, Some(WidgetRecord::loading()));
 
-        assert_eq!(names(&layout.tabs), vec![IA_TAB_NAME, IA_TAB_NAME]);
+        assert_eq!(
+            names(&layout.tabs),
+            vec![RECOMMENDATION_TAB_NAME, RECOMMENDATION_TAB_NAME]
+        );
         assert_eq!(layout.tabs[0].entry_indexes, vec![0]);
         assert_eq!(layout.tabs[1].entry_indexes, vec![1]);
     }

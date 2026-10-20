@@ -20,7 +20,7 @@ use mosaic::application::ports::{Cancellable, Clock, WidgetRunner};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
-use mosaic::application::recommendation_view::IA_WIDGET_ID;
+use mosaic::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetUpdate};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
@@ -42,7 +42,9 @@ use mosaic::infrastructure::recommendation_file::{
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime};
-use mosaic::presentation::app_events::{apply_event, stored_ia_result, AppEvent, EventContext};
+use mosaic::presentation::app_events::{
+    apply_event, stored_recommendation_result, AppEvent, EventContext,
+};
 use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::{from_crossterm, KeyInput};
 use mosaic::presentation::render::render;
@@ -145,10 +147,10 @@ fn initial_state(
     services: &Services,
     clock: &dyn Clock,
 ) -> (AppState, Vec<u16>) {
-    let ia_record = services
+    let recommendation_record = services
         .llm
         .as_ref()
-        .map(|llm| stored_ia_record(llm.store.as_ref(), clock.now()));
+        .map(|llm| stored_recommendation_record(llm.store.as_ref(), clock.now()));
     let TabLayout {
         entries,
         tabs,
@@ -156,7 +158,7 @@ fn initial_state(
     } = build_tab_views(
         &widget_placements(config),
         &tab_placements(config),
-        ia_record,
+        recommendation_record,
     );
     let mut state = AppState::new(entries, tabs);
     if let Some(notice) = startup_notice(&startup_warnings(config, services)) {
@@ -409,9 +411,12 @@ impl App {
     }
 }
 
-fn stored_ia_record(store: &dyn RecommendationStore, now: NaiveDateTime) -> WidgetRecord {
+fn stored_recommendation_record(
+    store: &dyn RecommendationStore,
+    now: NaiveDateTime,
+) -> WidgetRecord {
     let mut record = WidgetRecord::loading();
-    record.apply(stored_ia_result(store), now);
+    record.apply(stored_recommendation_result(store), now);
     record
 }
 
@@ -451,15 +456,15 @@ fn apply_reloaded_config(
 }
 
 fn rebuilt_layout(state: &AppState, config: &AppConfig, plan: &ReloadPlan) -> TabLayout {
-    let ia_record = state
+    let recommendation_record = state
         .entries()
         .iter()
-        .find(|entry| entry.id.as_str() == IA_WIDGET_ID)
+        .find(|entry| entry.id.as_str() == RECOMMENDATION_WIDGET_ID)
         .map(|entry| entry.record.clone());
     let mut layout = build_tab_views(
         &widget_placements(config),
         &tab_placements(config),
-        ia_record,
+        recommendation_record,
     );
     carry_over_records(
         &mut layout.entries,
@@ -582,7 +587,7 @@ fn start_recommendation(
     let Some(llm) = &services.llm else {
         return;
     };
-    state.begin_widget_refresh(&WidgetId::new(IA_WIDGET_ID));
+    state.begin_widget_refresh(&WidgetId::new(RECOMMENDATION_WIDGET_ID));
     let runner = Arc::clone(&llm.runner);
     let store = Arc::clone(&llm.store);
     let model = llm.config.model.clone();

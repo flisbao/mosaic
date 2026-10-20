@@ -6,7 +6,7 @@ use chrono::NaiveDateTime;
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
-use crate::application::recommendation_view::IA_WIDGET_ID;
+use crate::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::shortcuts::assign_shortcuts;
@@ -25,7 +25,7 @@ use pomodoro_control::PomodoroControl;
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
 pub const PAGE_JUMP_ITEMS: usize = 10;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
-const IA_BUSY_NOTICE: &str = "A IA já está processando um pedido";
+const RECOMMENDATION_BUSY_NOTICE: &str = "A IA já está processando um pedido";
 const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
@@ -348,8 +348,8 @@ impl AppState {
     }
 
     fn request_recommendation(&mut self) -> Transition {
-        if self.ia_is_loading() {
-            self.notice = Some(IA_BUSY_NOTICE.to_string());
+        if self.recommendation_is_loading() {
+            self.notice = Some(RECOMMENDATION_BUSY_NOTICE.to_string());
             Transition::idle()
         } else {
             Transition::emit(Command::RequestRecommendation)
@@ -403,10 +403,10 @@ impl AppState {
         }
     }
 
-    fn ia_is_loading(&self) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.id.as_str() == IA_WIDGET_ID && entry.record.is_refreshing())
+    fn recommendation_is_loading(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.id.as_str() == RECOMMENDATION_WIDGET_ID && entry.record.is_refreshing()
+        })
     }
 
     fn toggle_pomodoro(&mut self) {
@@ -1323,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn i_is_blocked_with_notice_while_the_ia_is_loading() {
+    fn i_is_blocked_with_notice_while_the_recommendation_is_loading() {
         let mut app = AppState::new(
             vec![entry("ia", WidgetRecord::loading())],
             vec![tab("IA", &[0])],

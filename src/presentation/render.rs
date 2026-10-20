@@ -873,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn ia_failure_after_idle_snapshot_is_shown_in_focus_mode() {
+    fn recommendation_failure_after_idle_snapshot_is_shown_in_focus_mode() {
         let mut record = ready(snapshot("IA", vec![plain_line("Sem recomendação ainda")]));
         record.apply(
             Err::<WidgetSnapshot, _>("modelo indisponível".to_string()),

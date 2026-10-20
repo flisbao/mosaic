@@ -6,7 +6,7 @@ use crate::application::llm::{LlmError, RecommendationOutcome, RecommendationSto
 use crate::application::pomodoro_notifications::{AlertMessage, Notifier};
 use crate::application::ports::SourceError;
 use crate::application::recommendation_view::{
-    idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
+    idle_snapshot, recommendation_snapshot, RECOMMENDATION_WIDGET_ID,
 };
 use crate::application::reload::{apply_if_current, WidgetGenerations, WidgetUpdate};
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
@@ -99,11 +99,11 @@ fn apply_recommendation_result(
     result: Result<RecommendationOutcome, LlmError>,
     now: NaiveDateTime,
 ) {
-    let ia = WidgetId::new(IA_WIDGET_ID);
+    let recommendation_widget = WidgetId::new(RECOMMENDATION_WIDGET_ID);
     match result {
         Ok(outcome) => {
             state.update_widget(
-                &ia,
+                &recommendation_widget,
                 Ok(recommendation_snapshot(&outcome.recommendation)),
                 now,
             );
@@ -116,17 +116,25 @@ fn apply_recommendation_result(
         }
         Err(LlmError::Unavailable(message)) => {
             if let Some(store) = context.recommendation_store {
-                state.update_widget(&ia, stored_ia_result(store), now);
+                state.update_widget(
+                    &recommendation_widget,
+                    stored_recommendation_result(store),
+                    now,
+                );
             }
             state.show_notice(message);
         }
-        Err(LlmError::Failed(message)) => {
-            state.update_widget(&ia, Err(SourceError::Failed(message)), now)
-        }
+        Err(LlmError::Failed(message)) => state.update_widget(
+            &recommendation_widget,
+            Err(SourceError::Failed(message)),
+            now,
+        ),
     }
 }
 
-pub fn stored_ia_result(store: &dyn RecommendationStore) -> Result<WidgetSnapshot, SourceError> {
+pub fn stored_recommendation_result(
+    store: &dyn RecommendationStore,
+) -> Result<WidgetSnapshot, SourceError> {
     Ok(match store.load() {
         Some(stored) => recommendation_snapshot(&stored),
         None => idle_snapshot(),

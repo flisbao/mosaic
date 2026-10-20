@@ -124,7 +124,7 @@ fn run_plan(
 }
 
 #[test]
-fn recommendation_is_generated_saved_and_shown_in_the_ia_box() {
+fn recommendation_is_generated_saved_and_shown_in_the_recommendation_box() {
     let directory = private_tempdir();
     let (result, store) = run_plan(
         directory.path(),
