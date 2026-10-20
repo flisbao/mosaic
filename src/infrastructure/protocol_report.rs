@@ -101,6 +101,7 @@ pub(super) fn indexed_path(parent: &str, index: usize) -> String {
 #[derive(Default)]
 pub(super) struct Reader {
     problems: Vec<Problem>,
+    error_total: usize,
 }
 
 fn is_valid_item_id(id: &str) -> bool {
@@ -109,6 +110,9 @@ fn is_valid_item_id(id: &str) -> bool {
 
 impl Reader {
     fn report(&mut self, path: &str, message: &str, severity: Severity) {
+        if severity == Severity::Error {
+            self.error_total += 1;
+        }
         self.problems.push(Problem {
             path: path.to_string(),
             message: message.to_string(),
@@ -264,10 +268,7 @@ impl Reader {
     }
 
     fn error_count(&self) -> usize {
-        self.problems
-            .iter()
-            .filter(|problem| problem.severity == Severity::Error)
-            .count()
+        self.error_total
     }
 
     pub(super) fn accepting_no_errors<T>(
