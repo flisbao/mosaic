@@ -32,3 +32,4 @@ Ruling: o trecho de teste PERF-09 usa `runtime.start(..., 1)`, mas o repositóri
 ## Revisão final
 - Important corrigido: falha em `event::read()` agora vira `AppEvent::TerminalReadFailed` e é propagada como erro de terminal pelo loop principal. Teste de regressão primeiro falhou por ausência do helper/variante, depois passou; `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` passaram.
 - Minor corrigido: `propose` agora recebe `Option<ActionSpec>` e move o valor para `ProposedAction`, eliminando o clone adicional em Enter. Teste de transferência de propriedade falhou inicialmente por incompatibilidade do tipo de referência e passou após a mudança.
+- Re-review final: R1 e R2 encerrados; reviewer não encontrou novos problemas. Verificações após correções: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` passaram.
