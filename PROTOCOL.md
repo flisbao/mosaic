@@ -106,7 +106,7 @@ O excesso é cortado e o `mosaic check` avisa.
 mosaic check <comando> [args...] [--env NOME=valor]... [--timeout SEGUNDOS] [--cwd DIRETORIO] [-- argumentos-do-provider...]
 ```
 
-Roda `snapshot` com as mesmas regras de saída, tempo e protocolo do Mosaic (`--timeout` tem o mesmo padrão de `timeout_seconds`: 5 s), sem abrir o terminal. Por padrão o provider roda no diretório **atual**; use `--cwd ~/.config/mosaic` para reproduzir o diretório em que o Mosaic o executa. Para encaminhar opções próprias do provider, coloque `--` antes delas; a partir desse separador, todos os argumentos são repassados sem interpretação pelo Mosaic. O comando imprime os problemas e a prévia do widget em 60 colunas:
+Roda `snapshot` com as mesmas regras de saída, tempo e protocolo do Mosaic (`--timeout` tem o mesmo padrão de `timeout_seconds`: 5 s), sem abrir o terminal. Por padrão o provider roda no diretório **atual** (cuidado: `mosaic check python3 plugins/x.py` executa o `plugins/x.py` da pasta onde você está, que pode ser um repositório de terceiros; só valide widgets em que você confia); use `--cwd ~/.config/mosaic` para reproduzir o diretório em que o Mosaic o executa. Para encaminhar opções próprias do provider, coloque `--` antes delas; a partir desse separador, todos os argumentos são repassados sem interpretação pelo Mosaic. O comando imprime os problemas e a prévia do widget em 60 colunas:
 
 ```text
 ERRO summary.blocks[0].rows[2].text: campo obrigatório ausente

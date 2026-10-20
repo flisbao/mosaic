@@ -25,7 +25,7 @@ print(json.dumps({"summary": {"title": "Olá", "blocks": [
 ]}}))
 ```
 
-Valide com `mosaic check python3 meu_widget.py`. O contrato completo está em [`PROTOCOL.md`](PROTOCOL.md) e o esquema JSON em [`schema/protocol.schema.json`](schema/protocol.schema.json). Os widgets `plugins/gallery.py` e `plugins/gallery.js` mostram todos os blocos.
+Valide com `mosaic check python3 meu_widget.py` (o `check` executa o script a partir do diretório atual; só valide widgets em que você confia). O contrato completo está em [`PROTOCOL.md`](PROTOCOL.md) e o esquema JSON em [`schema/protocol.schema.json`](schema/protocol.schema.json). Os widgets `plugins/gallery.py` e `plugins/gallery.js` mostram todos os blocos.
 
 ## Abas e atalhos
 
