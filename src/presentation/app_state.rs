@@ -494,6 +494,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::fixed_now as now;
 
     #[test]
     fn confirmation_keys_are_classified_in_one_place() {
@@ -522,7 +523,6 @@ mod tests {
     use crate::domain::widget::{
         ActionScope, ActionSpec, DetailItem, DetailSection, Summary, WidgetSnapshot,
     };
-    use chrono::NaiveDate;
 
     const LONG_LIST_LENGTH: usize = 25;
     const LAST_LONG_LIST_ITEM: usize = LONG_LIST_LENGTH - 1;
@@ -538,12 +538,6 @@ mod tests {
             scope,
             params_json: r#"{"to":"done"}"#.to_string(),
         }
-    }
-
-    fn now() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 18)
-            .and_then(|date| date.and_hms_opt(12, 0, 0))
-            .expect("data válida")
     }
 
     fn record_with_items(item_ids: Vec<String>) -> WidgetRecord {

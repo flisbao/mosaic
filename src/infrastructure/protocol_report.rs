@@ -219,22 +219,13 @@ impl Reader {
 
     fn unsupported_protocol(mut self, title: String, version: u64) -> ParsedSnapshot {
         self.warning("protocol", &unsupported_protocol_text(version));
-        let notice = SummaryLine {
+        let mut snapshot = WidgetSnapshot::titled(title);
+        snapshot.summary.lines = vec![SummaryLine {
             text: unsupported_protocol_text(version),
             flag: None,
-        };
+        }];
         ParsedSnapshot {
-            snapshot: WidgetSnapshot {
-                mini: None,
-                summary: Summary {
-                    title,
-                    lines: vec![notice],
-                    blocks: vec![],
-                },
-                detail: None,
-                actions: vec![],
-                alerts: vec![],
-            },
+            snapshot,
             problems: self.problems,
         }
     }

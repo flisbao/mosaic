@@ -80,6 +80,14 @@ pub struct Summary {
 }
 
 impl Summary {
+    pub fn titled(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            lines: Vec::new(),
+            blocks: Vec::new(),
+        }
+    }
+
     pub fn put_notice_first(&mut self, text: String, tone: Tone, flag: Option<Flag>) {
         if self.blocks.is_empty() {
             self.lines.insert(0, SummaryLine { text, flag });
@@ -162,6 +170,16 @@ pub struct WidgetSnapshot {
 }
 
 impl WidgetSnapshot {
+    pub fn titled(title: impl Into<String>) -> Self {
+        Self {
+            summary: Summary::titled(title),
+            detail: None,
+            actions: Vec::new(),
+            alerts: Vec::new(),
+            mini: None,
+        }
+    }
+
     pub fn detail_items(&self) -> impl Iterator<Item = &DetailItem> {
         self.detail
             .iter()
@@ -260,6 +278,7 @@ impl WidgetRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::fixed_now as base_time;
 
     #[test]
     fn recommendation_id_is_recognised_and_other_ids_are_not() {
@@ -267,6 +286,18 @@ mod tests {
         assert!(WidgetId::new("ia").is_recommendation());
         assert!(!WidgetId::new("kanban").is_recommendation());
         assert!(!WidgetId::new("IA").is_recommendation());
+    }
+
+    #[test]
+    fn titled_snapshot_is_empty_except_for_the_title() {
+        let snapshot = WidgetSnapshot::titled("Agenda");
+        assert_eq!(snapshot.summary.title, "Agenda");
+        assert!(snapshot.summary.lines.is_empty());
+        assert!(snapshot.summary.blocks.is_empty());
+        assert!(snapshot.detail.is_none());
+        assert!(snapshot.actions.is_empty());
+        assert!(snapshot.alerts.is_empty());
+        assert!(snapshot.mini.is_none());
     }
 
     #[test]
@@ -281,7 +312,6 @@ mod tests {
     }
     use crate::domain::blocks::{lines::WidgetLine, Block};
     use crate::domain::widget_content::Tone;
-    use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 
     fn widget_line(text: &str) -> WidgetLine {
         WidgetLine {
@@ -361,36 +391,20 @@ mod tests {
         assert_eq!(Flag::Warning.symbol(), '⚠');
     }
 
-    fn base_time() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 18)
-            .and_then(|date| date.and_hms_opt(12, 0, 0))
-            .expect("data válida")
-    }
-
     fn seconds_after(base: NaiveDateTime, seconds: i64) -> NaiveDateTime {
         base + TimeDelta::seconds(seconds)
     }
 
     fn succeed(title: &str) -> Result<WidgetSnapshot, String> {
-        Ok(snapshot(title))
+        Ok(titled_snapshot(title))
     }
 
     fn fail(message: &str) -> Result<WidgetSnapshot, String> {
         Err(message.to_string())
     }
 
-    fn snapshot(title: &str) -> WidgetSnapshot {
-        WidgetSnapshot {
-            summary: Summary {
-                title: title.to_string(),
-                lines: vec![],
-                blocks: vec![],
-            },
-            detail: None,
-            actions: vec![],
-            alerts: vec![],
-            mini: None,
-        }
+    fn titled_snapshot(title: &str) -> WidgetSnapshot {
+        WidgetSnapshot::titled(title)
     }
 
     #[test]
@@ -399,7 +413,7 @@ mod tests {
         let mut record = WidgetRecord::loading();
         record.apply(fail("falha"), now);
         record.apply(succeed("Kanban"), seconds_after(now, 1));
-        assert_eq!(record.snapshot(), Some(&snapshot("Kanban")));
+        assert_eq!(record.snapshot(), Some(&titled_snapshot("Kanban")));
         assert_eq!(record.last_error(), None);
         assert!(!record.is_failing());
     }
@@ -410,7 +424,7 @@ mod tests {
         let mut record = WidgetRecord::loading();
         record.apply(succeed("Kanban"), now);
         record.apply(fail("fora do ar"), seconds_after(now, 1));
-        assert_eq!(record.snapshot(), Some(&snapshot("Kanban")));
+        assert_eq!(record.snapshot(), Some(&titled_snapshot("Kanban")));
         assert_eq!(record.last_error(), Some("fora do ar"));
         assert!(record.is_failing());
     }
@@ -535,7 +549,7 @@ mod tests {
                     blocks: vec![],
                 },
             ]),
-            ..snapshot("T")
+            ..titled_snapshot("T")
         }
     }
 
@@ -546,7 +560,7 @@ mod tests {
         assert_eq!(record.usable_snapshot(), None);
 
         record.apply(succeed("Kanban"), now);
-        assert_eq!(record.usable_snapshot(), Some(&snapshot("Kanban")));
+        assert_eq!(record.usable_snapshot(), Some(&titled_snapshot("Kanban")));
 
         record.apply(fail("falha"), seconds_after(now, 1));
         assert_eq!(record.usable_snapshot(), None);
@@ -560,7 +574,7 @@ mod tests {
             .map(|item| item.text.clone())
             .collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
-        assert_eq!(snapshot("T").detail_items().count(), 0);
+        assert_eq!(titled_snapshot("T").detail_items().count(), 0);
     }
 
     #[test]

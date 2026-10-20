@@ -121,14 +121,7 @@ fn selected_lines(context: &WidgetContext) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::domain::widget::{DetailSection, Summary, WidgetId, WidgetRecord, WidgetSnapshot};
-    use chrono::NaiveDate;
-
-    fn now() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 17)
-            .unwrap()
-            .and_hms_opt(8, 30, 0)
-            .unwrap()
-    }
+    use crate::test_support::morning_now as now;
 
     fn item(id: Option<&str>, text: &str, meta: &[(&str, &str)]) -> DetailItem {
         DetailItem {

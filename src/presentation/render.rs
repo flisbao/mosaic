@@ -509,15 +509,11 @@ mod tests {
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
         WidgetSnapshot {
-            mini: None,
-            alerts: vec![],
             summary: Summary {
-                blocks: vec![],
-                title: title.to_string(),
                 lines,
+                ..Summary::titled(title)
             },
-            detail: None,
-            actions: vec![],
+            ..WidgetSnapshot::titled(title)
         }
     }
 

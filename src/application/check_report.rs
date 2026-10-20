@@ -77,21 +77,11 @@ fn problem_line(problem: &Problem) -> String {
 mod tests {
     use super::*;
     use crate::domain::snapshot_report::{Problem, Severity};
-    use crate::domain::widget::{Mini, Summary, WidgetSnapshot};
+    use crate::domain::widget::{Mini, WidgetSnapshot};
     use crate::domain::widget_content::Tone;
 
     fn snapshot() -> WidgetSnapshot {
-        WidgetSnapshot {
-            mini: None,
-            summary: Summary {
-                title: "Agenda".to_string(),
-                lines: vec![],
-                blocks: vec![],
-            },
-            detail: None,
-            actions: vec![],
-            alerts: vec![],
-        }
+        WidgetSnapshot::titled("Agenda")
     }
 
     fn problem(path: &str, message: &str, severity: Severity) -> Problem {

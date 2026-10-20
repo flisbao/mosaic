@@ -122,12 +122,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
 
     use super::*;
     use crate::application::ports::SourceError;
     use crate::application::refresh::fakes::snapshot_titled;
     use crate::domain::widget::{WidgetRecord, WidgetSnapshot};
+    use crate::test_support::fixed_now as now;
 
     #[derive(Debug, Clone, PartialEq)]
     struct FakeSpec {
@@ -173,12 +173,6 @@ mod tests {
                 .map(|(id, change)| (widget(id), *change))
                 .collect(),
         }
-    }
-
-    fn now() -> chrono::NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 18)
-            .and_then(|date| date.and_hms_opt(12, 0, 0))
-            .unwrap()
     }
 
     fn title_of(record: &WidgetRecord) -> Option<String> {

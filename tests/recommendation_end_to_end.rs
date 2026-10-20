@@ -5,7 +5,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::NaiveDate;
 use mosaic::application::launch_spec::ProviderCommand;
 use mosaic::application::llm::{
     execute_recommendation, LlmError, RecommendationOutcome, RecommendationStore,
@@ -17,6 +16,8 @@ use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::llm_cli::ClaudeCli;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::FileRecommendationStore;
+mod common;
+use common::morning_now as now;
 
 const FORK_RACE_RETRIES: usize = 20;
 const PRIVATE_TEMPORARY_DIRECTORY_MODE: u32 = 0o700;
@@ -29,13 +30,6 @@ fn private_tempdir() -> tempfile::TempDir {
     )
     .unwrap();
     directory
-}
-
-fn now() -> chrono::NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 10, 17)
-        .unwrap()
-        .and_hms_opt(8, 30, 0)
-        .unwrap()
 }
 
 fn kanban_runner(root: &Path) -> PluginRunner {

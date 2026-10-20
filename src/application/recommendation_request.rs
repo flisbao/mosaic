@@ -56,13 +56,13 @@ fn confirmation_text(plan: &RecommendationPlan, target_label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
 
     use super::*;
     use crate::application::recommendation::LlmSelection;
     use crate::domain::widget::{
         DetailItem, DetailSection, Summary, WidgetId, WidgetRecord, WidgetSnapshot,
     };
+    use crate::test_support::recommendation_request_now as now;
 
     struct FakeCriteria(Result<String, CriteriaError>);
 
@@ -70,12 +70,6 @@ mod tests {
         fn load(&self) -> Result<String, CriteriaError> {
             self.0.clone()
         }
-    }
-
-    fn now() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 19)
-            .and_then(|date| date.and_hms_opt(9, 0, 0))
-            .expect("data válida")
     }
 
     fn policy(confirm_before_send: bool) -> SendPolicy {
