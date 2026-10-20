@@ -62,7 +62,7 @@ fn jira_runner(
     token: &str,
     jql_and_options: &[&str],
 ) -> PluginRunner {
-    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/jira.py");
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/jira/jira.py");
     let environment = [
         ("JIRA_SITE", "teste.atlassian.net".to_string()),
         ("JIRA_EMAIL", EMAIL.to_string()),

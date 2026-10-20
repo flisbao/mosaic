@@ -47,7 +47,7 @@ timeout_seconds = 120
 confirm_before_send = true
 priority_prompt = "prompts/prioridade.md"
 
-# --- Jira (descomente e ajuste) ---
+# --- Jira (descomente e ajuste; passo a passo em plugins/jira/README.md no repositório) ---
 # Cada widget define o próprio JQL em args; o Mosaic acrescenta `snapshot`.
 # Guarde o token numa variável de ambiente, por exemplo:
 #   export JIRA_TOKEN_EMPRESA="seu-token-de-api"
@@ -56,7 +56,7 @@ priority_prompt = "prompts/prioridade.md"
 # [[widgets]]
 # id = "jira-minhas-tarefas"
 # command = "python3"
-# args = ["plugins/jira.py", "--jql", "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC", "--title", "Minhas tarefas", "--view", "lines"]
+# args = ["plugins/jira/jira.py", "--jql", "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC", "--title", "Minhas tarefas", "--view", "lines"]
 # interval_seconds = 120
 # timeout_seconds = 45
 # llm_sections = ["Minhas tarefas"]
@@ -71,7 +71,7 @@ priority_prompt = "prompts/prioridade.md"
 # [[widgets]]
 # id = "jira-time-em-andamento"
 # command = "python3"
-# args = ["plugins/jira.py", "--jql", "project = VHPJ AND statusCategory = \"In Progress\"", "--title", "Time em andamento", "--group-by", "assignee", "--view", "table", "--columns", "key,summary,status"]
+# args = ["plugins/jira/jira.py", "--jql", "project = VHPJ AND statusCategory = \"In Progress\"", "--title", "Time em andamento", "--group-by", "assignee", "--view", "table", "--columns", "key,summary,status"]
 # interval_seconds = 120
 # timeout_seconds = 45
 # inherit_env = ["JIRA_TOKEN_EMPRESA"]
@@ -120,7 +120,7 @@ const BUNDLED_PLUGINS: [(&str, &str); 7] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
     ("example.py", include_str!("../../plugins/example.py")),
     ("example.js", include_str!("../../plugins/example.js")),
-    ("jira.py", include_str!("../../plugins/jira.py")),
+    ("jira/jira.py", include_str!("../../plugins/jira/jira.py")),
     (
         "calendar/calendar_widget.py",
         include_str!("../../plugins/calendar/calendar_widget.py"),
@@ -266,7 +266,8 @@ mod tests {
     fn install_creates_the_jira_plugin() {
         let directory = tempfile::tempdir().unwrap();
         install_defaults_if_missing(directory.path()).unwrap();
-        let installed = std::fs::read_to_string(directory.path().join("plugins/jira.py")).unwrap();
+        let installed =
+            std::fs::read_to_string(directory.path().join("plugins/jira/jira.py")).unwrap();
         assert!(installed.contains("def main("));
     }
 
