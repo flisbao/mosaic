@@ -24,6 +24,8 @@ pub const MAXIMUM_MINI_TEXT_CHARACTERS: usize = 24;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WidgetId(String);
 
+pub const RECOMMENDATION_WIDGET_ID: &str = "ia";
+
 impl WidgetId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -31,6 +33,14 @@ impl WidgetId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn recommendation() -> Self {
+        Self::new(RECOMMENDATION_WIDGET_ID)
+    }
+
+    pub fn is_recommendation(&self) -> bool {
+        self.0 == RECOMMENDATION_WIDGET_ID
     }
 }
 
@@ -250,6 +260,14 @@ impl WidgetRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recommendation_id_is_recognised_and_other_ids_are_not() {
+        assert!(WidgetId::recommendation().is_recommendation());
+        assert!(WidgetId::new("ia").is_recommendation());
+        assert!(!WidgetId::new("kanban").is_recommendation());
+        assert!(!WidgetId::new("IA").is_recommendation());
+    }
 
     #[test]
     fn flag_parse_accepts_known_names_only() {

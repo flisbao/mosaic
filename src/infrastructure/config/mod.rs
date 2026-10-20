@@ -201,6 +201,8 @@ pub enum ConfigError {
     Parse(String),
     #[error("widget duplicado na configuração: '{0}'")]
     DuplicateWidgetId(String),
+    #[error("widget '{0}': id reservado pelo mosaic")]
+    ReservedWidgetId(String),
     #[error("{location}: '{field}' precisa ser maior que zero")]
     NotPositive {
         location: SettingLocation,
@@ -240,6 +242,9 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
     let mut tab_assignments = Vec::new();
     let mut warnings = Vec::new();
     for mut widget in raw.widgets {
+        if WidgetId::new(widget.id.clone()).is_recommendation() {
+            return Err(ConfigError::ReservedWidgetId(widget.id));
+        }
         if !seen.insert(widget.id.clone()) {
             return Err(ConfigError::DuplicateWidgetId(widget.id));
         }
@@ -343,6 +348,15 @@ mod tests {
             Duration::from_secs(MINIMUM_INTERVAL_SECONDS)
         );
         assert!(spec.schedule.interval_adjusted);
+    }
+
+    #[test]
+    fn widget_cannot_use_the_reserved_recommendation_id() {
+        let result = parse_config("[[widgets]]\nid = \"ia\"\ncommand = \"x\"\n");
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::ReservedWidgetId("ia".to_string())
+        );
     }
 
     #[test]

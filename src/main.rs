@@ -21,7 +21,6 @@ use mosaic::application::ports::{Cancellable, Clock, WidgetRunner};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
-use mosaic::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetUpdate};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
@@ -437,11 +436,7 @@ fn apply_reloaded_config(
 }
 
 fn rebuilt_layout(state: &AppState, config: &AppConfig, plan: &ReloadPlan) -> TabLayout {
-    let recommendation_record = state
-        .entries()
-        .iter()
-        .find(|entry| entry.id.as_str() == RECOMMENDATION_WIDGET_ID)
-        .map(|entry| entry.record.clone());
+    let recommendation_record = state.recommendation_record().cloned();
     let mut layout = build_tab_views(
         &widget_placements(config),
         &tab_placements(config),
@@ -568,7 +563,7 @@ fn start_recommendation(
     let Some(llm) = &services.llm else {
         return;
     };
-    state.begin_widget_refresh(&WidgetId::new(RECOMMENDATION_WIDGET_ID));
+    state.begin_widget_refresh(&WidgetId::recommendation());
     let runner = Arc::clone(&llm.runner);
     let store = Arc::clone(&llm.store);
     let model = llm.config.model.clone();

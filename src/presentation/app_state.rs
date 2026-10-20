@@ -5,7 +5,6 @@ use chrono::NaiveDateTime;
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
-use crate::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::shortcuts::assign_shortcuts;
@@ -420,9 +419,15 @@ impl AppState {
     }
 
     fn recommendation_is_loading(&self) -> bool {
-        self.entries.iter().any(|entry| {
-            entry.id.as_str() == RECOMMENDATION_WIDGET_ID && entry.record.is_refreshing()
-        })
+        self.recommendation_record()
+            .is_some_and(WidgetRecord::is_refreshing)
+    }
+
+    pub fn recommendation_record(&self) -> Option<&WidgetRecord> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id.is_recommendation())
+            .map(|entry| &entry.record)
     }
 
     fn toggle_pomodoro(&mut self) {
@@ -1380,5 +1385,29 @@ mod tests {
             app.handle_key(character('i')),
             Some(Command::RequestRecommendation)
         );
+    }
+
+    #[test]
+    fn recommendation_record_finds_only_the_ia_entry() {
+        let app = AppState::new(
+            vec![
+                entry("kanban", WidgetRecord::loading()),
+                entry("ia", WidgetRecord::loading()),
+            ],
+            vec![TabView {
+                name: "t".to_string(),
+                entry_indexes: vec![0, 1],
+            }],
+        );
+        assert!(app.recommendation_record().is_some());
+
+        let without = AppState::new(
+            vec![entry("kanban", WidgetRecord::loading())],
+            vec![TabView {
+                name: "t".to_string(),
+                entry_indexes: vec![0],
+            }],
+        );
+        assert!(without.recommendation_record().is_none());
     }
 }
