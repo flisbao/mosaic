@@ -155,15 +155,16 @@ impl LlmCli<OpenCodeHarness> {
 
 impl<H: HarnessCommand> LlmRunner for LlmCli<H> {
     fn run(&self, request: &LlmRequest) -> Result<String, LlmError> {
-        run_cli(
-            &self.program,
-            &self.working_directory,
-            &self.arguments(request),
-            &self.environment(),
-            Some(&request.prompt),
-            self.timeout,
-            &self.cancel_flag,
-        )
+        let arguments = self.arguments(request);
+        let environment = self.environment();
+        let invocation = CliInvocation {
+            program: &self.program,
+            working_directory: &self.working_directory,
+            arguments: &arguments,
+            environment: &environment,
+            stdin_text: Some(&request.prompt),
+        };
+        run_cli(&invocation, self.timeout, &self.cancel_flag)
     }
 }
 
@@ -177,29 +178,38 @@ impl<H: HarnessCommand> Cancellable for LlmCli<H> {
     }
 }
 
+struct CliInvocation<'a> {
+    program: &'a str,
+    working_directory: &'a Path,
+    arguments: &'a [String],
+    environment: &'a [(String, String)],
+    stdin_text: Option<&'a str>,
+}
+
 fn run_cli(
-    program: &str,
-    working_directory: &Path,
-    arguments: &[String],
-    environment: &[(String, String)],
-    stdin_text: Option<&str>,
+    invocation: &CliInvocation,
     timeout: Duration,
     cancel: &CancelFlag,
 ) -> Result<String, LlmError> {
-    prepare_private_directory(working_directory)
+    prepare_private_directory(invocation.working_directory)
         .map_err(|error| LlmError::Failed(error.to_string()))?;
-    let mut command = Command::new(program);
+    let mut command = Command::new(invocation.program);
     command
-        .args(arguments)
-        .envs(environment.iter().map(|(name, value)| (name, value)))
-        .current_dir(working_directory);
+        .args(invocation.arguments)
+        .envs(
+            invocation
+                .environment
+                .iter()
+                .map(|(name, value)| (name, value)),
+        )
+        .current_dir(invocation.working_directory);
     let limits = ProcessLimits {
         timeout,
         maximum_output_bytes: MAXIMUM_LLM_OUTPUT_BYTES,
     };
-    run_process(command, stdin_text, &limits, cancel).map_err(|error| {
+    run_process(command, invocation.stdin_text, &limits, cancel).map_err(|error| {
         if error.program_not_found() {
-            LlmError::Unavailable(format!("`{program}` não encontrado no PATH"))
+            LlmError::Unavailable(format!("`{}` não encontrado no PATH", invocation.program))
         } else {
             LlmError::Failed(clean_text_limited(
                 &error.to_string(),
