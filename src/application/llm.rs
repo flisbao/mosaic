@@ -1,6 +1,7 @@
 use chrono::NaiveDateTime;
 use thiserror::Error;
 
+use crate::application::ports::Cancellable;
 use crate::application::recommendation::RecommendationPlan;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +21,10 @@ pub enum LlmError {
 pub trait LlmRunner: Send + Sync {
     fn run(&self, request: &LlmRequest) -> Result<String, LlmError>;
 }
+
+pub trait CancellableLlmRunner: LlmRunner + Cancellable {}
+
+impl<T: LlmRunner + Cancellable> CancellableLlmRunner for T {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredRecommendation {

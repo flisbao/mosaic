@@ -31,11 +31,10 @@ use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, load_config, prepare_reload, read_config_file,
-    restart_sections, retain_restart_sections, AppConfig, ConfigError, Harness, LlmConfig,
-    WidgetSettings,
+    restart_sections, retain_restart_sections, AppConfig, ConfigError, LlmConfig, WidgetSettings,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
-use mosaic::infrastructure::llm_cli::{ClaudeCli, OpenCodeCli};
+use mosaic::infrastructure::llm_cli::build_llm_runner;
 use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::{
@@ -268,35 +267,14 @@ fn startup_plan(widgets: &[WidgetSettings]) -> ReloadPlan {
     }
 }
 
-fn share_llm_runner<T: LlmRunner + Cancellable + 'static>(
-    runner: T,
-) -> (Arc<dyn LlmRunner>, Arc<dyn Cancellable>) {
-    let shared = Arc::new(runner);
-    (
-        Arc::clone(&shared) as Arc<dyn LlmRunner>,
-        shared as Arc<dyn Cancellable>,
-    )
-}
-
 fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<LlmServices> {
     let Some(working_directory) = llm_working_directory() else {
         warnings.push(NO_STATE_DIRECTORY_LLM_WARNING.to_string());
         return None;
     };
-    let timeout = Duration::from_secs(config.llm.timeout_seconds);
-    let (runner, cancellable) = match config.llm.harness {
-        Harness::Claude => share_llm_runner(ClaudeCli::new(
-            Harness::Claude.program_name().to_string(),
-            working_directory,
-            config.llm.max_budget_usd,
-            timeout,
-        )),
-        Harness::OpenCode => share_llm_runner(OpenCodeCli::new(
-            Harness::OpenCode.program_name().to_string(),
-            working_directory,
-            timeout,
-        )),
-    };
+    let shared = build_llm_runner(&config.llm, working_directory);
+    let runner: Arc<dyn LlmRunner> = shared.clone();
+    let cancellable: Arc<dyn Cancellable> = shared;
     let store: Arc<dyn RecommendationStore> = match recommendation_file() {
         Some(path) => Arc::new(FileRecommendationStore::new(path)),
         None => {
@@ -619,6 +597,7 @@ fn describe_target(config: &LlmConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mosaic::infrastructure::config::Harness;
 
     fn llm_config(model: Option<&str>) -> LlmConfig {
         LlmConfig {
