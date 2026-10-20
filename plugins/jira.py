@@ -29,6 +29,8 @@ MAXIMUM_SITE_LENGTH = 253
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 HTTP_REDIRECT_FLOOR = 300
 REQUEST_TIMEOUT_SECONDS = 20
+MAXIMUM_RESPONSE_BYTES = 8 * 1024 * 1024
+MAXIMUM_ERROR_BODY_BYTES = 8 * 1024
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_TOO_MANY_REQUESTS = 429
@@ -223,9 +225,16 @@ def urllib_http(url, method, headers, timeout):
     request = urllib.request.Request(url, method=method, headers=headers)
     try:
         with _OPENER.open(request, timeout=timeout) as response:
-            return response.status, response.read()
+            return response.status, _read_limited(response, MAXIMUM_RESPONSE_BYTES)
     except urllib.error.HTTPError as error:
-        return error.code, error.read()
+        return error.code, error.read(MAXIMUM_ERROR_BODY_BYTES)
+
+
+def _read_limited(stream, limit):
+    body = stream.read(limit + 1)
+    if len(body) > limit:
+        raise UnexpectedResponseError("a resposta do Jira excede o tamanho máximo permitido")
+    return body
 
 
 class JiraClient:
