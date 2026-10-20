@@ -67,6 +67,7 @@ mod tests {
                 program: COMMAND.to_string(),
                 args: vec!["jira.py".to_string(), "my-tasks".to_string()],
                 env: vec![("TOKEN".to_string(), "abc".to_string())],
+                inherit_env: None,
                 timeout: Duration::from_secs(TIMEOUT_SECONDS),
             },
             schedule: WidgetSchedule {

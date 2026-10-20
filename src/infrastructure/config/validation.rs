@@ -9,6 +9,7 @@ use super::{
 };
 use crate::application::recommendation::LlmSelection;
 use crate::domain::widget::WidgetId;
+use crate::infrastructure::child_environment::is_valid_variable_name;
 
 const POMODORO_SECTION: &str = "pomodoro";
 const LEGACY_NOTIFY_COMMAND_WARNING: &str =
@@ -83,6 +84,16 @@ fn unique_tabs(raw_tabs: Vec<RawTabSection>) -> Result<Vec<TabSettings>, ConfigE
 }
 
 pub(super) fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
+    if widget
+        .inherit_env
+        .as_ref()
+        .is_some_and(|names| !names.iter().all(|name| is_valid_variable_name(name)))
+    {
+        return Err(ConfigError::InvalidValue {
+            widget: widget.id.clone(),
+            field: "inherit_env",
+        });
+    }
     let location = SettingLocation::Widget(widget.id.clone());
     let configured_interval = positive_or_default(
         widget.interval_seconds,
@@ -121,6 +132,7 @@ pub(super) fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, Config
         command: widget.command,
         args: widget.args,
         env: widget.env.into_iter().collect(),
+        inherit_env: widget.inherit_env,
         interval_seconds,
         interval_adjusted: interval_seconds != configured_interval,
         timeout_seconds,

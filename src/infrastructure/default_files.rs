@@ -55,6 +55,7 @@ priority_prompt = "prompts/prioridade.md"
 # interval_seconds = 120
 # timeout_seconds = 45
 # llm_sections = ["Sem dono", "Em andamento"]
+# inherit_env = ["JIRA_TOKEN_EMPRESA"]
 #
 # [widgets.env]
 # JIRA_SITE = "empresa.atlassian.net"
@@ -73,6 +74,7 @@ priority_prompt = "prompts/prioridade.md"
 # interval_seconds = 120
 # timeout_seconds = 45
 # llm_sections = ["Meus tickets"]
+# inherit_env = ["JIRA_TOKEN_CLIENTE"]
 #
 # [widgets.env]
 # JIRA_SITE = "cliente.atlassian.net"

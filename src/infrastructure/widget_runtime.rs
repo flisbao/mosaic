@@ -197,6 +197,7 @@ mod tests {
                 program: "ignorado".to_string(),
                 args: vec![],
                 env: vec![],
+                inherit_env: None,
                 timeout: Duration::from_secs(5),
             },
             schedule: WidgetSchedule {

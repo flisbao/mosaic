@@ -34,6 +34,7 @@ pub(super) struct RawWidget {
     pub(super) args: Vec<String>,
     #[serde(default)]
     pub(super) env: BTreeMap<String, String>,
+    pub(super) inherit_env: Option<Vec<String>>,
     pub(super) interval_seconds: Option<u64>,
     pub(super) timeout_seconds: Option<u64>,
     pub(super) span: Option<u16>,

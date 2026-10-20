@@ -20,7 +20,7 @@ O Mosaic roda `command` + `args` do widget com um argumento a mais:
 | `<comando> snapshot` | a cada `interval_seconds` e quando o usuário aperta `r` | um JSON na saída padrão |
 | `<comando> action <id>` | quando o usuário confirma uma ação (parâmetros em JSON na entrada padrão) | uma mensagem curta de texto |
 
-O processo recebe o ambiente do Mosaic mais `[widgets.env]` e roda no diretório de configuração do Mosaic (a pasta que contém o `config.toml`). A saída vai até **1 MiB** e o widget tem `timeout_seconds` (padrão 5 s) para responder; código de saída diferente de zero, tempo esgotado ou saída grande demais viram um erro no widget. `interval_seconds` abaixo de **30** sobe para 30 (o widget avisa); a tecla `r` não tem esse limite.
+O processo recebe o ambiente do Mosaic mais `[widgets.env]`; se o widget declarar `inherit_env = ["NOME", ...]`, recebe só `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `TZ`, `LANG`, `LANGUAGE`, `TMPDIR`, `LC_*`, `XDG_*`, as variáveis listadas e `[widgets.env]` (mais `GIT_TERMINAL_PROMPT=0` e `SSH_ASKPASS_REQUIRE=never`), de modo que um widget não enxerga os tokens de outro e roda no diretório de configuração do Mosaic (a pasta que contém o `config.toml`). A saída vai até **1 MiB** e o widget tem `timeout_seconds` (padrão 5 s) para responder; código de saída diferente de zero, tempo esgotado ou saída grande demais viram um erro no widget. `interval_seconds` abaixo de **30** sobe para 30 (o widget avisa); a tecla `r` não tem esse limite.
 
 ## 2. Snapshot
 

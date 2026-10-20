@@ -21,6 +21,7 @@ fn gallery_output(command: &str, script: &str) -> Result<String, SourceError> {
         program: command.to_string(),
         args: vec![root.join(script).to_string_lossy().to_string()],
         env: vec![],
+        inherit_env: None,
         timeout: std::time::Duration::from_secs(10),
     };
     PluginRunner::new(provider, root.to_path_buf()).raw_snapshot_output()

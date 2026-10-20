@@ -7,6 +7,7 @@ use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
+use crate::infrastructure::child_environment::restrict_inherited_environment;
 use crate::infrastructure::plugin_protocol::parse_snapshot;
 use crate::infrastructure::process::{
     run_process, CancelFlag, HasCancelFlag, ProcessError, ProcessLimits,
@@ -42,8 +43,9 @@ impl PluginRunner {
         command
             .args(&self.command.args)
             .args(extra_args)
-            .envs(self.command.env.iter().map(|(key, value)| (key, value)))
             .current_dir(&self.working_directory);
+        restrict_inherited_environment(&mut command, self.command.inherit_env.as_deref());
+        command.envs(self.command.env.iter().map(|(key, value)| (key, value)));
         let limits = ProcessLimits {
             timeout: self.command.timeout,
             maximum_output_bytes: MAXIMUM_PLUGIN_OUTPUT_BYTES,
@@ -128,6 +130,7 @@ mod tests {
             program: "sh".to_string(),
             args: vec!["plugin.sh".to_string()],
             env: vec![("KANBAN_DIR".to_string(), "/tmp/kanban".to_string())],
+            inherit_env: None,
             timeout: Duration::from_secs(timeout_seconds),
         };
         PluginRunner::new(command, directory.to_path_buf())
@@ -356,6 +359,18 @@ mod tests {
             5,
         );
         assert_eq!(runner.snapshot().unwrap().summary.title, "/tmp/kanban");
+    }
+
+    #[test]
+    fn restricted_environment_hides_unlisted_host_variables() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut runner = runner(
+            directory.path(),
+            r#"printf '{"summary":{"title":"%s","lines":[]}}' "${CARGO_MANIFEST_DIR:-vazio}""#,
+            5,
+        );
+        runner.command.inherit_env = Some(vec![]);
+        assert_eq!(runner.snapshot().unwrap().summary.title, "vazio");
     }
 
     #[test]

@@ -38,6 +38,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         program: "python3".to_string(),
         args: vec![plugin.to_string_lossy().to_string()],
         env: vec![("KANBAN_DIR".to_string(), root.to_string_lossy().to_string())],
+        inherit_env: None,
         timeout: std::time::Duration::from_secs(10),
     };
     PluginRunner::new(command, root.to_path_buf())
