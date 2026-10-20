@@ -45,7 +45,7 @@ pub fn format_item_line(item: &DetailItem, max_characters: usize) -> String {
     let id = item
         .id
         .as_deref()
-        .map(collapse_whitespace)
+        .map(|id| truncate_characters(&collapse_whitespace(id), max_characters))
         .unwrap_or_else(|| MISSING_ID_PLACEHOLDER.to_string());
     let text = truncate_characters(&collapse_whitespace(&item.text), max_characters);
     let meta: Vec<String> = item
@@ -195,6 +195,14 @@ mod tests {
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("abcde"), 2);
         assert_eq!(estimate_tokens("ááááá"), 2);
+    }
+
+    #[test]
+    fn item_line_truncates_a_very_long_id() {
+        let long_id = "i".repeat(500);
+        let line = format_item_line(&item(Some(&long_id), "texto", &[]), 40);
+        assert!(line.chars().count() < 120);
+        assert!(!line.contains(&long_id));
     }
 
     #[test]

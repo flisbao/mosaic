@@ -37,7 +37,7 @@ O processo recebe o ambiente do Mosaic mais `[widgets.env]`; se o widget declara
 
 - **`protocol`** (opcional, padrão 1): número inteiro positivo. Se for maior que a versão suportada, o widget pede para atualizar o Mosaic; outro valor é erro.
 - **`summary.title`** (obrigatório) e **`summary.blocks`**: o conteúdo da caixa na Home (seção 3). Atalho: no lugar de `blocks` você pode usar `summary.lines`, uma lista de `{ "text", "flag"? }`.
-- **`detail`**: a aba do widget. A configuração decide a aba e o atalho para ela, com `[[tabs]]` e `tab = "Nome"`. Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`.
+- **`detail`**: a aba do widget. A configuração decide a aba e o atalho para ela, com `[[tabs]]` e `tab = "Nome"`. Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`. O `id` precisa ter de 1 a 200 caracteres, sem caracteres de controle nem de formatação; um `id` inválido é ignorado com um aviso (o item continua, mas sem ações por item).
 - **`actions`**: `{ "id", "label", "description"?, "applies_to"?: "widget" | "item", "params"? }`.
 - **`alerts`**: seção 5.
 - **`mini`** (opcional): a coluna do modo foco, `{ "value", "text", "tone"? }`. `value` e `text` são obrigatórios; `tone` tem o padrão `normal`. Um `mini` inválido é descartado sem afetar o resto do widget. O `mosaic check` mostra a linha `mini: <value> <text>`.
