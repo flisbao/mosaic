@@ -21,6 +21,9 @@ use crate::application::reload_plan::plan_reload;
 use crate::application::reload_policy::RestartSections;
 use crate::domain::pomodoro::{PomodoroSettings, SECONDS_PER_MINUTE};
 use crate::domain::widget::WidgetId;
+use crate::infrastructure::private_directory::verify_trusted_path;
+
+pub const PLUGINS_DIRECTORY_NAME: &str = "plugins";
 
 pub const MINIMUM_INTERVAL_SECONDS: u64 = 30;
 pub const MAXIMUM_INTERVAL_SECONDS: u64 = 86_400;
@@ -297,7 +300,20 @@ pub fn retain_restart_sections(active: &AppConfig, mut next: AppConfig) -> AppCo
 }
 
 pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
-    parse_config(&read_config_file(&config_file_path(directory))?)
+    parse_config(&read_installed_config(directory)?)
+}
+
+pub fn read_installed_config(directory: &Path) -> Result<String, ConfigError> {
+    for path in [
+        directory.to_path_buf(),
+        config_file_path(directory),
+        directory.join(PLUGINS_DIRECTORY_NAME),
+    ] {
+        if path.exists() {
+            verify_trusted_path(&path).map_err(|error| ConfigError::Parse(error.to_string()))?;
+        }
+    }
+    read_config_file(&config_file_path(directory))
 }
 
 pub fn prepare_reload(

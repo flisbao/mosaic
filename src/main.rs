@@ -31,8 +31,8 @@ use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
 use mosaic::infrastructure::config::{
-    config_directory, config_file_path, load_config, prepare_reload, read_config_file,
-    restart_sections, retain_restart_sections, AppConfig, ConfigError, LlmConfig, WidgetSettings,
+    config_directory, load_config, prepare_reload, read_installed_config, restart_sections,
+    retain_restart_sections, AppConfig, ConfigError, LlmConfig, WidgetSettings,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::build_llm_runner;
@@ -406,7 +406,7 @@ fn stored_recommendation_record(
 
 fn reload_config(state: &mut AppState, services: &mut Services, spans: &mut Vec<u16>) {
     let outcome = reload_widgets(
-        read_config_file(&config_file_path(&services.config_directory)),
+        read_installed_config(&services.config_directory),
         |text| prepare_reload(&services.config.widgets, text),
         &mut services.runtime,
         &mut services.generations,

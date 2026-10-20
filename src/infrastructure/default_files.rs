@@ -1,5 +1,9 @@
 use std::fs;
 use std::path::Path;
+#[cfg(unix)]
+const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+#[cfg(unix)]
+const PRIVATE_FILE_MODE: u32 = 0o600;
 
 use crate::infrastructure::app_paths::PRIORITY_PROMPT_RELATIVE_PATH;
 use crate::infrastructure::config::{config_file_path, ConfigError};
@@ -122,18 +126,51 @@ pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError
         return Ok(false);
     }
     let plugins_directory = directory.join(PLUGINS_DIRECTORY_NAME);
-    fs::create_dir_all(&plugins_directory).map_err(ConfigError::io(&plugins_directory))?;
+    create_private_directory(&plugins_directory)?;
     for (name, content) in BUNDLED_PLUGINS {
         let plugin_path = plugins_directory.join(name);
-        fs::write(&plugin_path, content).map_err(ConfigError::io(&plugin_path))?;
+        write_private_file(&plugin_path, content)?;
     }
     let prompt_path = directory.join(PRIORITY_PROMPT_RELATIVE_PATH);
     if let Some(prompts_directory) = prompt_path.parent() {
-        fs::create_dir_all(prompts_directory).map_err(ConfigError::io(prompts_directory))?;
+        create_private_directory(prompts_directory)?;
     }
-    fs::write(&prompt_path, PRIORITY_PROMPT).map_err(ConfigError::io(&prompt_path))?;
-    fs::write(&config_path, DEFAULT_CONFIG).map_err(ConfigError::io(&config_path))?;
+    write_private_file(&prompt_path, PRIORITY_PROMPT)?;
+    write_private_file(&config_path, DEFAULT_CONFIG)?;
     Ok(true)
+}
+
+#[cfg(unix)]
+fn create_private_directory(path: &Path) -> Result<(), ConfigError> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(PRIVATE_DIRECTORY_MODE)
+        .create(path)
+        .map_err(ConfigError::io(path))
+}
+#[cfg(not(unix))]
+fn create_private_directory(path: &Path) -> Result<(), ConfigError> {
+    fs::create_dir_all(path).map_err(ConfigError::io(path))
+}
+
+#[cfg(unix)]
+fn write_private_file(path: &Path, content: &str) -> Result<(), ConfigError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(PRIVATE_FILE_MODE)
+        .open(path)
+        .map_err(ConfigError::io(path))?;
+    file.write_all(content.as_bytes())
+        .map_err(ConfigError::io(path))
+}
+#[cfg(not(unix))]
+fn write_private_file(path: &Path, content: &str) -> Result<(), ConfigError> {
+    fs::write(path, content).map_err(ConfigError::io(path))
 }
 
 #[cfg(test)]
