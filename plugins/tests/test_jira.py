@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import sys
 import tempfile
@@ -661,6 +662,150 @@ class PresentationTests(unittest.TestCase):
         self.assertTrue(text.startswith("ABC-1 linha um linha dois"))
         self.assertLessEqual(len(text), len("ABC-1 ") + 80)
         self.assertTrue(text.endswith("…"))
+
+
+class CacheTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name) / "estado"
+        self.cache = jira.OfflineCache(self.directory)
+        self.result = jira.SearchResult([make_issue(1), make_issue(2, assignee=None)], True)
+
+    def test_cache_round_trip_and_permissions(self):
+        self.cache.save(SITE, "x", 100, self.result, NOW)
+        loaded = self.cache.load(SITE, "x", 100)
+        self.assertEqual(loaded, (self.result, NOW))
+        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
+        path = self.cache.path_for(SITE, "x", 100)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertRegex(path.name, r"^[0-9a-f]{64}\.json$")
+
+    def test_cache_key_ignores_presentation_options(self):
+        same = self.cache.path_for(SITE, "x", 100)
+        self.assertEqual(same, self.cache.path_for(SITE, "x", 100))
+        self.assertNotEqual(same, self.cache.path_for(SITE, "y", 100))
+        self.assertNotEqual(same, self.cache.path_for("outro.atlassian.net", "x", 100))
+        self.assertNotEqual(same, self.cache.path_for(SITE, "x", 50))
+
+    def test_missing_cache_is_none(self):
+        self.assertIsNone(self.cache.load(SITE, "x", 100))
+
+    def test_corrupt_cache_is_ignored(self):
+        self.cache.save(SITE, "x", 100, self.result, NOW)
+        path = self.cache.path_for(SITE, "x", 100)
+        for content in ("{nao e json", "[]", '{"issues": [{"key": "A"}]}', '{"issues": 3}'):
+            path.write_text(content, encoding="utf-8")
+            self.assertIsNone(self.cache.load(SITE, "x", 100), content)
+
+    def test_unwritable_state_dir_does_not_fail_the_snapshot(self):
+        blocker = Path(self.temporary.name) / "arquivo"
+        blocker.write_text("x", encoding="utf-8")
+        cache = jira.OfflineCache(blocker)
+        cache.save(SITE, "x", 100, self.result, NOW)
+        self.assertIsNone(cache.load(SITE, "x", 100))
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state_dir = Path(self.temporary.name) / "estado"
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def run_main(self, http, arguments=("--jql", "x", "snapshot"), **environment_overrides):
+        environment = base_environment(JIRA_STATE_DIR=str(self.state_dir), **environment_overrides)
+        return jira.main(
+            list(arguments),
+            environ=environment,
+            http=http,
+            now=NOW,
+            stdout=self.stdout,
+            stderr=self.stderr,
+        )
+
+    def populate_cache(self):
+        self.assertEqual(self.run_main(FakeHttp([page(["A-1"])])), 0)
+        self.stdout.truncate(0)
+        self.stdout.seek(0)
+
+    def test_main_success_prints_valid_json_and_saves_cache(self):
+        code = self.run_main(FakeHttp([page(["A-1", "A-2"])]))
+        self.assertEqual(code, 0)
+        snapshot = json.loads(self.stdout.getvalue())
+        self.assertEqual(snapshot["protocol"], 1)
+        self.assertEqual(len(snapshot["detail"][0]["items"]), 2)
+        self.assertEqual(len(list(self.state_dir.glob("*.json"))), 1)
+
+    def test_main_network_error_serves_cache_with_offline_notice(self):
+        self.populate_cache()
+        code = self.run_main(FakeHttp(error=OSError("sem rede")))
+        self.assertEqual(code, 0)
+        snapshot = json.loads(self.stdout.getvalue())
+        first = snapshot["summary"]["blocks"][0]
+        self.assertEqual(first["lines"][0]["tone"], "warn")
+        self.assertIn("(offline)", first["lines"][0]["text"])
+
+    def test_main_rate_limit_serves_cache(self):
+        self.populate_cache()
+        self.assertEqual(self.run_main(FakeHttp([(429, {})])), 0)
+        self.assertIn("(offline)", self.stdout.getvalue())
+
+    def test_main_auth_error_has_no_fallback_and_hides_token(self):
+        self.populate_cache()
+        self.assertEqual(self.run_main(FakeHttp([(401, {})])), 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertEqual(self.stderr.getvalue(), f"erro: credenciais inválidas para {SITE}\n")
+        self.assertNotIn(SECRET, self.stderr.getvalue())
+
+    def test_main_query_error_prints_jira_message_without_fallback(self):
+        self.populate_cache()
+        body = {"errorMessages": ["Field 'foo' does not exist"]}
+        self.assertEqual(self.run_main(FakeHttp([(400, body)])), 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertIn("erro: JQL inválido: ", self.stderr.getvalue())
+        self.assertIn("foo", self.stderr.getvalue())
+
+    def test_main_without_cache_exits_1_with_message(self):
+        self.assertEqual(self.run_main(FakeHttp([(429, {})])), 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertEqual(
+            self.stderr.getvalue(),
+            "erro: limite de requisições do Jira; tentando de novo mais tarde\n",
+        )
+
+    def test_main_action_exits_2(self):
+        for arguments in (["--jql", "x", "action", "abc"], ["--jql", "x", "--nope", "snapshot"], ["--jql", "x"]):
+            self.stderr.truncate(0)
+            self.stderr.seek(0)
+            self.assertEqual(self.run_main(FakeHttp(), arguments), 2, arguments)
+            self.assertEqual(self.stderr.getvalue(), "uso: jira.py [opções] snapshot\n")
+        self.assertEqual(self.stdout.getvalue(), "")
+
+    def test_main_invalid_options_exit_2(self):
+        self.assertEqual(self.run_main(FakeHttp(), ["snapshot"]), 2)
+
+    def test_removed_variable_exits_1_with_hint(self):
+        self.assertEqual(self.run_main(FakeHttp(), JIRA_MODE="x"), 1)
+        self.assertEqual(self.stderr.getvalue(), "erro: JIRA_MODE foi removido; use --jql\n")
+
+    def test_unwritable_state_dir_still_prints_snapshot(self):
+        blocker = Path(self.temporary.name) / "arquivo"
+        blocker.write_text("x", encoding="utf-8")
+        self.state_dir = blocker
+        self.assertEqual(self.run_main(FakeHttp([page(["A-1"])])), 0)
+        self.assertEqual(json.loads(self.stdout.getvalue())["protocol"], 1)
+
+    def test_token_never_in_stdout_stderr_or_cache_files(self):
+        self.populate_cache()
+        self.run_main(FakeHttp([(401, {})]))
+        self.run_main(FakeHttp(error=OSError(SECRET)))
+        self.run_main(FakeHttp([(500, {})]))
+        collected = [self.stdout.getvalue(), self.stderr.getvalue()]
+        collected += [path.read_text(encoding="utf-8") for path in self.state_dir.glob("*")]
+        for text in collected:
+            self.assertNotIn(SECRET, text)
 
 
 if __name__ == "__main__":

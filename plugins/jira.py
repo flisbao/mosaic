@@ -6,8 +6,12 @@ from __future__ import annotations
 import argparse
 import base64
 import http.client
+import hashlib
 import json
+import os
 import re
+import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -45,6 +49,12 @@ DEFAULT_MAX_ISSUES = 100
 MAXIMUM_ISSUES = 500
 COLUMNS_SEPARATOR = ","
 ARGUMENT_ERROR_EXIT_CODE = 2
+FAILURE_EXIT_CODE = 1
+USAGE_MESSAGE = "uso: jira.py [opções] snapshot"
+SNAPSHOT_COMMAND = ["snapshot"]
+STATE_DIRECTORY_MODE = 0o700
+CACHE_KEY_SEPARATOR = "\n"
+CACHE_FILE_SUFFIX = ".json"
 SEARCH_PATH = "/rest/api/3/search/jql"
 SEARCH_FIELDS = "summary,status,assignee,priority,updated,created"
 MAXIMUM_PAGE_SIZE = 100
@@ -605,3 +615,113 @@ def _detail_item(issue, site):
             "site": site,
         },
     }
+
+
+class OfflineCache:
+    def __init__(self, directory: Path):
+        self._directory = directory
+
+    def path_for(self, site: str, jql: str, max_issues: int) -> Path:
+        key = CACHE_KEY_SEPARATOR.join((site, jql, str(max_issues)))
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return self._directory / f"{digest}{CACHE_FILE_SUFFIX}"
+
+    def save(self, site, jql, max_issues, result, moment):
+        document = {
+            "saved_at": moment.isoformat(),
+            "has_more": result.has_more,
+            "issues": [issue.to_raw() for issue in result.issues],
+        }
+        try:
+            self._directory.mkdir(mode=STATE_DIRECTORY_MODE, parents=True, exist_ok=True)
+            self._write_atomically(self.path_for(site, jql, max_issues), json.dumps(document))
+        except OSError:
+            return
+
+    def _write_atomically(self, destination, content):
+        descriptor, temporary_name = tempfile.mkstemp(dir=self._directory, suffix=".tmp")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(temporary_name, destination)
+        except OSError:
+            Path(temporary_name).unlink(missing_ok=True)
+            raise
+
+    def load(self, site, jql, max_issues):
+        try:
+            document = json.loads(self.path_for(site, jql, max_issues).read_text(encoding="utf-8"))
+            issues = [Issue.from_raw(raw) for raw in document["issues"]]
+            saved_at = parse_timestamp(document["saved_at"])
+            has_more = document["has_more"]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+        if saved_at is None or not isinstance(has_more, bool) or not all(_is_complete(i) for i in issues):
+            return None
+        return SearchResult(issues, has_more), saved_at
+
+
+def _is_complete(issue):
+    return issue.created is not None and issue.updated is not None
+
+
+def main(
+    arguments: list[str],
+    environ=None,
+    http=urllib_http,
+    now=None,
+    clock=time.monotonic,
+    stdout=None,
+    stderr=None,
+) -> int:
+    environ = os.environ if environ is None else environ
+    stdout = sys.stdout if stdout is None else stdout
+    stderr = sys.stderr if stderr is None else stderr
+    try:
+        options, remainder = parse_options(arguments)
+    except SystemExit:
+        return ARGUMENT_ERROR_EXIT_CODE
+    if remainder != SNAPSHOT_COMMAND:
+        print(USAGE_MESSAGE, file=stderr)
+        return ARGUMENT_ERROR_EXIT_CODE
+    try:
+        config = load_config(environ)
+    except ConfigError as error:
+        return _fail(stderr, error)
+    moment = now if now is not None else datetime.now(timezone.utc)
+    return _run_snapshot(config, options, http, moment, clock, stdout, stderr)
+
+
+def _run_snapshot(config, options, http, moment, clock, stdout, stderr):
+    cache = OfflineCache(config.state_dir)
+    cache_key = (config.site, options.jql, options.max_issues)
+    try:
+        result = search_issues(
+            JiraClient(config, http), options.jql, options.max_issues, config.budget_seconds, clock
+        )
+    except (AuthError, QueryError) as error:
+        return _fail(stderr, error)
+    except (RateLimitError, NetworkError, UnexpectedResponseError) as error:
+        cached = cache.load(*cache_key)
+        if cached is None:
+            return _fail(stderr, error)
+        stale_result, saved_at = cached
+        _print_snapshot(stdout, stale_result, options, config.site, moment, saved_at)
+        return 0
+    cache.save(*cache_key, result, moment)
+    _print_snapshot(stdout, result, options, config.site, moment, None)
+    return 0
+
+
+def _print_snapshot(stdout, result, options, site, moment, offline_since):
+    snapshot = build_snapshot(result, options, site, moment, offline_since)
+    print(json.dumps(snapshot, ensure_ascii=False), file=stdout)
+
+
+def _fail(stderr, error):
+    print(f"erro: {error}", file=stderr)
+    return FAILURE_EXIT_CODE
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
