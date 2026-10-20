@@ -112,6 +112,21 @@ pub struct AppConfig {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingLocation {
+    Widget(String),
+    Section(&'static str),
+}
+
+impl std::fmt::Display for SettingLocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Widget(id) => write!(formatter, "widget '{id}'"),
+            Self::Section(name) => write!(formatter, "[{name}]"),
+        }
+    }
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum ConfigError {
     #[error("falha de leitura ou escrita: {0}")]
@@ -120,22 +135,14 @@ pub enum ConfigError {
     Parse(String),
     #[error("widget duplicado na configuração: '{0}'")]
     DuplicateWidgetId(String),
-    #[error("widget '{widget}': '{field}' precisa ser maior que zero")]
-    InvalidValue { widget: String, field: &'static str },
-    #[error("[{section}]: '{field}' precisa ser maior que zero")]
-    InvalidSetting {
-        section: String,
+    #[error("{location}: '{field}' precisa ser maior que zero")]
+    NotPositive {
+        location: SettingLocation,
         field: &'static str,
     },
-    #[error("widget '{widget}': '{field}' não pode passar de {maximum}")]
-    ValueTooLarge {
-        widget: String,
-        field: &'static str,
-        maximum: u64,
-    },
-    #[error("[{section}]: '{field}' não pode passar de {maximum}")]
-    SettingTooLarge {
-        section: String,
+    #[error("{location}: '{field}' não pode passar de {maximum}")]
+    TooLarge {
+        location: SettingLocation,
         field: &'static str,
         maximum: u64,
     },
@@ -312,40 +319,39 @@ fn unique_tabs(raw_tabs: Vec<RawTabSection>) -> Result<Vec<TabSettings>, ConfigE
 }
 
 fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
+    let location = SettingLocation::Widget(widget.id.clone());
     let configured_interval = positive_or_default(
         widget.interval_seconds,
         DEFAULT_INTERVAL_SECONDS,
-        &widget.id,
+        &location,
         "interval_seconds",
     )?;
     let interval_seconds =
         configured_interval.clamp(MINIMUM_INTERVAL_SECONDS, MAXIMUM_INTERVAL_SECONDS);
-    let timeout_seconds = positive_or_default(
-        widget.timeout_seconds,
-        DEFAULT_TIMEOUT_SECONDS,
-        &widget.id,
+    let timeout_seconds = at_most(
+        positive_or_default(
+            widget.timeout_seconds,
+            DEFAULT_TIMEOUT_SECONDS,
+            &location,
+            "timeout_seconds",
+        )?,
+        MAXIMUM_TIMEOUT_SECONDS,
+        &location,
         "timeout_seconds",
     )?;
-    if timeout_seconds > MAXIMUM_TIMEOUT_SECONDS {
-        return Err(ConfigError::ValueTooLarge {
-            widget: widget.id.clone(),
-            field: "timeout_seconds",
-            maximum: MAXIMUM_TIMEOUT_SECONDS,
-        });
-    }
-    let max_items = positive_limit(widget.max_items, &widget.id, "max_items")?;
+    let max_items = positive_optional(widget.max_items, &location, "max_items")?;
     let llm_max_items = positive_or_default(
-        widget.llm_max_items.map(|value| value as u64),
-        DEFAULT_LLM_MAX_ITEMS as u64,
-        &widget.id,
+        widget.llm_max_items,
+        DEFAULT_LLM_MAX_ITEMS,
+        &location,
         "llm_max_items",
-    )? as usize;
+    )?;
     let llm_max_characters_per_item = positive_or_default(
-        widget.llm_max_characters_per_item.map(|value| value as u64),
-        DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM as u64,
-        &widget.id,
+        widget.llm_max_characters_per_item,
+        DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+        &location,
         "llm_max_characters_per_item",
-    )? as usize;
+    )?;
     Ok(WidgetSettings {
         id: WidgetId::new(widget.id),
         command: widget.command,
@@ -366,33 +372,34 @@ fn convert_pomodoro(
     raw: RawPomodoro,
     warnings: &mut Vec<String>,
 ) -> Result<PomodoroConfig, ConfigError> {
-    let cycles = positive_setting(
-        raw.cycles_before_long_break.map(u64::from),
-        u64::from(DEFAULT_CYCLES_BEFORE_LONG_BREAK),
-        POMODORO_SECTION,
+    let location = SettingLocation::Section(POMODORO_SECTION);
+    let cycles_before_long_break = positive_or_default(
+        raw.cycles_before_long_break,
+        DEFAULT_CYCLES_BEFORE_LONG_BREAK,
+        &location,
         "cycles_before_long_break",
     )?;
     Ok(PomodoroConfig {
         enabled: raw.enabled.unwrap_or(true),
-        focus_minutes: positive_setting(
+        focus_minutes: positive_or_default(
             raw.focus_minutes,
             DEFAULT_FOCUS_MINUTES,
-            POMODORO_SECTION,
+            &location,
             "focus_minutes",
         )?,
-        short_break_minutes: positive_setting(
+        short_break_minutes: positive_or_default(
             raw.short_break_minutes,
             DEFAULT_SHORT_BREAK_MINUTES,
-            POMODORO_SECTION,
+            &location,
             "short_break_minutes",
         )?,
-        long_break_minutes: positive_setting(
+        long_break_minutes: positive_or_default(
             raw.long_break_minutes,
             DEFAULT_LONG_BREAK_MINUTES,
-            POMODORO_SECTION,
+            &location,
             "long_break_minutes",
         )?,
-        cycles_before_long_break: cycles as u32,
+        cycles_before_long_break,
         suggestions: raw
             .suggestions
             .unwrap_or_else(|| DEFAULT_SUGGESTIONS.iter().map(|s| s.to_string()).collect()),
@@ -428,25 +435,24 @@ fn convert_llm(raw: RawLlm) -> Result<LlmConfig, ConfigError> {
         Some("opencode") => Harness::OpenCode,
         Some(other) => return Err(ConfigError::UnknownHarness(other.to_string())),
     };
+    let location = SettingLocation::Section(LLM_SECTION);
     if raw.max_budget_usd.is_some_and(|budget| budget <= 0.0) {
-        return Err(ConfigError::InvalidSetting {
-            section: LLM_SECTION.to_string(),
+        return Err(ConfigError::NotPositive {
+            location,
             field: "max_budget_usd",
         });
     }
-    let timeout_seconds = positive_setting(
-        raw.timeout_seconds,
-        DEFAULT_LLM_TIMEOUT_SECONDS,
-        LLM_SECTION,
+    let timeout_seconds = at_most(
+        positive_or_default(
+            raw.timeout_seconds,
+            DEFAULT_LLM_TIMEOUT_SECONDS,
+            &location,
+            "timeout_seconds",
+        )?,
+        MAXIMUM_TIMEOUT_SECONDS,
+        &location,
         "timeout_seconds",
     )?;
-    if timeout_seconds > MAXIMUM_TIMEOUT_SECONDS {
-        return Err(ConfigError::SettingTooLarge {
-            section: LLM_SECTION.to_string(),
-            field: "timeout_seconds",
-            maximum: MAXIMUM_TIMEOUT_SECONDS,
-        });
-    }
     Ok(LlmConfig {
         enabled: raw.enabled.unwrap_or(true),
         harness,
@@ -460,15 +466,15 @@ fn convert_llm(raw: RawLlm) -> Result<LlmConfig, ConfigError> {
     })
 }
 
-fn positive_or_default(
-    value: Option<u64>,
-    default: u64,
-    widget: &str,
+fn positive_or_default<T: Default + PartialEq>(
+    value: Option<T>,
+    default: T,
+    location: &SettingLocation,
     field: &'static str,
-) -> Result<u64, ConfigError> {
+) -> Result<T, ConfigError> {
     match value {
-        Some(0) => Err(ConfigError::InvalidValue {
-            widget: widget.to_string(),
+        Some(amount) if amount == T::default() => Err(ConfigError::NotPositive {
+            location: location.clone(),
             field,
         }),
         Some(amount) => Ok(amount),
@@ -476,34 +482,34 @@ fn positive_or_default(
     }
 }
 
-fn positive_limit(
-    value: Option<usize>,
-    widget: &str,
+fn positive_optional<T: Default + PartialEq>(
+    value: Option<T>,
+    location: &SettingLocation,
     field: &'static str,
-) -> Result<Option<usize>, ConfigError> {
+) -> Result<Option<T>, ConfigError> {
     match value {
-        Some(0) => Err(ConfigError::InvalidValue {
-            widget: widget.to_string(),
+        Some(amount) if amount == T::default() => Err(ConfigError::NotPositive {
+            location: location.clone(),
             field,
         }),
         other => Ok(other),
     }
 }
 
-fn positive_setting(
-    value: Option<u64>,
-    default: u64,
-    section: &str,
+fn at_most(
+    value: u64,
+    maximum: u64,
+    location: &SettingLocation,
     field: &'static str,
 ) -> Result<u64, ConfigError> {
-    match value {
-        Some(0) => Err(ConfigError::InvalidSetting {
-            section: section.to_string(),
+    if value > maximum {
+        return Err(ConfigError::TooLarge {
+            location: location.clone(),
             field,
-        }),
-        Some(amount) => Ok(amount),
-        None => Ok(default),
+            maximum,
+        });
     }
+    Ok(value)
 }
 
 pub fn config_directory() -> Result<PathBuf, ConfigError> {
@@ -717,8 +723,8 @@ mod tests {
         );
         assert_eq!(
             parse_config(&text).unwrap_err(),
-            ConfigError::ValueTooLarge {
-                widget: "a".to_string(),
+            ConfigError::TooLarge {
+                location: SettingLocation::Widget("a".to_string()),
                 field: "timeout_seconds",
                 maximum: MAXIMUM_TIMEOUT_SECONDS,
             }
@@ -730,8 +736,8 @@ mod tests {
         let text = format!("[llm]\ntimeout_seconds = {}\n", MAXIMUM_TIMEOUT_SECONDS + 1);
         assert_eq!(
             parse_config(&text).unwrap_err(),
-            ConfigError::SettingTooLarge {
-                section: "llm".to_string(),
+            ConfigError::TooLarge {
+                location: SettingLocation::Section("llm"),
                 field: "timeout_seconds",
                 maximum: MAXIMUM_TIMEOUT_SECONDS,
             }
@@ -751,8 +757,8 @@ mod tests {
             parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ninterval_seconds = 0\n");
         assert_eq!(
             result.unwrap_err(),
-            ConfigError::InvalidValue {
-                widget: "a".to_string(),
+            ConfigError::NotPositive {
+                location: SettingLocation::Widget("a".to_string()),
                 field: "interval_seconds"
             }
         );
@@ -764,10 +770,35 @@ mod tests {
             parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntimeout_seconds = 0\n");
         assert_eq!(
             result.unwrap_err(),
-            ConfigError::InvalidValue {
-                widget: "a".to_string(),
+            ConfigError::NotPositive {
+                location: SettingLocation::Widget("a".to_string()),
                 field: "timeout_seconds"
             }
+        );
+    }
+
+    #[test]
+    fn setting_errors_keep_the_user_facing_messages() {
+        let widget =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ninterval_seconds = 0\n")
+                .unwrap_err();
+        assert_eq!(
+            widget.to_string(),
+            "widget 'a': 'interval_seconds' precisa ser maior que zero"
+        );
+        let section = parse_config("[pomodoro]\nfocus_minutes = 0\n").unwrap_err();
+        assert_eq!(
+            section.to_string(),
+            "[pomodoro]: 'focus_minutes' precisa ser maior que zero"
+        );
+        let too_large = parse_config(&format!(
+            "[llm]\ntimeout_seconds = {}\n",
+            MAXIMUM_TIMEOUT_SECONDS + 1
+        ))
+        .unwrap_err();
+        assert_eq!(
+            too_large.to_string(),
+            format!("[llm]: 'timeout_seconds' não pode passar de {MAXIMUM_TIMEOUT_SECONDS}")
         );
     }
 
@@ -895,8 +926,8 @@ mod tests {
             let result = parse_config(&format!("[pomodoro]\n{field} = 0\n"));
             assert_eq!(
                 result.unwrap_err(),
-                ConfigError::InvalidSetting {
-                    section: "pomodoro".to_string(),
+                ConfigError::NotPositive {
+                    location: SettingLocation::Section("pomodoro"),
                     field: match field {
                         "focus_minutes" => "focus_minutes",
                         "short_break_minutes" => "short_break_minutes",
@@ -913,15 +944,15 @@ mod tests {
     fn zero_llm_timeout_and_non_positive_budget_are_rejected() {
         assert_eq!(
             parse_config("[llm]\ntimeout_seconds = 0\n").unwrap_err(),
-            ConfigError::InvalidSetting {
-                section: "llm".to_string(),
+            ConfigError::NotPositive {
+                location: SettingLocation::Section("llm"),
                 field: "timeout_seconds"
             }
         );
         assert_eq!(
             parse_config("[llm]\nmax_budget_usd = 0.0\n").unwrap_err(),
-            ConfigError::InvalidSetting {
-                section: "llm".to_string(),
+            ConfigError::NotPositive {
+                location: SettingLocation::Section("llm"),
                 field: "max_budget_usd"
             }
         );
@@ -934,7 +965,7 @@ mod tests {
                 "[[widgets]]\nid = \"a\"\ncommand = \"x\"\n{field} = 0\n"
             ));
             assert!(
-                matches!(result, Err(ConfigError::InvalidValue { .. })),
+                matches!(result, Err(ConfigError::NotPositive { .. })),
                 "{field}"
             );
         }
@@ -1125,8 +1156,8 @@ mod tests {
         let result = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\nmax_items = 0\n");
         assert_eq!(
             result.unwrap_err(),
-            ConfigError::InvalidValue {
-                widget: "a".to_string(),
+            ConfigError::NotPositive {
+                location: SettingLocation::Widget("a".to_string()),
                 field: "max_items"
             }
         );
