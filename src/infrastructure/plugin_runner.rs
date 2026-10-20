@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::application::launch_spec::ProviderCommand;
 use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
@@ -8,12 +8,14 @@ use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::child_environment::restrict_inherited_environment;
+use crate::infrastructure::concurrency_gate::ConcurrencyGate;
 use crate::infrastructure::plugin_protocol::parse_snapshot;
 use crate::infrastructure::process::{
     run_process, CancelFlag, HasCancelFlag, ProcessError, ProcessLimits,
 };
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
+pub const MAXIMUM_CONCURRENT_PARSES: usize = 3;
 
 const ITEM_ID_KEY: &str = "item_id";
 
@@ -22,6 +24,7 @@ pub struct PluginRunner {
     working_directory: PathBuf,
     cancel_flag: CancelFlag,
     invocation_lock: Mutex<()>,
+    parse_gate: Arc<ConcurrencyGate>,
 }
 
 impl PluginRunner {
@@ -31,7 +34,13 @@ impl PluginRunner {
             working_directory,
             cancel_flag: CancelFlag::default(),
             invocation_lock: Mutex::new(()),
+            parse_gate: Arc::new(ConcurrencyGate::new(MAXIMUM_CONCURRENT_PARSES)),
         }
+    }
+
+    pub fn with_parse_gate(mut self, parse_gate: Arc<ConcurrencyGate>) -> Self {
+        self.parse_gate = parse_gate;
+        self
     }
 
     fn run(&self, extra_args: &[&str], stdin_text: Option<&str>) -> Result<String, SourceError> {
@@ -61,6 +70,7 @@ impl PluginRunner {
 impl WidgetSource for PluginRunner {
     fn snapshot(&self) -> Result<WidgetSnapshot, SourceError> {
         let output = self.raw_snapshot_output()?;
+        let _permit = self.parse_gate.acquire();
         parse_snapshot(&output).map_err(|error| SourceError::InvalidSnapshot(error.to_string()))
     }
 }

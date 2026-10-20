@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::mpsc::{SendError, Sender};
+use std::sync::mpsc::{SendError, SyncSender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -18,7 +18,7 @@ const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
 pub type RunnerFactory = Box<dyn Fn(&WidgetLaunchSpec) -> Arc<dyn WidgetRunner> + Send + Sync>;
 
 struct UpdateSink<E> {
-    sender: Sender<E>,
+    sender: SyncSender<E>,
     into_event: fn(WidgetUpdate) -> E,
 }
 
@@ -48,7 +48,7 @@ pub struct WidgetRuntime<E> {
 impl<E: Send + 'static> WidgetRuntime<E> {
     pub fn new(
         factory: RunnerFactory,
-        sender: Sender<E>,
+        sender: SyncSender<E>,
         into_event: fn(WidgetUpdate) -> E,
         shutdown: Arc<ShutdownCoordinator>,
     ) -> Self {
@@ -159,11 +159,15 @@ mod tests {
     use crate::domain::widget::WidgetSnapshot;
 
     const RECEIVE_LIMIT: Duration = Duration::from_secs(2);
+    const TEST_QUEUE_CAPACITY: usize = 16;
+    const TRIGGERS_WITHOUT_READING: usize = 5;
+    const TRIGGER_SPACING: Duration = Duration::from_millis(50);
 
     #[derive(Default)]
     struct FakeRunner {
         request_cancels: AtomicUsize,
         cancels: AtomicUsize,
+        snapshots: AtomicUsize,
     }
 
     impl Cancellable for FakeRunner {
@@ -178,6 +182,7 @@ mod tests {
 
     impl WidgetSource for FakeRunner {
         fn snapshot(&self) -> Result<WidgetSnapshot, SourceError> {
+            self.snapshots.fetch_add(1, Ordering::SeqCst);
             Ok(snapshot_titled("fake"))
         }
     }
@@ -218,7 +223,18 @@ mod tests {
         mpsc::Receiver<WidgetUpdate>,
         Arc<ShutdownCoordinator>,
     ) {
-        let (sender, receiver) = mpsc::channel();
+        runtime_with_capacity(fake, TEST_QUEUE_CAPACITY)
+    }
+
+    fn runtime_with_capacity(
+        fake: &Arc<FakeRunner>,
+        capacity: usize,
+    ) -> (
+        WidgetRuntime<WidgetUpdate>,
+        mpsc::Receiver<WidgetUpdate>,
+        Arc<ShutdownCoordinator>,
+    ) {
+        let (sender, receiver) = mpsc::sync_channel(capacity);
         let shutdown = Arc::new(ShutdownCoordinator::new());
         let shared = Arc::clone(fake);
         let factory: RunnerFactory =
@@ -276,5 +292,21 @@ mod tests {
 
         runtime.retire(&WidgetId::new("a"));
         assert!(runtime.refresh_signal(&WidgetId::new("a")).is_none());
+    }
+
+    #[test]
+    fn a_full_event_queue_blocks_the_widget_thread_instead_of_growing() {
+        let fake = Arc::new(FakeRunner::default());
+        let (mut runtime, receiver, _shutdown) = runtime_with_capacity(&fake, 1);
+        runtime.start(&settings("a"), generation());
+
+        for _ in 0..TRIGGERS_WITHOUT_READING {
+            thread::sleep(TRIGGER_SPACING);
+            runtime.trigger_all();
+        }
+        thread::sleep(TRIGGER_SPACING);
+
+        assert!(fake.snapshots.load(Ordering::SeqCst) <= 2);
+        assert!(receiver.recv_timeout(RECEIVE_LIMIT).is_ok());
     }
 }

@@ -9,7 +9,7 @@ use crate::domain::widget::WidgetRecord;
 use crate::presentation::app_state::WidgetEntry;
 use crate::presentation::grid_layout::{visible_item_capacity, MINIMUM_BOX_HEIGHT};
 use crate::presentation::text_fit::{display_width, truncate_to_width};
-use crate::presentation::widget_view::render_blocks;
+use crate::presentation::widget_view::render_blocks_limited;
 
 const LOADING_TEXT: &str = "carregando…";
 const FAILURE_PREFIX: &str = "⚠ falha: ";
@@ -35,11 +35,6 @@ pub struct BoxContext<'a> {
     pub warning: Option<&'a str>,
 }
 
-pub struct BoxBody {
-    pub header: Vec<Line<'static>>,
-    pub blocks: Vec<Line<'static>>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureDetail {
     Hidden,
@@ -59,12 +54,11 @@ pub fn render_widget_box(frame: &mut Frame, entry: &WidgetEntry, area: Rect, con
     let block = box_block(entry, context.shortcut, context.emphasis, area.width);
     let inner = block.inner(area);
     let width = usize::from(inner.width);
-    let body = box_body(entry, width, context.now, FailureDetail::Hidden);
     let mut header = warning_lines(context.warning, width);
-    header.extend(body.header);
+    header.extend(box_header(entry, width, context.now, FailureDetail::Hidden));
     let header_rows = u16::try_from(header.len()).unwrap_or(u16::MAX);
     let capacity = visible_item_capacity(area.height.saturating_sub(header_rows), entry.max_items);
-    let blocks = clip_with_overflow(body.blocks, capacity);
+    let blocks = box_blocks(entry, width, capacity);
     let mut lines = header;
     lines.extend(dim_if_stale(blocks, entry, context.now));
     frame.render_widget(block, area);
@@ -115,23 +109,25 @@ pub fn border_color(record: &WidgetRecord, emphasis: Emphasis) -> Color {
     }
 }
 
-pub fn box_body(
+pub fn box_header(
     entry: &WidgetEntry,
     width: usize,
     now: NaiveDateTime,
     detail: FailureDetail,
-) -> BoxBody {
+) -> Vec<Line<'static>> {
     let record = &entry.record;
     match record.snapshot() {
-        None => BoxBody {
-            header: no_snapshot_lines(record, width),
-            blocks: Vec::new(),
-        },
-        Some(snapshot) => BoxBody {
-            header: failure_header(record, width, now, detail),
-            blocks: render_blocks(&snapshot.summary.display_blocks(), width),
-        },
+        None => no_snapshot_lines(record, width),
+        Some(_) => failure_header(record, width, now, detail),
     }
+}
+
+fn box_blocks(entry: &WidgetEntry, width: usize, capacity: usize) -> Vec<Line<'static>> {
+    let Some(snapshot) = entry.record.snapshot() else {
+        return Vec::new();
+    };
+    let limited = render_blocks_limited(&snapshot.summary.display_blocks(), width, capacity);
+    clip_limited(limited.lines, limited.total, capacity)
 }
 
 fn no_snapshot_lines(record: &WidgetRecord, width: usize) -> Vec<Line<'static>> {
@@ -226,14 +222,19 @@ pub fn box_title(shortcut: Option<char>, title: &str, refreshing: bool, width: u
 }
 
 pub fn clip_with_overflow(lines: Vec<Line<'static>>, capacity: usize) -> Vec<Line<'static>> {
+    let total = lines.len();
+    clip_limited(lines, total, capacity)
+}
+
+fn clip_limited(lines: Vec<Line<'static>>, total: usize, capacity: usize) -> Vec<Line<'static>> {
     if capacity == 0 {
         return Vec::new();
     }
-    if lines.len() <= capacity {
+    if total <= capacity {
         return lines;
     }
     let kept = capacity.saturating_sub(1);
-    let omitted = lines.len().saturating_sub(kept);
+    let omitted = total.saturating_sub(kept);
     let mut clipped: Vec<Line<'static>> = lines.into_iter().take(kept).collect();
     clipped.push(overflow_line(omitted));
     clipped
@@ -301,6 +302,15 @@ mod tests {
             .map(|number| line(&format!("linha {number}")))
             .collect();
         let clipped: Vec<String> = clip_with_overflow(lines, 4).iter().map(line_text).collect();
+        assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+7 itens"]);
+    }
+
+    #[test]
+    fn overflow_uses_the_total_when_only_a_prefix_was_rendered() {
+        let prefix: Vec<Line<'static>> = (1..=4)
+            .map(|number| line(&format!("linha {number}")))
+            .collect();
+        let clipped: Vec<String> = clip_limited(prefix, 10, 4).iter().map(line_text).collect();
         assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+7 itens"]);
     }
 

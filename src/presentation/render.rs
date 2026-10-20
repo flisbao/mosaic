@@ -18,9 +18,9 @@ use crate::presentation::grid_layout::{
 };
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
-    box_block, box_body, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
+    box_block, box_header, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
 };
-use crate::presentation::widget_view::render_blocks;
+use crate::presentation::widget_view::render_blocks_limited;
 
 const FALLBACK_SPAN: u16 = 1;
 const CONFIRMATION_HINT: &str = "[s] confirma  [n] cancela";
@@ -35,6 +35,10 @@ const ALERT_DISMISS_HINT: &str = "Qualquer tecla fecha";
 const WRAP_CONTINUATION_INDENT: &str = "  ";
 const SELECTION_MARKER: &str = "> ";
 const NO_SELECTION_MARKER: &str = "  ";
+const HEADING_ROWS: usize = 1;
+const WINDOW_PREALLOCATION_LIMIT: usize = 512;
+const PRINTABLE_ASCII_START: u8 = 0x20;
+const PRINTABLE_ASCII_END: u8 = 0x7f;
 
 pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDateTime) {
     let area = frame.area();
@@ -206,57 +210,170 @@ fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, conten
     );
     let inner = block.inner(content);
     let width = usize::from(inner.width);
-    let (lines, selected_row) = detail_lines(entry, state.selected_item(), width, now);
-    let scroll = selected_row.saturating_sub(usize::from(inner.height.saturating_sub(1)));
-    frame.render_widget(block, content);
-    frame.render_widget(
-        Paragraph::new(lines).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)),
-        inner,
+    let lines = detail_window(
+        entry,
+        state.selected_item(),
+        width,
+        usize::from(inner.height),
+        now,
     );
+    frame.render_widget(block, content);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn detail_lines(
+fn detail_window(
     entry: &WidgetEntry,
     selected: usize,
     width: usize,
+    height: usize,
     now: NaiveDateTime,
-) -> (Vec<Line<'static>>, usize) {
-    let header = box_body(entry, width, now, FailureDetail::Shown).header;
-    let header_height = header.len();
+) -> Vec<Line<'static>> {
+    let header = box_header(entry, width, now, FailureDetail::Shown);
     let Some(sections) = entry
         .record
         .snapshot()
-        .and_then(|snapshot| snapshot.detail.as_ref())
+        .and_then(|snapshot| snapshot.detail.as_deref())
     else {
-        return (header, 0);
+        return header;
     };
-    let (lines, selected_row) = section_lines(sections, selected, width);
-    let mut all = header;
-    all.extend(dim_if_stale(lines, entry, now));
-    (all, selected_row.saturating_add(header_height))
+    let header_height = header.len();
+    let selected_row = selected_row(sections, selected, width).saturating_add(header_height);
+    let scroll = selected_row.saturating_sub(height.saturating_sub(1));
+    let mut window: Vec<Line<'static>> = header.into_iter().skip(scroll).take(height).collect();
+    let remaining = height.saturating_sub(window.len());
+    if remaining > 0 {
+        let first_section_row = scroll.saturating_sub(header_height);
+        let section_lines = section_window(sections, selected, width, first_section_row, remaining);
+        window.extend(dim_if_stale(section_lines, entry, now));
+    }
+    window
 }
 
-fn section_lines(
+fn item_wrap_width(width: usize) -> usize {
+    width.saturating_sub(WRAP_CONTINUATION_INDENT.width())
+}
+
+fn item_height(item: &DetailItem, wrap_width: usize) -> usize {
+    match item.flag {
+        Some(flag) => wrapped_height(&flagged(Some(flag), &item.text), wrap_width),
+        None => wrapped_height(&item.text, wrap_width),
+    }
+}
+
+fn section_preamble_height(section: &DetailSection, width: usize) -> usize {
+    HEADING_ROWS + render_blocks_limited(&section.display_blocks(), width, 0).total
+}
+
+fn selected_row(sections: &[DetailSection], selected: usize, width: usize) -> usize {
+    let wrap_width = item_wrap_width(width);
+    let mut row = 0;
+    let mut first_item_of_section = 0;
+    for section in sections {
+        row += section_preamble_height(section, width);
+        let last_item_of_section = first_item_of_section + section.items.len();
+        if selected < last_item_of_section {
+            let before = selected.saturating_sub(first_item_of_section);
+            return row
+                + section.items[..before]
+                    .iter()
+                    .map(|item| item_height(item, wrap_width))
+                    .sum::<usize>();
+        }
+        row += section
+            .items
+            .iter()
+            .map(|item| item_height(item, wrap_width))
+            .sum::<usize>();
+        first_item_of_section = last_item_of_section;
+    }
+    0
+}
+
+fn section_window(
     sections: &[DetailSection],
     selected: usize,
     width: usize,
-) -> (Vec<Line<'static>>, usize) {
-    let mut lines = Vec::new();
+    start: usize,
+    count: usize,
+) -> Vec<Line<'static>> {
+    let end = start.saturating_add(count);
+    let wrap_width = item_wrap_width(width);
+    let mut window = Vec::with_capacity(count.min(WINDOW_PREALLOCATION_LIMIT));
+    let mut row = 0;
     let mut item_index = 0;
-    let mut selected_row = 0;
-    for section in sections {
-        lines.push(section_heading_line(section, width));
-        lines.extend(render_blocks(&section.display_blocks(), width));
+    'sections: for section in sections {
+        if row >= end {
+            break;
+        }
+        let mut preamble = vec![section_heading_line(section, width)];
+        preamble.extend(render_blocks_limited(&section.display_blocks(), width, usize::MAX).lines);
+        push_visible(&mut window, &mut row, preamble, start, end);
         for item in &section.items {
-            let is_selected = item_index == selected;
-            if is_selected {
-                selected_row = lines.len();
+            if row >= end {
+                break 'sections;
             }
-            lines.extend(item_lines(item, is_selected, width));
+            let is_selected = item_index == selected;
             item_index += 1;
+            let height = item_height(item, wrap_width);
+            if row + height <= start {
+                row += height;
+                continue;
+            }
+            push_visible(
+                &mut window,
+                &mut row,
+                item_lines(item, is_selected, width),
+                start,
+                end,
+            );
         }
     }
-    (lines, selected_row)
+    window
+}
+
+fn push_visible(
+    window: &mut Vec<Line<'static>>,
+    row: &mut usize,
+    lines: Vec<Line<'static>>,
+    start: usize,
+    end: usize,
+) {
+    for line in lines {
+        if *row >= start && *row < end {
+            window.push(line);
+        }
+        *row += 1;
+    }
+}
+
+fn is_printable_ascii(text: &str) -> bool {
+    text.bytes()
+        .all(|byte| (PRINTABLE_ASCII_START..PRINTABLE_ASCII_END).contains(&byte))
+}
+
+fn wrapped_height(text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 0;
+    }
+    if text.len() <= width {
+        return 1;
+    }
+    if is_printable_ascii(text) {
+        return text.len().div_ceil(width);
+    }
+    let mut lines = 1;
+    let mut used = 0;
+    let mut current_is_empty = true;
+    for character in text.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if used + character_width > width && !current_is_empty {
+            lines += 1;
+            used = 0;
+        }
+        current_is_empty = false;
+        used += character_width;
+    }
+    lines
 }
 
 fn section_heading_line(section: &DetailSection, width: usize) -> Line<'static> {
@@ -1101,6 +1218,87 @@ mod tests {
         assert_eq!(wrap_to_width("", 5), vec![String::new()]);
         assert!(wrap_to_width("abc", 0).is_empty());
         assert_eq!(wrap_to_width("日", 1), vec!["日".to_string()]);
+    }
+
+    #[test]
+    fn wrapped_height_matches_the_number_of_wrapped_lines() {
+        let texts = [
+            "",
+            "abc",
+            "abcdefghij",
+            "abcdefghijk",
+            "日本語日本語",
+            "日",
+            "a\tb\nc",
+            "ação com acentuação longa demais",
+            "x\u{0301}y\u{0301}z",
+        ];
+        for text in texts {
+            for width in 0..=12 {
+                assert_eq!(
+                    wrapped_height(text, width),
+                    wrap_to_width(text, width).len(),
+                    "{text:?} em largura {width}"
+                );
+            }
+        }
+    }
+
+    fn sections_with_items(counts: &[usize]) -> Vec<DetailSection> {
+        counts
+            .iter()
+            .enumerate()
+            .map(|(section, &count)| DetailSection {
+                heading: format!("secao {section}"),
+                items: (0..count)
+                    .map(|item| DetailItem {
+                        id: None,
+                        text: format!("item {item} da secao {section} {}", "palavra ".repeat(item)),
+                        flag: (item % 3 == 0).then_some(Flag::Warning),
+                        meta: vec![],
+                    })
+                    .collect(),
+                blocks: vec![],
+            })
+            .collect()
+    }
+
+    fn texts_of(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(plain).collect()
+    }
+
+    #[test]
+    fn section_window_is_the_same_slice_of_the_full_render() {
+        let sections = sections_with_items(&[3, 0, 5, 2]);
+        let full = texts_of(&section_window(&sections, 4, 20, 0, usize::MAX));
+        for start in 0..full.len() {
+            for count in 1..6 {
+                let window = texts_of(&section_window(&sections, 4, 20, start, count));
+                let end = (start + count).min(full.len());
+                assert_eq!(window, full[start..end], "início {start}, contagem {count}");
+            }
+        }
+    }
+
+    #[test]
+    fn selected_row_points_at_the_selected_item_marker() {
+        let sections = sections_with_items(&[3, 0, 5, 2]);
+        let full = texts_of(&section_window(&sections, 4, 20, 0, usize::MAX));
+        for selected in 0..10 {
+            let full = texts_of(&section_window(&sections, selected, 20, 0, usize::MAX));
+            let row = selected_row(&sections, selected, 20);
+            assert!(
+                full[row].starts_with(SELECTION_MARKER),
+                "item {selected}: {full:?}"
+            );
+        }
+        assert!(!full.is_empty());
+    }
+
+    #[test]
+    fn selected_row_is_zero_when_the_selection_is_out_of_range() {
+        let sections = sections_with_items(&[2]);
+        assert_eq!(selected_row(&sections, 9, 20), 0);
     }
 
     #[test]

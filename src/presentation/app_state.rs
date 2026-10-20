@@ -8,7 +8,7 @@ use crate::application::recommendation::RecommendationPlan;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::widget::{
-    ActionScope, ActionSpec, DetailItem, WidgetId, WidgetRecord, WidgetSnapshot,
+    ActionScope, ActionSpec, DetailItem, DetailSection, WidgetId, WidgetRecord, WidgetSnapshot,
 };
 use crate::presentation::key_input::KeyInput;
 use crate::presentation::shortcuts::assign_shortcuts;
@@ -286,7 +286,14 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    pub fn available_actions(&self) -> Vec<ActionSpec> {
+    fn detail_sections(&self) -> &[DetailSection] {
+        self.focused_record()
+            .and_then(WidgetRecord::usable_snapshot)
+            .and_then(|snapshot| snapshot.detail.as_deref())
+            .unwrap_or(&[])
+    }
+
+    pub fn available_actions(&self) -> Vec<&ActionSpec> {
         let Some(snapshot) = self
             .focused_record()
             .and_then(WidgetRecord::usable_snapshot)
@@ -298,7 +305,6 @@ impl AppState {
             .actions
             .iter()
             .filter(|action| action.scope == ActionScope::Widget || item_selected)
-            .cloned()
             .collect()
     }
 
@@ -381,10 +387,13 @@ impl AppState {
             KeyInput::Up => Mode::ChoosingAction {
                 selected: selected.saturating_sub(1),
             },
-            KeyInput::Enter => match self.propose(actions.get(selected)) {
-                Some(proposed) => Mode::Confirming(proposed),
-                None => Mode::Browsing,
-            },
+            KeyInput::Enter => {
+                let chosen = actions.get(selected).map(|action| (*action).clone());
+                match self.propose(chosen) {
+                    Some(proposed) => Mode::Confirming(proposed),
+                    None => Mode::Browsing,
+                }
+            }
             KeyInput::Escape | KeyInput::Character('n') => Mode::Browsing,
             _ => Mode::ChoosingAction { selected },
         })
@@ -442,8 +451,8 @@ impl AppState {
         }
     }
 
-    fn propose(&mut self, spec: Option<&ActionSpec>) -> Option<ProposedAction> {
-        let spec = spec?.clone();
+    fn propose(&mut self, spec: Option<ActionSpec>) -> Option<ProposedAction> {
+        let spec = spec?;
         let entry_index = self.focused_entry()?;
         let widget_id = self.entries.get(entry_index)?.id.clone();
         let item_id = match spec.scope {
@@ -475,7 +484,10 @@ impl AppState {
 
     fn item_count(&self) -> usize {
         if self.expanded {
-            self.detail_items().len()
+            self.detail_sections()
+                .iter()
+                .map(|section| section.items.len())
+                .sum()
         } else {
             0
         }
@@ -485,8 +497,10 @@ impl AppState {
         if !self.expanded {
             return None;
         }
-        self.detail_items()
-            .get(self.selected_item)
+        self.detail_sections()
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .nth(self.selected_item)
             .and_then(|item| item.id.clone())
     }
 }
@@ -1042,7 +1056,11 @@ mod tests {
         let mut app = app();
         press(&mut app, &[KeyInput::Enter, KeyInput::Down, character('a')]);
         assert_eq!(app.mode(), &Mode::ChoosingAction { selected: 0 });
-        let ids: Vec<String> = app.available_actions().into_iter().map(|a| a.id).collect();
+        let ids: Vec<String> = app
+            .available_actions()
+            .into_iter()
+            .map(|action| action.id.clone())
+            .collect();
         assert_eq!(ids, vec!["move".to_string(), "refresh".to_string()]);
         press(&mut app, &[KeyInput::Enter]);
         match app.mode() {
@@ -1055,7 +1073,11 @@ mod tests {
     fn grid_action_key_lists_only_widget_scoped_actions() {
         let mut app = app();
         press(&mut app, &[character('a')]);
-        let ids: Vec<String> = app.available_actions().into_iter().map(|a| a.id).collect();
+        let ids: Vec<String> = app
+            .available_actions()
+            .into_iter()
+            .map(|action| action.id.clone())
+            .collect();
         assert_eq!(ids, vec!["refresh".to_string()]);
     }
 
@@ -1181,6 +1203,14 @@ mod tests {
         assert!(matches!(app.mode(), Mode::ChoosingAction { .. }));
         app.begin_widget_refresh(&WidgetId::new("kanban"));
         assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn propose_takes_ownership_of_the_selected_action_spec() {
+        let mut app = app();
+        let selected = app.available_actions()[0].clone();
+
+        assert!(app.propose(Some(selected)).is_some());
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::application::reload::{apply_if_current, WidgetGenerations, WidgetUpda
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 use crate::domain::widget_content::AlertLevel;
 use crate::presentation::app_state::AppState;
+use crate::presentation::key_input::KeyInput;
 
 const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
@@ -19,6 +20,9 @@ pub enum AppEvent {
     WidgetUpdated(WidgetUpdate),
     ActionFinished(WidgetId, ActionNotice),
     RecommendationFinished(Result<RecommendationOutcome, LlmError>),
+    Input(KeyInput),
+    TerminalResized,
+    TerminalReadFailed(String),
 }
 
 pub struct EventContext<'a> {
@@ -67,6 +71,7 @@ pub fn apply_event(
         AppEvent::RecommendationFinished(result) => {
             apply_recommendation_result(state, context, result, now)
         }
+        AppEvent::Input(_) | AppEvent::TerminalResized | AppEvent::TerminalReadFailed(_) => {}
     }
 }
 

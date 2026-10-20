@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
+use mosaic::infrastructure::concurrency_gate::ConcurrencyGate;
 use mosaic::infrastructure::config::{
     config_directory, load_config, prepare_reload, read_installed_config, restart_sections,
     retain_restart_sections, AppConfig, ConfigError, LlmConfig, WidgetSettings,
@@ -37,7 +38,7 @@ use mosaic::infrastructure::config::{
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::build_llm_runner;
 use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
-use mosaic::infrastructure::plugin_runner::PluginRunner;
+use mosaic::infrastructure::plugin_runner::{PluginRunner, MAXIMUM_CONCURRENT_PARSES};
 use mosaic::infrastructure::priority_prompt::FilePriorityPrompt;
 use mosaic::infrastructure::recommendation_file::{
     FileRecommendationStore, NullRecommendationStore,
@@ -50,6 +51,7 @@ use mosaic::presentation::app_events::{
 };
 use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::{from_crossterm, KeyInput};
+use mosaic::presentation::redraw_policy::{clock_changes_what_is_drawn, needs_time_redraw};
 use mosaic::presentation::reload_notice::reload_notice;
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
@@ -58,7 +60,8 @@ use mosaic::presentation::tab_layout::{
 use ratatui::crossterm::event::{self, Event};
 use thiserror::Error;
 
-const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const EVENT_WAIT_LIMIT: Duration = Duration::from_millis(250);
+const EVENT_QUEUE_CAPACITY: usize = 16;
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
 const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório de estado do usuário";
 const NO_STATE_DIRECTORY_STORE_WARNING: &str =
@@ -96,7 +99,7 @@ struct Services {
 }
 
 struct EventChannel {
-    sender: Sender<AppEvent>,
+    sender: SyncSender<AppEvent>,
     receiver: mpsc::Receiver<AppEvent>,
 }
 
@@ -127,7 +130,7 @@ fn run() -> Result<(), AppError> {
     install_defaults_if_missing(&directory)?;
     let config = load_config(&directory)?;
     let termination = termination_requested()?;
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
     let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
     let (state, spans) = initial_state(&config, &services, &SystemClock);
     let mut app = App {
@@ -209,16 +212,17 @@ fn tab_placements(config: &AppConfig) -> Vec<TabPlacement> {
 fn build_services(
     config: &AppConfig,
     directory: &Path,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
     termination: Arc<AtomicBool>,
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
     let working_directory = directory.to_path_buf();
+    let parse_gate = Arc::new(ConcurrencyGate::new(MAXIMUM_CONCURRENT_PARSES));
     let factory: RunnerFactory = Box::new(move |spec| {
-        Arc::new(PluginRunner::new(
-            spec.command.clone(),
-            working_directory.clone(),
-        )) as Arc<dyn WidgetRunner>
+        Arc::new(
+            PluginRunner::new(spec.command.clone(), working_directory.clone())
+                .with_parse_gate(Arc::clone(&parse_gate)),
+        ) as Arc<dyn WidgetRunner>
     });
     let mut runtime = WidgetRuntime::new(
         factory,
@@ -319,51 +323,66 @@ fn build_notifier(config: &AppConfig, shutdown: &ShutdownCoordinator) -> Composi
 
 impl App {
     fn run_event_loop(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<(), AppError> {
+        spawn_input_reader(self.events.sender.clone());
         let mut last_tick = Instant::now();
+        let mut last_drawn = self.clock.now();
+        let mut needs_redraw = true;
         let mut alert_tracker = AlertTracker::new();
         loop {
             if should_stop(&self.services.termination) {
                 return Ok(());
             }
-            self.apply_pending_events(&mut alert_tracker);
+            let mut app_events = Vec::new();
+            match self.events.receiver.recv_timeout(EVENT_WAIT_LIMIT) {
+                Ok(app_event) => app_events.push(app_event),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            }
+            app_events.extend(self.events.receiver.try_iter());
+            needs_redraw |= !app_events.is_empty();
+            for app_event in app_events {
+                match app_event {
+                    AppEvent::Input(input) => {
+                        if let Some(Command::Quit) = self.handle_input(input) {
+                            return Ok(());
+                        }
+                    }
+                    AppEvent::TerminalResized => {}
+                    AppEvent::TerminalReadFailed(message) => {
+                        return Err(std::io::Error::other(message).into());
+                    }
+                    other => self.apply_app_event(other, &mut alert_tracker),
+                }
+            }
             let elapsed = last_tick.elapsed();
             last_tick = Instant::now();
             if let Some(alert) = self.state.advance_pomodoro(elapsed) {
                 self.services.notifier.notify(&alert);
+                needs_redraw = true;
             }
-            terminal.draw(|frame| {
-                render(frame, &self.state, self.spans.as_slice(), self.clock.now())
-            })?;
-            if !event::poll(INPUT_POLL_INTERVAL)? {
-                continue;
-            }
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            let Some(input) = from_crossterm(key) else {
-                continue;
-            };
-            if let Some(Command::Quit) = self.handle_input(input) {
-                return Ok(());
+            let now = self.clock.now();
+            let ticking = clock_changes_what_is_drawn(&self.state);
+            if needs_redraw || needs_time_redraw(last_drawn, now, ticking) {
+                terminal.draw(|frame| render(frame, &self.state, self.spans.as_slice(), now))?;
+                last_drawn = now;
+                needs_redraw = false;
             }
         }
     }
 
-    fn apply_pending_events(&mut self, alert_tracker: &mut AlertTracker) {
-        while let Ok(app_event) = self.events.receiver.try_recv() {
-            let context = EventContext {
-                generations: &self.services.generations,
-                notifier: &self.services.notifier,
-                recommendation_store: self.services.llm.as_ref().map(|llm| llm.store.as_ref()),
-            };
-            apply_event(
-                &mut self.state,
-                app_event,
-                &context,
-                alert_tracker,
-                self.clock.now(),
-            );
-        }
+    fn apply_app_event(&mut self, app_event: AppEvent, alert_tracker: &mut AlertTracker) {
+        let context = EventContext {
+            generations: &self.services.generations,
+            notifier: &self.services.notifier,
+            recommendation_store: self.services.llm.as_ref().map(|llm| llm.store.as_ref()),
+        };
+        apply_event(
+            &mut self.state,
+            app_event,
+            &context,
+            alert_tracker,
+            self.clock.now(),
+        );
     }
 
     fn handle_input(&mut self, input: KeyInput) -> Option<Command> {
@@ -392,6 +411,37 @@ impl App {
             ),
         }
         None
+    }
+}
+
+fn spawn_input_reader(sender: SyncSender<AppEvent>) {
+    thread::spawn(move || {
+        read_input_events(&sender, event::read);
+    });
+}
+
+fn read_input_events(
+    read_event_sender: &SyncSender<AppEvent>,
+    mut read_event: impl FnMut() -> std::io::Result<Event>,
+) {
+    loop {
+        let terminal_event = match read_event() {
+            Ok(terminal_event) => terminal_event,
+            Err(error) => {
+                let _ = read_event_sender.send(AppEvent::TerminalReadFailed(error.to_string()));
+                break;
+            }
+        };
+        let app_event = match terminal_event {
+            Event::Key(key) => from_crossterm(key).map(AppEvent::Input),
+            Event::Resize(_, _) => Some(AppEvent::TerminalResized),
+            _ => None,
+        };
+        if let Some(app_event) = app_event {
+            if read_event_sender.send(app_event).is_err() {
+                break;
+            }
+        }
     }
 }
 
@@ -458,7 +508,7 @@ fn spawn_action(
     action: ConfirmedAction,
     state: &mut AppState,
     services: &Services,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
 ) {
     let widget = action.widget().clone();
     let (Some(runner), Some(refresh)) = (
@@ -477,7 +527,10 @@ fn spawn_action(
     });
 }
 
-fn spawn_event_task(sender: &Sender<AppEvent>, work: impl FnOnce() -> AppEvent + Send + 'static) {
+fn spawn_event_task(
+    sender: &SyncSender<AppEvent>,
+    work: impl FnOnce() -> AppEvent + Send + 'static,
+) {
     let sender = sender.clone();
     thread::spawn(move || {
         let _ = sender.send(work());
@@ -505,7 +558,7 @@ fn request_recommendation(
     state: &mut AppState,
     services: &Services,
     clock: &dyn Clock,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
 ) {
     let Some(llm) = &services.llm else {
         state.show_notice(LLM_DISABLED_NOTICE.to_string());
@@ -537,7 +590,7 @@ fn start_recommendation(
     services: &Services,
     plan: RecommendationPlan,
     clock: &dyn Clock,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
 ) {
     let Some(llm) = &services.llm else {
         return;
@@ -563,5 +616,24 @@ fn describe_target(config: &LlmConfig) -> String {
     match &config.model {
         Some(model) => format!("{harness}/{model}"),
         None => harness.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod input_reader_tests {
+    use super::*;
+    use std::sync::mpsc::sync_channel;
+
+    #[test]
+    fn input_reader_reports_terminal_read_errors() {
+        let (sender, receiver) = sync_channel(EVENT_QUEUE_CAPACITY);
+        let mut reads = [Err(std::io::Error::other("read failed"))].into_iter();
+
+        read_input_events(&sender, || reads.next().unwrap());
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AppEvent::TerminalReadFailed(message)) if message == "read failed"
+        ));
     }
 }

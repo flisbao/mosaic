@@ -13,6 +13,41 @@ pub fn render_blocks(blocks: &[Block], width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
+pub struct LimitedLines {
+    pub lines: Vec<Line<'static>>,
+    pub total: usize,
+}
+
+/// Renderiza blocos inteiros só até juntar `limit` linhas e conta as demais sem renderizá-las
+/// quando o tipo de bloco permite. `total` é o número de linhas que `render_blocks` geraria.
+pub fn render_blocks_limited(blocks: &[Block], width: usize, limit: usize) -> LimitedLines {
+    let mut limited = LimitedLines {
+        lines: vec![],
+        total: 0,
+    };
+    if width == 0 {
+        return limited;
+    }
+    for block in blocks {
+        if limited.lines.len() >= limit {
+            limited.total += block_line_count(block, width);
+        } else {
+            let rendered = render_block(block, width);
+            limited.total += rendered.len();
+            limited.lines.extend(rendered);
+        }
+    }
+    limited
+}
+
+fn block_line_count(block: &Block, width: usize) -> usize {
+    match block {
+        Block::Lines(lines) => lines.len(),
+        Block::Rows(rows) => rows.len(),
+        Block::Stat { .. } | Block::Table { .. } => render_block(block, width).len(),
+    }
+}
+
 pub fn lines_to_plain_text(lines: &[Line]) -> Vec<String> {
     lines
         .iter()
@@ -74,6 +109,71 @@ mod tests {
             .map(|text| display_width(text))
             .max()
             .unwrap_or(0)
+    }
+
+    fn one_block_of_each_kind() -> Vec<Block> {
+        vec![
+            Block::Lines(vec![line("a", None), line("b", None), line("c", None)]),
+            Block::Rows(vec![
+                row(Some("1"), "x", &[], None),
+                row(None, "y", &[], None),
+            ]),
+            Block::Stat {
+                items: vec![StatItem {
+                    value: "1".to_string(),
+                    label: "item".to_string(),
+                    tone: Tone::Normal,
+                }],
+                hint: None,
+            },
+            Block::Table {
+                columns: vec![Column {
+                    title: "A".to_string(),
+                    align: Align::Left,
+                }],
+                rows: vec![vec![Cell {
+                    text: "x".to_string(),
+                    tone: Tone::Normal,
+                    flag: None,
+                }]],
+            },
+        ]
+    }
+
+    #[test]
+    fn limited_render_counts_every_line_of_every_block_kind() {
+        let blocks = one_block_of_each_kind();
+        let expected_total = render_blocks(&blocks, 20).len();
+        for limit in 0..=expected_total + 1 {
+            let limited = render_blocks_limited(&blocks, 20, limit);
+            assert_eq!(limited.total, expected_total, "limite {limit}");
+        }
+    }
+
+    #[test]
+    fn limited_render_keeps_a_prefix_of_the_full_render() {
+        let blocks = one_block_of_each_kind();
+        let full = plain(&blocks, 20);
+        let limited = render_blocks_limited(&blocks, 20, 2);
+        let kept = lines_to_plain_text(&limited.lines);
+        assert!(kept.len() >= 2);
+        assert_eq!(kept[..], full[..kept.len()]);
+    }
+
+    #[test]
+    fn limited_render_skips_blocks_past_the_limit() {
+        let many: Vec<WidgetLine> = (0..500).map(|_| line("x", None)).collect();
+        let blocks = [Block::Lines(many.clone()), Block::Lines(many)];
+        let limited = render_blocks_limited(&blocks, 20, 3);
+        assert_eq!(limited.lines.len(), 500);
+        assert_eq!(limited.total, 1000);
+    }
+
+    #[test]
+    fn limited_render_at_width_zero_is_empty() {
+        let limited = render_blocks_limited(&one_block_of_each_kind(), 0, 5);
+        assert!(limited.lines.is_empty());
+        assert_eq!(limited.total, 0);
     }
 
     #[test]
