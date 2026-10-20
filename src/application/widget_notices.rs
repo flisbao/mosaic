@@ -31,22 +31,18 @@ mod tests {
     }
 
     #[test]
-    fn ready_snapshot_gets_the_notice_as_first_line() {
-        let snapshot = with_interval_notice(ready(vec![]), 30).expect("snapshot pronto");
-        assert_eq!(
-            snapshot.summary.lines[0].text,
-            "intervalo ajustado para 30s"
-        );
-    }
-
-    #[test]
-    fn notice_is_a_muted_block_when_the_widget_uses_blocks() {
-        let snapshot =
-            with_interval_notice(ready(vec![Block::Lines(vec![])]), 30).expect("snapshot pronto");
-        let Block::Lines(lines) = &snapshot.summary.blocks[0] else {
-            panic!("esperava lines");
-        };
-        assert_eq!(lines[0].tone, Tone::Muted);
+    fn interval_notice_is_a_muted_lines_block_in_front() {
+        let existing = vec![Block::Lines(vec![])];
+        for blocks in [vec![], existing] {
+            let had = blocks.len();
+            let snapshot = with_interval_notice(ready(blocks), 30).expect("snapshot pronto");
+            assert_eq!(snapshot.summary.blocks.len(), had + 1);
+            let Block::Lines(lines) = &snapshot.summary.blocks[0] else {
+                panic!("esperava lines");
+            };
+            assert_eq!(lines[0].text, "intervalo ajustado para 30s");
+            assert_eq!(lines[0].tone, Tone::Muted);
+        }
     }
 
     #[test]

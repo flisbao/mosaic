@@ -125,8 +125,10 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, CheckU
 }
 
 fn check_preview(snapshot: &WidgetSnapshot) -> Vec<String> {
-    let blocks = snapshot.summary.display_blocks();
-    lines_to_plain_text(&render_blocks(&blocks, CHECK_PREVIEW_WIDTH))
+    lines_to_plain_text(&render_blocks(
+        &snapshot.summary.blocks,
+        CHECK_PREVIEW_WIDTH,
+    ))
 }
 
 pub fn run(arguments: &[String]) -> ExitCode {

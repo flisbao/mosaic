@@ -127,7 +127,7 @@ fn recommendation_is_generated_saved_and_shown_in_the_recommendation_box() {
     assert_eq!(store.load(), Some(stored.clone()));
     let snapshot = recommendation_snapshot(&stored);
     assert_eq!(snapshot.summary.title, "IA");
-    assert_eq!(snapshot.summary.lines.len(), 2);
+    assert_eq!(common::summary_line_texts(&snapshot).len(), 2);
 }
 
 #[test]

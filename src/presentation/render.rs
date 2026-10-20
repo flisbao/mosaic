@@ -555,8 +555,8 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::domain::widget::{
-        ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, SummaryLine,
-        WidgetId, WidgetRecord, WidgetSnapshot,
+        ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, WidgetId,
+        WidgetRecord, WidgetSnapshot,
     };
     use crate::presentation::app_state::{AppState, TabView, WidgetEntry};
     use crate::presentation::key_input::KeyInput;
@@ -625,19 +625,25 @@ mod tests {
         assert_eq!(notice_row(Rect::new(0, 0, 40, 1)), None);
     }
 
-    fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
+    fn snapshot(title: &str, lines: Vec<blocks::lines::WidgetLine>) -> WidgetSnapshot {
+        let summary_blocks = if lines.is_empty() {
+            vec![]
+        } else {
+            vec![blocks::Block::Lines(lines)]
+        };
         WidgetSnapshot {
             summary: Summary {
-                lines,
+                blocks: summary_blocks,
                 ..Summary::titled(title)
             },
             ..WidgetSnapshot::titled(title)
         }
     }
 
-    fn plain_line(text: &str) -> SummaryLine {
-        SummaryLine {
+    fn plain_line(text: &str) -> blocks::lines::WidgetLine {
+        blocks::lines::WidgetLine {
             text: text.to_string(),
+            tone: widget_content::Tone::Normal,
             flag: None,
         }
     }
@@ -1030,9 +1036,9 @@ mod tests {
 
     #[test]
     fn flag_symbol_is_rendered_before_line_text() {
-        let line = SummaryLine {
-            text: "inbox 3".to_string(),
+        let line = blocks::lines::WidgetLine {
             flag: Some(Flag::Updated),
+            ..plain_line("inbox 3")
         };
         let state = state_with(vec![entry("kanban", ready(snapshot("Kanban", vec![line])))]);
         assert!(screen(&state, 100, 30).contains("● inbox 3"));
@@ -1312,7 +1318,6 @@ mod tests {
                 summary: Summary {
                     blocks: vec![],
                     title: "IA".to_string(),
-                    lines: vec![],
                 },
                 detail: Some(vec![DetailSection {
                     blocks: vec![],
@@ -1431,16 +1436,16 @@ mod tests {
     }
 
     #[test]
-    fn legacy_lines_still_render_exactly_as_before() {
+    fn summary_lines_render_with_and_without_flags() {
         let state = state_with(vec![entry(
             "kanban",
             ready(snapshot(
                 "Kanban",
                 vec![
                     plain_line("inbox 3"),
-                    SummaryLine {
-                        text: "atenção".to_string(),
+                    blocks::lines::WidgetLine {
                         flag: Some(Flag::Attention),
+                        ..plain_line("atenção")
                     },
                 ],
             )),

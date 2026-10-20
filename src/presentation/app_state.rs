@@ -572,7 +572,6 @@ mod tests {
                 summary: Summary {
                     blocks: vec![],
                     title: "Kanban".to_string(),
-                    lines: vec![],
                 },
                 detail: Some(vec![DetailSection {
                     blocks: vec![],
@@ -1223,7 +1222,6 @@ mod tests {
             summary: Summary {
                 blocks: vec![],
                 title: "Kanban".to_string(),
-                lines: vec![],
             },
             detail: None,
             actions: vec![],

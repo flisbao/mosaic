@@ -144,7 +144,6 @@ mod tests {
                 summary: Summary {
                     blocks: vec![],
                     title: "Kanban".to_string(),
-                    lines: vec![],
                 },
                 detail: Some(
                     sections

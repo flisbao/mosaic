@@ -2,8 +2,8 @@ use serde_json::{Map, Value};
 
 use crate::domain::blocks::Block;
 use crate::domain::widget::{
-    ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, SummaryLine,
-    WidgetSnapshot, MAXIMUM_MINI_TEXT_CHARACTERS, MAXIMUM_MINI_VALUE_CHARACTERS,
+    ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, WidgetSnapshot,
+    MAXIMUM_MINI_TEXT_CHARACTERS, MAXIMUM_MINI_VALUE_CHARACTERS,
 };
 use crate::domain::widget_content::{
     clean_text, clean_text_limited, Alert, AlertLevel, Tone, MAXIMUM_TEXT_CHARACTERS,
@@ -18,7 +18,6 @@ pub const MAXIMUM_ALERT_ID_CHARACTERS: usize = 100;
 pub const MAXIMUM_ITEM_ID_CHARACTERS: usize = 200;
 pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
 pub const MAXIMUM_BLOCKS_PER_WIDGET: usize = 20;
-pub const MAXIMUM_LEGACY_LINES: usize = 200;
 pub const MAXIMUM_SECTIONS: usize = 100;
 pub const MAXIMUM_ITEMS_PER_SECTION: usize = 1000;
 pub const MAXIMUM_ACTIONS: usize = 100;
@@ -30,7 +29,7 @@ const NOT_TEXT_IGNORED_MESSAGE: &str = "precisa ser texto; ignorado";
 const NOT_A_LIST_MESSAGE: &str = "precisa ser uma lista";
 const MISSING_FIELD_MESSAGE: &str = "campo obrigatório ausente";
 const ROOT_KEYS: [&str; 6] = ["protocol", "summary", "detail", "actions", "alerts", "mini"];
-const SUMMARY_KEYS: [&str; 3] = ["title", "lines", "blocks"];
+const SUMMARY_KEYS: [&str; 2] = ["title", "blocks"];
 const DETAIL_KEYS: [&str; 1] = ["sections"];
 const SECTION_KEYS: [&str; 3] = ["heading", "items", "blocks"];
 const ITEM_KEYS: [&str; 4] = ["id", "text", "flag", "meta"];
@@ -66,7 +65,6 @@ pub fn parse_snapshot_report(json: &str) -> Result<ParsedSnapshot, ProtocolError
     reader.unknown_fields(summary_object, &SUMMARY_KEYS, "summary");
     let summary = Summary {
         title,
-        lines: reader.legacy_lines(summary_object),
         blocks: reader.blocks(summary_object, "summary"),
     };
     let snapshot = WidgetSnapshot {
@@ -229,10 +227,9 @@ impl Reader {
     fn unsupported_protocol(mut self, title: String, version: u64) -> ParsedSnapshot {
         self.warning("protocol", &unsupported_protocol_text(version));
         let mut snapshot = WidgetSnapshot::titled(title);
-        snapshot.summary.lines = vec![SummaryLine {
-            text: unsupported_protocol_text(version),
-            flag: None,
-        }];
+        snapshot
+            .summary
+            .put_notice_first(unsupported_protocol_text(version), Tone::Normal, None);
         ParsedSnapshot {
             snapshot,
             problems: self.problems,
@@ -395,25 +392,6 @@ impl Reader {
             return None;
         }
         Some(text)
-    }
-
-    fn legacy_lines(&mut self, summary: &Map<String, Value>) -> Vec<SummaryLine> {
-        let Some(entries) = self.list(summary, "lines", "summary") else {
-            return vec![];
-        };
-        self.parse_each(
-            entries,
-            MAXIMUM_LEGACY_LINES,
-            "summary.lines",
-            Self::legacy_line,
-        )
-    }
-
-    fn legacy_line(&mut self, entry: &Value, path: &str) -> Option<SummaryLine> {
-        let object = self.object_entry(entry, path)?;
-        let text = self.required_text(object, "text", path)?;
-        let flag = self.flag(object, path);
-        Some(SummaryLine { text, flag })
     }
 
     fn detail(&mut self, root: &Map<String, Value>) -> Option<Vec<DetailSection>> {
@@ -614,6 +592,19 @@ mod tests {
         parse_snapshot_report(json).unwrap()
     }
 
+    fn summary_lines(parsed: &ParsedSnapshot) -> Vec<&WidgetLine> {
+        parsed
+            .snapshot
+            .summary
+            .blocks
+            .iter()
+            .flat_map(|block| match block {
+                Block::Lines(lines) => lines.iter(),
+                _ => [].iter(),
+            })
+            .collect()
+    }
+
     fn paths(parsed: &ParsedSnapshot, severity: Severity) -> Vec<String> {
         parsed
             .problems
@@ -642,15 +633,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_snapshot_is_valid_without_problems() {
+    fn snapshot_with_detail_and_actions_is_valid_without_problems() {
         let parsed = report(
-            r#"{"summary":{"title":"K","lines":[{"text":"x","flag":"updated"}]},
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x","flag":"updated"}]}]},
                 "detail":{"sections":[{"heading":"h","items":[
                     {"id":"a","text":"A","flag":"attention","meta":{"p":"alta"}}]}]},
                 "actions":[{"id":"move","label":"Mover","applies_to":"item","params":{"to":"done"}}]}"#,
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
-        assert_eq!(parsed.snapshot.summary.lines[0].flag, Some(Flag::Updated));
+        assert_eq!(summary_lines(&parsed)[0].flag, Some(Flag::Updated));
         let item = &parsed.snapshot.detail.unwrap()[0].items[0];
         assert_eq!(item.id.as_deref(), Some("a"));
         assert_eq!(item.meta, vec![("p".to_string(), "alta".to_string())]);
@@ -678,10 +669,13 @@ mod tests {
 
     #[test]
     fn protocol_two_asks_to_update() {
-        let parsed = report(r#"{"protocol":2,"summary":{"title":"K","lines":[{"text":"x"}]}}"#);
-        assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+        let parsed = report(
+            r#"{"protocol":2,"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x"}]}]}}"#,
+        );
+        assert_eq!(parsed.snapshot.summary.blocks.len(), 1);
+        assert_eq!(summary_lines(&parsed).len(), 1);
         assert_eq!(
-            parsed.snapshot.summary.lines[0].text,
+            summary_lines(&parsed)[0].text,
             "este widget exige o protocolo 2; atualize o mosaic"
         );
         assert_eq!(parsed.snapshot.summary.title, "K");
@@ -727,12 +721,12 @@ mod tests {
     #[test]
     fn texts_are_cleaned() {
         let parsed = report(
-            "{\"summary\":{\"title\":\"A\\u001b[0m\\n B\",\"lines\":[{\"text\":\"x\\u202ey\\u0000\"}]},\
+            "{\"summary\":{\"title\":\"A\\u001b[0m\\n B\",\"blocks\":[{\"type\":\"lines\",\"lines\":[{\"text\":\"x\\u202ey\\u0000\"}]}]},\
               \"detail\":{\"sections\":[{\"heading\":\"h\\tz\",\"items\":[{\"text\":\"\\u001bT\"}]}]},\
               \"alerts\":[{\"id\":\"1\",\"title\":\"t\\u001b\",\"body\":\"b\\n\\nc\"}]}",
         );
         assert_eq!(parsed.snapshot.summary.title, "A[0m B");
-        assert_eq!(parsed.snapshot.summary.lines[0].text, "xy");
+        assert_eq!(summary_lines(&parsed)[0].text, "xy");
         let section = &parsed.snapshot.detail.unwrap()[0];
         assert_eq!(section.heading, "h z");
         assert_eq!(section.items[0].text, "T");
@@ -770,7 +764,7 @@ mod tests {
 
     #[test]
     fn missing_summary_title_is_a_protocol_error() {
-        assert!(parse_snapshot_report(r#"{"summary":{"lines":[]}}"#).is_err());
+        assert!(parse_snapshot_report(r#"{"summary":{"blocks":[]}}"#).is_err());
         assert!(parse_snapshot_report(r#"{"summary":{"title":3}}"#).is_err());
         assert!(parse_snapshot_report(r#"{"detail":{}}"#).is_err());
     }
@@ -790,23 +784,23 @@ mod tests {
     }
 
     #[test]
-    fn malformed_legacy_entries_are_errors_with_paths() {
+    fn malformed_entries_are_errors_with_paths() {
         let parsed = report(
-            r#"{"summary":{"title":"K","lines":[{"text":"ok"},{"flag":"updated"},3]},
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"ok"},{"flag":"updated"},3]}]},
                 "detail":{"sections":[{"heading":"h","items":[{"id":"a"}]}, 7]},
                 "actions":[{"id":"a"}]}"#,
         );
         assert_eq!(
             paths(&parsed, Severity::Error),
             vec![
-                "summary.lines[1].text",
-                "summary.lines[2]",
+                "summary.blocks[0].lines[1].text",
+                "summary.blocks[0].lines[2]",
                 "detail.sections[0].items[0].text",
                 "detail.sections[1]",
                 "actions[0].label"
             ]
         );
-        assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+        assert!(parsed.snapshot.summary.blocks.is_empty());
     }
 
     fn mini_report(mini_json: &str) -> ParsedSnapshot {
@@ -845,10 +839,11 @@ mod tests {
 
     #[test]
     fn mini_without_value_is_an_error_and_is_dropped_but_summary_survives() {
-        let parsed =
-            report(r#"{"summary":{"title":"K","lines":[{"text":"x"}]},"mini":{"text":"tarefas"}}"#);
+        let parsed = report(
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x"}]}]},"mini":{"text":"tarefas"}}"#,
+        );
         assert_eq!(parsed.snapshot.mini, None);
-        assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+        assert_eq!(summary_lines(&parsed).len(), 1);
         assert_eq!(paths(&parsed, Severity::Error), vec!["mini.value"]);
     }
 
@@ -910,10 +905,10 @@ mod tests {
     #[test]
     fn mini_as_array_is_a_type_error_and_summary_survives() {
         let parsed = report(
-            r#"{"summary":{"title":"K","lines":[{"text":"x"}]},"mini":[{"value":"1","text":"t"}]}"#,
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x"}]}]},"mini":[{"value":"1","text":"t"}]}"#,
         );
         assert_eq!(parsed.snapshot.mini, None);
-        assert_eq!(parsed.snapshot.summary.lines.len(), 1);
+        assert_eq!(summary_lines(&parsed).len(), 1);
         assert_eq!(paths(&parsed, Severity::Error), vec!["mini"]);
     }
 
@@ -1183,16 +1178,12 @@ mod tests {
     }
 
     #[test]
-    fn blocks_take_precedence_over_summary_lines() {
-        let parsed = report(
-            r#"{"summary":{"title":"K","lines":[{"text":"velho"}],
-                "blocks":[{"type":"lines","lines":[{"text":"novo"}]}]}}"#,
-        );
-        let displayed = parsed.snapshot.summary.display_blocks();
-        let Block::Lines(lines) = &displayed[0] else {
-            panic!("esperava lines");
-        };
-        assert_eq!(lines[0].text, "novo");
+    fn legacy_summary_lines_are_an_unknown_field() {
+        let parsed = report(r#"{"summary":{"title":"K","lines":[{"text":"x"}]}}"#);
+        assert!(parsed.snapshot.summary.blocks.is_empty());
+        assert_eq!(paths(&parsed, Severity::Warning), vec!["summary.lines"]);
+        assert_eq!(parsed.problems[0].message, "campo desconhecido");
+        assert!(paths(&parsed, Severity::Error).is_empty());
     }
 
     fn cell(text: &str) -> Cell {
@@ -1416,23 +1407,20 @@ mod tests {
     }
 
     #[test]
-    fn legacy_lists_are_capped_with_warnings() {
-        let lines = vec![r#"{"text":"x"}"#; MAXIMUM_LEGACY_LINES + 1].join(",");
+    fn lists_are_capped_with_warnings() {
         let sections = vec![r#"{"heading":"h"}"#; MAXIMUM_SECTIONS + 1].join(",");
         let items = vec![r#"{"text":"i"}"#; MAXIMUM_ITEMS_PER_SECTION + 1].join(",");
         let actions = vec![r#"{"id":"a","label":"A"}"#; MAXIMUM_ACTIONS + 1].join(",");
         let parsed = report(&format!(
-            r#"{{"summary":{{"title":"t","lines":[{lines}]}},
+            r#"{{"summary":{{"title":"t"}},
                 "detail":{{"sections":[{sections},{{"heading":"x","items":[{items}]}}]}},
                 "actions":[{actions}]}}"#
         ));
-        assert_eq!(parsed.snapshot.summary.lines.len(), MAXIMUM_LEGACY_LINES);
         let sections = parsed.snapshot.detail.as_ref().unwrap();
         assert_eq!(sections.len(), MAXIMUM_SECTIONS);
         assert_eq!(parsed.snapshot.actions.len(), MAXIMUM_ACTIONS);
         let mut warned = paths(&parsed, Severity::Warning);
         warned.sort();
-        assert!(warned.contains(&"summary.lines".to_string()), "{warned:?}");
         assert!(
             warned.contains(&"detail.sections".to_string()),
             "{warned:?}"

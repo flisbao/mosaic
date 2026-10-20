@@ -88,7 +88,6 @@ mod tests {
                 summary: Summary {
                     blocks: vec![],
                     title: "Kanban".to_string(),
-                    lines: vec![],
                 },
                 detail: Some(vec![DetailSection {
                     heading: "Tarefas".to_string(),

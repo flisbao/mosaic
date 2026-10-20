@@ -141,18 +141,6 @@
       "required": ["title"],
       "properties": {
         "title": { "$ref": "#/$defs/text" },
-        "lines": {
-          "type": "array",
-          "description": "Formato legado; ignorado quando `blocks` existe.",
-          "items": {
-            "type": "object",
-            "required": ["text"],
-            "properties": {
-              "text": { "$ref": "#/$defs/text" },
-              "flag": { "$ref": "#/$defs/flag" }
-            }
-          }
-        },
         "blocks": { "$ref": "#/$defs/blocks" }
       }
     },

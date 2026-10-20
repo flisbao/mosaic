@@ -35,7 +35,6 @@ fn instant() -> NaiveDateTime {
 fn plain_summary(title: &str, blocks: Vec<Block>) -> Summary {
     Summary {
         title: title.to_string(),
-        lines: vec![],
         blocks,
     }
 }

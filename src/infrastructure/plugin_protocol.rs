@@ -69,16 +69,32 @@ fn notice_label(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::blocks::{lines::WidgetLine, Block};
     use crate::domain::widget::{ActionScope, Flag};
+    use crate::infrastructure::protocol_report::MAXIMUM_BLOCKS_PER_WIDGET;
+
+    fn summary_lines(snapshot: &WidgetSnapshot) -> Vec<&WidgetLine> {
+        snapshot
+            .summary
+            .blocks
+            .iter()
+            .flat_map(|block| match block {
+                Block::Lines(lines) => lines.iter(),
+                _ => [].iter(),
+            })
+            .collect()
+    }
 
     #[test]
     fn parses_summary_only_snapshot() {
         let snapshot =
-            parse_snapshot(r#"{"summary":{"title":"Kanban","lines":[{"text":"inbox 3"}]}}"#)
-                .unwrap();
+            parse_snapshot(
+            r#"{"summary":{"title":"Kanban","blocks":[{"type":"lines","lines":[{"text":"inbox 3"}]}]}}"#,
+        )
+        .unwrap();
         assert_eq!(snapshot.summary.title, "Kanban");
-        assert_eq!(snapshot.summary.lines[0].text, "inbox 3");
-        assert_eq!(snapshot.summary.lines[0].flag, None);
+        assert_eq!(summary_lines(&snapshot)[0].text, "inbox 3");
+        assert_eq!(summary_lines(&snapshot)[0].flag, None);
         assert_eq!(snapshot.detail, None);
         assert!(snapshot.actions.is_empty());
     }
@@ -86,13 +102,13 @@ mod tests {
     #[test]
     fn parses_detail_items_with_ids_and_flags() {
         let snapshot = parse_snapshot(
-            r#"{"summary":{"title":"K","lines":[{"text":"x","flag":"updated"}]},
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x","flag":"updated"}]}]},
                 "detail":{"sections":[{"heading":"inbox","items":[
                     {"id":"inbox/a.md","text":"Tarefa A","flag":"attention"},
                     {"text":"sem id"}]}]}}"#,
         )
         .unwrap();
-        assert_eq!(snapshot.summary.lines[0].flag, Some(Flag::Updated));
+        assert_eq!(summary_lines(&snapshot)[0].flag, Some(Flag::Updated));
         let sections = snapshot.detail.unwrap();
         assert_eq!(sections[0].heading, "inbox");
         assert_eq!(sections[0].items[0].id.as_deref(), Some("inbox/a.md"));
@@ -103,7 +119,7 @@ mod tests {
     #[test]
     fn parses_item_action_with_params() {
         let snapshot = parse_snapshot(
-            r#"{"summary":{"title":"K","lines":[]},
+            r#"{"summary":{"title":"K","blocks":[]},
                 "actions":[{"id":"move","label":"Mover","description":"Mover para done",
                             "applies_to":"item","params":{"to":"done"}},
                            {"id":"refresh","label":"Atualizar"}]}"#,
@@ -121,7 +137,7 @@ mod tests {
     #[test]
     fn parses_item_meta_in_order() {
         let snapshot = parse_snapshot(
-            r#"{"summary":{"title":"K","lines":[]},
+            r#"{"summary":{"title":"K","blocks":[]},
                 "detail":{"sections":[{"heading":"h","items":[
                     {"text":"x","meta":{"prioridade":"alta","parado_ha":"2h30"}}]}]}}"#,
         )
@@ -139,7 +155,7 @@ mod tests {
     #[test]
     fn missing_meta_is_empty() {
         let snapshot = parse_snapshot(
-            r#"{"summary":{"title":"K","lines":[]},
+            r#"{"summary":{"title":"K","blocks":[]},
                 "detail":{"sections":[{"heading":"h","items":[{"text":"x"}]}]}}"#,
         )
         .unwrap();
@@ -149,7 +165,7 @@ mod tests {
     #[test]
     fn non_text_meta_values_are_ignored() {
         let snapshot = parse_snapshot(
-            r#"{"summary":{"title":"K","lines":[]},
+            r#"{"summary":{"title":"K","blocks":[]},
                 "detail":{"sections":[{"heading":"h","items":[
                     {"text":"x","meta":{"a":"x","b":3}}]}]}}"#,
         )
@@ -161,10 +177,10 @@ mod tests {
     #[test]
     fn unknown_flag_is_ignored() {
         let snapshot = parse_snapshot(
-            r#"{"summary":{"title":"K","lines":[{"text":"x","flag":"explosion"}]}}"#,
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x","flag":"explosion"}]}]}}"#,
         )
         .unwrap();
-        assert_eq!(snapshot.summary.lines[0].flag, None);
+        assert_eq!(summary_lines(&snapshot)[0].flag, None);
     }
 
     #[test]
@@ -175,30 +191,31 @@ mod tests {
 
     #[test]
     fn missing_summary_title_is_an_error() {
-        assert!(parse_snapshot(r#"{"summary":{"lines":[]}}"#).is_err());
+        assert!(parse_snapshot(r#"{"summary":{"blocks":[]}}"#).is_err());
     }
 
     #[test]
     fn errors_become_warning_lines_at_the_top_of_the_summary() {
-        let snapshot =
-            parse_snapshot(r#"{"protocol":"x","summary":{"title":"K","lines":[{"text":"ok"}]}}"#)
-                .unwrap();
-        let first = &snapshot.summary.lines[0];
+        let snapshot = parse_snapshot(
+            r#"{"protocol":"x","summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"ok"}]}]}}"#,
+        )
+        .unwrap();
+        let first = &summary_lines(&snapshot)[0];
         assert_eq!(
             first.text,
             "bloco inválido: protocol: precisa ser um número inteiro positivo"
         );
         assert_eq!(first.flag, Some(Flag::Attention));
-        assert_eq!(snapshot.summary.lines[1].text, "ok");
+        assert_eq!(summary_lines(&snapshot)[1].text, "ok");
     }
 
     #[test]
     fn mini_errors_are_labelled_as_mini_not_as_block() {
         let snapshot = parse_snapshot(
-            r#"{"summary":{"title":"K","lines":[{"text":"ok"}]},"mini":{"value":" ","text":"t"}}"#,
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"ok"}]}]},"mini":{"value":" ","text":"t"}}"#,
         )
         .unwrap();
-        let first = &snapshot.summary.lines[0];
+        let first = &summary_lines(&snapshot)[0];
         assert_eq!(
             first.text,
             "mini inválido: mini.value: precisa ter conteúdo"
@@ -209,21 +226,29 @@ mod tests {
     #[test]
     fn protocol_above_supported_shows_only_the_update_notice() {
         let snapshot = parse_snapshot(r#"{"protocol":2,"summary":{"title":"K"}}"#).unwrap();
-        assert_eq!(snapshot.summary.lines.len(), 1);
-        assert!(snapshot.summary.lines[0].text.contains("protocolo 2"));
+        assert_eq!(snapshot.summary.blocks.len(), 1);
+        assert_eq!(summary_lines(&snapshot).len(), 1);
+        assert!(summary_lines(&snapshot)[0].text.contains("protocolo 2"));
     }
 
     #[test]
     fn many_errors_are_summarised_in_a_bounded_number_of_notices() {
         let broken = vec!["1"; 5000].join(",");
         let json = format!(
-            r#"{{"summary":{{"title":"K","lines":[{broken}],
-                "blocks":[{{"type":"lines","lines":[{{"text":"ok"}}]}}]}}}}"#
+            r#"{{"summary":{{"title":"K","blocks":[{broken},
+                {{"type":"lines","lines":[{{"text":"ok"}}]}}]}}}}"#
         );
         let started = std::time::Instant::now();
         let snapshot = parse_snapshot(&json).unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
-        assert!(snapshot.summary.blocks.len() <= 1 + MAXIMUM_ERROR_NOTICES);
-        assert!(snapshot.summary.lines.len() <= MAXIMUM_ERROR_NOTICES);
+        assert!(snapshot.summary.blocks.len() <= MAXIMUM_BLOCKS_PER_WIDGET + MAXIMUM_ERROR_NOTICES);
+        assert!(summary_lines(&snapshot).len() <= MAXIMUM_ERROR_NOTICES);
+    }
+
+    #[test]
+    fn error_notices_are_added_to_a_summary_without_blocks() {
+        let snapshot = parse_snapshot(r#"{"protocol":"x","summary":{"title":"K"}}"#).unwrap();
+        assert_eq!(snapshot.summary.blocks.len(), 1);
+        assert_eq!(summary_lines(&snapshot)[0].flag, Some(Flag::Attention));
     }
 }

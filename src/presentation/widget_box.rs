@@ -126,7 +126,7 @@ fn box_blocks(entry: &WidgetEntry, width: usize, capacity: usize) -> Vec<Line<'s
     let Some(snapshot) = entry.record.snapshot() else {
         return Vec::new();
     };
-    let limited = render_blocks_limited(&snapshot.summary.display_blocks(), width, capacity);
+    let limited = render_blocks_limited(&snapshot.summary.blocks, width, capacity);
     clip_limited(limited.lines, limited.total, capacity)
 }
 

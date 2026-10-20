@@ -19,7 +19,7 @@ pub fn morning_now() -> NaiveDateTime {
 pub fn summary_line_texts(snapshot: &WidgetSnapshot) -> Vec<String> {
     snapshot
         .summary
-        .display_blocks()
+        .blocks
         .iter()
         .filter_map(|block| match block {
             Block::Lines(lines) => Some(lines),
