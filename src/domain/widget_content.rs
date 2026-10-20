@@ -1,6 +1,26 @@
-const ELLIPSIS: char = '…';
+pub const ELLIPSIS: char = '…';
+pub const MAXIMUM_TEXT_CHARACTERS: usize = 500;
 
-pub const TONE_NAMES: [&str; 6] = ["normal", "muted", "ok", "warn", "danger", "current"];
+const TONES: [(&str, Tone); 6] = [
+    ("normal", Tone::Normal),
+    ("muted", Tone::Muted),
+    ("ok", Tone::Ok),
+    ("warn", Tone::Warn),
+    ("danger", Tone::Danger),
+    ("current", Tone::Current),
+];
+
+pub const TONE_NAMES: [&str; 6] = tone_names();
+
+const fn tone_names() -> [&'static str; 6] {
+    let mut names = [""; 6];
+    let mut index = 0;
+    while index < TONES.len() {
+        names[index] = TONES[index].0;
+        index += 1;
+    }
+    names
+}
 
 const FORMAT_CHARACTER_RANGES: [(u32, u32); 19] = [
     (0x00AD, 0x00AD),
@@ -36,15 +56,10 @@ pub enum Tone {
 
 impl Tone {
     pub fn parse(text: &str) -> Option<Tone> {
-        match text {
-            "normal" => Some(Tone::Normal),
-            "muted" => Some(Tone::Muted),
-            "ok" => Some(Tone::Ok),
-            "warn" => Some(Tone::Warn),
-            "danger" => Some(Tone::Danger),
-            "current" => Some(Tone::Current),
-            _ => None,
-        }
+        TONES
+            .iter()
+            .find(|(name, _)| *name == text)
+            .map(|(_, tone)| *tone)
     }
 }
 
@@ -84,19 +99,26 @@ pub fn clean_text(text: &str) -> String {
         })
         .filter(|&character| !character.is_control() && !is_format_character(character))
         .collect();
-    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+    collapse_whitespace(&spaced)
 }
 
-pub fn clean_text_limited(text: &str, limit: usize) -> String {
-    let cleaned = clean_text(text);
-    if cleaned.chars().count() <= limit {
-        return cleaned;
+pub fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn truncate_characters(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
     }
-    let mut truncated: String = cleaned.chars().take(limit.saturating_sub(1)).collect();
+    let mut truncated: String = text.chars().take(limit.saturating_sub(1)).collect();
     if limit > 0 {
         truncated.push(ELLIPSIS);
     }
     truncated
+}
+
+pub fn clean_text_limited(text: &str, limit: usize) -> String {
+    truncate_characters(&clean_text(text), limit)
 }
 
 #[cfg(test)]
@@ -111,6 +133,29 @@ mod tests {
         assert_eq!(Tone::parse("danger"), Some(Tone::Danger));
         assert_eq!(Tone::parse("Danger"), None);
         assert_eq!(Tone::parse("rosa"), None);
+    }
+
+    #[test]
+    fn tone_names_follow_the_declaration_order() {
+        assert_eq!(
+            TONE_NAMES,
+            ["normal", "muted", "ok", "warn", "danger", "current"]
+        );
+    }
+
+    #[test]
+    fn truncate_characters_cuts_by_characters_and_ends_with_ellipsis() {
+        assert_eq!(truncate_characters("abcdef", 4), "abc…");
+        assert_eq!(truncate_characters("abcd", 4), "abcd");
+        assert_eq!(truncate_characters("日本語日本語", 3), "日本…");
+        assert_eq!(truncate_characters("abc", 0), "");
+        assert_eq!(truncate_characters("", 0), "");
+    }
+
+    #[test]
+    fn collapse_whitespace_joins_words_with_single_spaces() {
+        assert_eq!(collapse_whitespace("  a \n b\t\tc  "), "a b c");
+        assert_eq!(collapse_whitespace("   "), "");
     }
 
     #[test]

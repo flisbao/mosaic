@@ -3,9 +3,8 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 use crate::domain::widget::Flag;
-use crate::domain::widget_content::Tone;
+use crate::domain::widget_content::{Tone, ELLIPSIS};
 
-const ELLIPSIS: char = '…';
 pub const TAG_SEPARATOR: &str = " ";
 
 pub type Piece = (String, Style);

@@ -1,6 +1,7 @@
 use chrono::NaiveDateTime;
 use thiserror::Error;
 
+use crate::application::ports::Cancellable;
 use crate::application::recommendation::RecommendationPlan;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +21,10 @@ pub enum LlmError {
 pub trait LlmRunner: Send + Sync {
     fn run(&self, request: &LlmRequest) -> Result<String, LlmError>;
 }
+
+pub trait CancellableLlmRunner: LlmRunner + Cancellable {}
+
+impl<T: LlmRunner + Cancellable> CancellableLlmRunner for T {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredRecommendation {
@@ -78,7 +83,7 @@ pub fn execute_recommendation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
+    use crate::test_support::morning_now as now;
     use std::sync::Mutex;
 
     struct FakeRunner {
@@ -128,13 +133,6 @@ mod tests {
         fn save(&self, _recommendation: &StoredRecommendation) -> Result<(), StoreError> {
             Err(StoreError::Failed("disco cheio".to_string()))
         }
-    }
-
-    fn now() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 17)
-            .unwrap()
-            .and_hms_opt(8, 30, 0)
-            .unwrap()
     }
 
     fn plan() -> RecommendationPlan {

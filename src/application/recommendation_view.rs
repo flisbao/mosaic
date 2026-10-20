@@ -1,7 +1,6 @@
 use crate::application::llm::StoredRecommendation;
 use crate::domain::widget::{DetailItem, DetailSection, Summary, SummaryLine, WidgetSnapshot};
 
-pub const RECOMMENDATION_WIDGET_ID: &str = "ia";
 pub const SUMMARY_LINE_LIMIT: usize = 8;
 
 const RECOMMENDATION_TITLE: &str = "IA";

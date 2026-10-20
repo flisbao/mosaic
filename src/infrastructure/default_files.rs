@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::infrastructure::app_paths::PRIORITY_PROMPT_RELATIVE_PATH;
 use crate::infrastructure::config::{config_file_path, ConfigError};
 
 const PLUGINS_DIRECTORY_NAME: &str = "plugins";
@@ -95,8 +96,6 @@ priority_prompt = "prompts/prioridade.md"
 "#;
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
-const PROMPTS_DIRECTORY_NAME: &str = "prompts";
-const PRIORITY_PROMPT_FILE_NAME: &str = "prioridade.md";
 
 const BUNDLED_PLUGINS: [(&str, &str); 6] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
@@ -126,9 +125,10 @@ pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError
         let plugin_path = plugins_directory.join(name);
         fs::write(&plugin_path, content).map_err(ConfigError::io(&plugin_path))?;
     }
-    let prompts_directory = directory.join(PROMPTS_DIRECTORY_NAME);
-    fs::create_dir_all(&prompts_directory).map_err(ConfigError::io(&prompts_directory))?;
-    let prompt_path = prompts_directory.join(PRIORITY_PROMPT_FILE_NAME);
+    let prompt_path = directory.join(PRIORITY_PROMPT_RELATIVE_PATH);
+    if let Some(prompts_directory) = prompt_path.parent() {
+        fs::create_dir_all(prompts_directory).map_err(ConfigError::io(prompts_directory))?;
+    }
     fs::write(&prompt_path, PRIORITY_PROMPT).map_err(ConfigError::io(&prompt_path))?;
     fs::write(&config_path, DEFAULT_CONFIG).map_err(ConfigError::io(&config_path))?;
     Ok(true)

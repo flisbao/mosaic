@@ -10,7 +10,7 @@ pub(crate) mod fakes {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::application::ports::{Cancellable, SourceError, WidgetSource};
-    use crate::domain::widget::{Summary, WidgetSnapshot};
+    use crate::domain::widget::WidgetSnapshot;
 
     pub struct FakeSource {
         pub result: Result<WidgetSnapshot, SourceError>,
@@ -51,17 +51,7 @@ pub(crate) mod fakes {
     }
 
     pub fn snapshot_titled(title: &str) -> WidgetSnapshot {
-        WidgetSnapshot {
-            mini: None,
-            alerts: vec![],
-            summary: Summary {
-                blocks: vec![],
-                title: title.to_string(),
-                lines: vec![],
-            },
-            detail: None,
-            actions: vec![],
-        }
+        WidgetSnapshot::titled(title)
     }
 }
 

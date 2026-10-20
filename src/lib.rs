@@ -4,6 +4,9 @@ pub mod infrastructure;
 pub mod presentation;
 
 #[cfg(test)]
+pub(crate) mod test_support;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn crate_exposes_all_layers() {

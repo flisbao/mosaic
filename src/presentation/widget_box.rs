@@ -247,6 +247,7 @@ fn overflow_line(omitted: usize) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::widget_box_now as now;
     use chrono::TimeDelta;
     use ratatui::text::Line;
     use unicode_width::UnicodeWidthStr;
@@ -260,13 +261,6 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
-    }
-
-    fn now() -> NaiveDateTime {
-        chrono::NaiveDate::from_ymd_opt(2026, 10, 17)
-            .unwrap()
-            .and_hms_opt(9, 41, 0)
-            .unwrap()
     }
 
     #[test]

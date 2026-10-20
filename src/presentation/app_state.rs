@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
@@ -6,7 +5,6 @@ use chrono::NaiveDateTime;
 use crate::application::pomodoro_notifications::AlertMessage;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
-use crate::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::shortcuts::assign_shortcuts;
@@ -17,9 +15,11 @@ use crate::presentation::key_input::KeyInput;
 
 mod alert_queue;
 mod focus_navigation;
+mod pending_actions;
 mod pomodoro_control;
 
 use alert_queue::AlertQueue;
+use pending_actions::PendingActions;
 use pomodoro_control::PomodoroControl;
 
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
@@ -28,6 +28,21 @@ const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
 const RECOMMENDATION_BUSY_NOTICE: &str = "A IA já está processando um pedido";
 const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfirmationAnswer {
+    Accept,
+    Reject,
+    Ignore,
+}
+
+fn confirmation_answer(key: KeyInput) -> ConfirmationAnswer {
+    match key {
+        KeyInput::Character('s') => ConfirmationAnswer::Accept,
+        KeyInput::Escape | KeyInput::Character('n') => ConfirmationAnswer::Reject,
+        _ => ConfirmationAnswer::Ignore,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WidgetEntry {
@@ -102,7 +117,7 @@ pub struct AppState {
     notice: Option<String>,
     pomodoro: PomodoroControl,
     alerts: AlertQueue,
-    pending_actions: HashSet<WidgetId>,
+    pending_actions: PendingActions,
 }
 
 impl AppState {
@@ -118,7 +133,7 @@ impl AppState {
             notice: None,
             pomodoro: PomodoroControl::default(),
             alerts: AlertQueue::default(),
-            pending_actions: HashSet::new(),
+            pending_actions: PendingActions::default(),
         }
     }
 
@@ -231,11 +246,11 @@ impl AppState {
     }
 
     pub fn mark_action_pending(&mut self, id: &WidgetId) {
-        self.pending_actions.insert(id.clone());
+        self.pending_actions.try_begin(id);
     }
 
     pub fn finish_action(&mut self, id: &WidgetId) {
-        self.pending_actions.remove(id);
+        self.pending_actions.finish(id);
     }
 
     pub fn update_widget(
@@ -376,17 +391,17 @@ impl AppState {
     }
 
     fn handle_confirmation_key(&mut self, key: KeyInput, proposed: ProposedAction) -> Transition {
-        match key {
-            KeyInput::Character('s') => {
+        match confirmation_answer(key) {
+            ConfirmationAnswer::Accept => {
                 let confirmed = proposed.confirm();
-                if !self.pending_actions.insert(confirmed.widget().clone()) {
+                if !self.pending_actions.try_begin(confirmed.widget()) {
                     self.show_notice(ACTION_PENDING_NOTICE.to_string());
                     return Transition::idle();
                 }
                 Transition::emit(Command::Execute(confirmed))
             }
-            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
-            _ => Transition::to(Mode::Confirming(proposed)),
+            ConfirmationAnswer::Reject => Transition::idle(),
+            ConfirmationAnswer::Ignore => Transition::to(Mode::Confirming(proposed)),
         }
     }
 
@@ -396,17 +411,23 @@ impl AppState {
         text: String,
         plan: RecommendationPlan,
     ) -> Transition {
-        match key {
-            KeyInput::Character('s') => Transition::emit(Command::SendRecommendation(plan)),
-            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
-            _ => Transition::to(Mode::ConfirmingSend { text, plan }),
+        match confirmation_answer(key) {
+            ConfirmationAnswer::Accept => Transition::emit(Command::SendRecommendation(plan)),
+            ConfirmationAnswer::Reject => Transition::idle(),
+            ConfirmationAnswer::Ignore => Transition::to(Mode::ConfirmingSend { text, plan }),
         }
     }
 
     fn recommendation_is_loading(&self) -> bool {
-        self.entries.iter().any(|entry| {
-            entry.id.as_str() == RECOMMENDATION_WIDGET_ID && entry.record.is_refreshing()
-        })
+        self.recommendation_record()
+            .is_some_and(WidgetRecord::is_refreshing)
+    }
+
+    pub fn recommendation_record(&self) -> Option<&WidgetRecord> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id.is_recommendation())
+            .map(|entry| &entry.record)
     }
 
     fn toggle_pomodoro(&mut self) {
@@ -473,11 +494,35 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::fixed_now as now;
+
+    #[test]
+    fn confirmation_keys_are_classified_in_one_place() {
+        assert_eq!(
+            confirmation_answer(KeyInput::Character('s')),
+            ConfirmationAnswer::Accept
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Character('n')),
+            ConfirmationAnswer::Reject
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Escape),
+            ConfirmationAnswer::Reject
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Character('x')),
+            ConfirmationAnswer::Ignore
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Enter),
+            ConfirmationAnswer::Ignore
+        );
+    }
     use crate::domain::pomodoro::{PomodoroSettings, PomodoroStatus};
     use crate::domain::widget::{
         ActionScope, ActionSpec, DetailItem, DetailSection, Summary, WidgetSnapshot,
     };
-    use chrono::NaiveDate;
 
     const LONG_LIST_LENGTH: usize = 25;
     const LAST_LONG_LIST_ITEM: usize = LONG_LIST_LENGTH - 1;
@@ -493,12 +538,6 @@ mod tests {
             scope,
             params_json: r#"{"to":"done"}"#.to_string(),
         }
-    }
-
-    fn now() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 18)
-            .and_then(|date| date.and_hms_opt(12, 0, 0))
-            .expect("data válida")
     }
 
     fn record_with_items(item_ids: Vec<String>) -> WidgetRecord {
@@ -1340,5 +1379,29 @@ mod tests {
             app.handle_key(character('i')),
             Some(Command::RequestRecommendation)
         );
+    }
+
+    #[test]
+    fn recommendation_record_finds_only_the_ia_entry() {
+        let app = AppState::new(
+            vec![
+                entry("kanban", WidgetRecord::loading()),
+                entry("ia", WidgetRecord::loading()),
+            ],
+            vec![TabView {
+                name: "t".to_string(),
+                entry_indexes: vec![0, 1],
+            }],
+        );
+        assert!(app.recommendation_record().is_some());
+
+        let without = AppState::new(
+            vec![entry("kanban", WidgetRecord::loading())],
+            vec![TabView {
+                name: "t".to_string(),
+                entry_indexes: vec![0],
+            }],
+        );
+        assert!(without.recommendation_record().is_none());
     }
 }

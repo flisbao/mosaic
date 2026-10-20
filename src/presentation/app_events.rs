@@ -5,9 +5,7 @@ use crate::application::execute_action::ActionNotice;
 use crate::application::llm::{LlmError, RecommendationOutcome, RecommendationStore};
 use crate::application::pomodoro_notifications::{AlertMessage, Notifier};
 use crate::application::ports::SourceError;
-use crate::application::recommendation_view::{
-    idle_snapshot, recommendation_snapshot, RECOMMENDATION_WIDGET_ID,
-};
+use crate::application::recommendation_view::{idle_snapshot, recommendation_snapshot};
 use crate::application::reload::{apply_if_current, WidgetGenerations, WidgetUpdate};
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 use crate::domain::widget_content::AlertLevel;
@@ -99,7 +97,7 @@ fn apply_recommendation_result(
     result: Result<RecommendationOutcome, LlmError>,
     now: NaiveDateTime,
 ) {
-    let recommendation_widget = WidgetId::new(RECOMMENDATION_WIDGET_ID);
+    let recommendation_widget = WidgetId::recommendation();
     match result {
         Ok(outcome) => {
             state.update_widget(

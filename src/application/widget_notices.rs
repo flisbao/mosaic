@@ -22,15 +22,11 @@ mod tests {
 
     fn ready(blocks: Vec<Block>) -> Result<WidgetSnapshot, String> {
         Ok(WidgetSnapshot {
-            mini: None,
             summary: Summary {
-                title: "T".to_string(),
-                lines: vec![],
                 blocks,
+                ..Summary::titled("T")
             },
-            detail: None,
-            actions: vec![],
-            alerts: vec![],
+            ..WidgetSnapshot::titled("T")
         })
     }
 

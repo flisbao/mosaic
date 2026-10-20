@@ -6,8 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::application::pomodoro_notifications::{AlertMessage, Notifier};
-use crate::application::ports::Cancellable;
-use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
+use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
 
 const BELL_CHARACTER: &[u8] = b"\x07";
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -82,13 +81,9 @@ impl Notifier for CommandNotifier {
     }
 }
 
-impl Cancellable for CommandNotifier {
-    fn cancel(&self) {
-        self.cancel_flag.cancel();
-    }
-
-    fn request_cancel(&self) {
-        self.cancel_flag.request_cancel();
+impl HasCancelFlag for CommandNotifier {
+    fn cancel_flag(&self) -> &CancelFlag {
+        &self.cancel_flag
     }
 }
 
@@ -123,6 +118,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use crate::application::ports::Cancellable;
 
     struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
 

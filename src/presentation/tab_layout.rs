@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use crate::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use crate::domain::widget::{WidgetId, WidgetRecord};
 use crate::presentation::app_state::{TabView, WidgetEntry};
 
@@ -43,7 +42,7 @@ pub fn build_tab_views(
         .collect();
     if let Some(record) = recommendation_record {
         entries.push(WidgetEntry {
-            id: WidgetId::new(RECOMMENDATION_WIDGET_ID),
+            id: WidgetId::recommendation(),
             record,
             interval: RECOMMENDATION_INTERVAL,
             max_items: None,
@@ -185,10 +184,7 @@ mod tests {
             vec!["Principal", RECOMMENDATION_TAB_NAME]
         );
         assert_eq!(with_recommendation.tabs[1].entry_indexes, vec![2]);
-        assert_eq!(
-            with_recommendation.entries[2].id.as_str(),
-            RECOMMENDATION_WIDGET_ID
-        );
+        assert!(with_recommendation.entries[2].id.is_recommendation());
     }
 
     #[test]

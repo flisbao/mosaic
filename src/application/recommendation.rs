@@ -2,11 +2,11 @@ use chrono::NaiveDateTime;
 use thiserror::Error;
 
 use crate::domain::widget::{DetailItem, WidgetId, WidgetRecord};
+use crate::domain::widget_content::{collapse_whitespace, truncate_characters};
 
 pub const CHARACTERS_PER_TOKEN: usize = 4;
 pub const META_VALUE_MAXIMUM_CHARACTERS: usize = 40;
 
-const ELLIPSIS: char = '…';
 const MISSING_ID_PLACEHOLDER: &str = "-";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -117,33 +117,11 @@ fn selected_lines(context: &WidgetContext) -> Vec<String> {
         .collect()
 }
 
-fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn truncate_characters(text: &str, maximum: usize) -> String {
-    if text.chars().count() <= maximum {
-        return text.to_string();
-    }
-    let mut truncated: String = text.chars().take(maximum.saturating_sub(1)).collect();
-    if maximum > 0 {
-        truncated.push(ELLIPSIS);
-    }
-    truncated
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::widget::{DetailSection, Summary, WidgetId, WidgetRecord, WidgetSnapshot};
-    use chrono::NaiveDate;
-
-    fn now() -> NaiveDateTime {
-        NaiveDate::from_ymd_opt(2026, 10, 17)
-            .unwrap()
-            .and_hms_opt(8, 30, 0)
-            .unwrap()
-    }
+    use crate::test_support::morning_now as now;
 
     fn item(id: Option<&str>, text: &str, meta: &[(&str, &str)]) -> DetailItem {
         DetailItem {

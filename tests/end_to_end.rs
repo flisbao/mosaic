@@ -1,34 +1,28 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{NaiveDate, NaiveDateTime};
-
 use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
+use mosaic::application::launch_spec::ProviderCommand;
 use mosaic::application::refresh::refresh_widget;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
-use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::presentation::app_state::{AppState, Command, Mode, TabView, WidgetEntry};
 use mosaic::presentation::key_input::KeyInput;
+mod common;
+use common::fixed_now as now;
 
 fn kanban_plugin_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/kanban.py")
 }
 
 fn kanban_runner(root: &Path) -> PluginRunner {
-    let settings = WidgetSettings {
-        id: WidgetId::new("kanban"),
-        command: "python3".to_string(),
+    let command = ProviderCommand {
+        program: "python3".to_string(),
         args: vec![kanban_plugin_path().to_string_lossy().to_string()],
         env: vec![("KANBAN_DIR".to_string(), root.to_string_lossy().to_string())],
-        interval_seconds: 30,
-        interval_adjusted: false,
-        timeout_seconds: 10,
-        span: 1,
-        max_items: None,
-        llm_selection: default_llm_selection(vec![]),
+        timeout: std::time::Duration::from_secs(10),
     };
-    PluginRunner::new(settings, root.to_path_buf())
+    PluginRunner::new(command, root.to_path_buf())
 }
 
 fn kanban_with_one_item() -> (tempfile::TempDir, PathBuf) {
@@ -54,12 +48,6 @@ fn app_for(runner: &PluginRunner) -> AppState {
             entry_indexes: vec![0],
         }],
     )
-}
-
-fn now() -> NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 10, 18)
-        .and_then(|date| date.and_hms_opt(12, 0, 0))
-        .expect("data válida")
 }
 
 fn press(app: &mut AppState, keys: &[KeyInput]) -> Option<Command> {

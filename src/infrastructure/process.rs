@@ -7,6 +7,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::application::ports::Cancellable;
 use thiserror::Error;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -116,6 +117,20 @@ impl CancelFlag {
     fn forget_child(&self, children: &mut HashSet<u32>, pid: u32) {
         children.remove(&pid);
         self.0.released.notify_all();
+    }
+}
+
+pub trait HasCancelFlag {
+    fn cancel_flag(&self) -> &CancelFlag;
+}
+
+impl<T: HasCancelFlag + Send + Sync> Cancellable for T {
+    fn cancel(&self) {
+        self.cancel_flag().cancel();
+    }
+
+    fn request_cancel(&self) {
+        self.cancel_flag().request_cancel();
     }
 }
 
@@ -386,6 +401,23 @@ mod tests {
     const GRANDCHILD_PIPE_HOLD_SECONDS: u64 = 3;
     const PIPE_HOLD_CANCEL_BUDGET: Duration = Duration::from_secs(1);
     const IDLE_CANCEL_BUDGET: Duration = Duration::from_millis(100);
+
+    #[test]
+    fn types_exposing_a_cancel_flag_are_cancellable() {
+        use crate::application::ports::Cancellable;
+
+        struct Holder(CancelFlag);
+
+        impl HasCancelFlag for Holder {
+            fn cancel_flag(&self) -> &CancelFlag {
+                &self.0
+            }
+        }
+
+        let holder = Holder(CancelFlag::default());
+        Cancellable::request_cancel(&holder);
+        assert!(holder.0.is_cancelled());
+    }
 
     fn wait_until(condition: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + WAIT_LIMIT;

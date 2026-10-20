@@ -1,15 +1,34 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
-use crate::application::ports::Cancellable;
-use crate::domain::widget_content::clean_text_limited;
+use crate::application::llm::{CancellableLlmRunner, LlmError, LlmRequest, LlmRunner};
+use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
+use crate::infrastructure::config::{Harness, LlmConfig};
 use crate::infrastructure::private_directory::prepare_private_directory;
-use crate::infrastructure::process::{run_process, CancelFlag, ProcessError, ProcessLimits};
-use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
+use crate::infrastructure::process::{
+    run_process, CancelFlag, HasCancelFlag, ProcessError, ProcessLimits,
+};
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
+
+pub fn build_llm_runner(
+    config: &LlmConfig,
+    working_directory: PathBuf,
+) -> Arc<dyn CancellableLlmRunner> {
+    let program = config.harness.program_name().to_string();
+    let timeout = Duration::from_secs(config.timeout_seconds);
+    match config.harness {
+        Harness::Claude => Arc::new(ClaudeCli::new(
+            program,
+            working_directory,
+            config.max_budget_usd,
+            timeout,
+        )),
+        Harness::OpenCode => Arc::new(OpenCodeCli::new(program, working_directory, timeout)),
+    }
+}
 
 const ARGUMENT_SEPARATOR: &str = "--";
 const OPENCODE_CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
@@ -168,13 +187,9 @@ impl<H: HarnessCommand> LlmRunner for LlmCli<H> {
     }
 }
 
-impl<H: HarnessCommand> Cancellable for LlmCli<H> {
-    fn cancel(&self) {
-        self.cancel_flag.cancel();
-    }
-
-    fn request_cancel(&self) {
-        self.cancel_flag.request_cancel();
+impl<H: HarnessCommand> HasCancelFlag for LlmCli<H> {
+    fn cancel_flag(&self) -> &CancelFlag {
+        &self.cancel_flag
     }
 }
 
@@ -229,6 +244,26 @@ mod tests {
     use super::*;
     use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
     use crate::application::ports::Cancellable;
+
+    #[test]
+    fn factory_builds_a_cancellable_runner_for_each_harness() {
+        let directory = crate::infrastructure::test_support::private_tempdir();
+        for harness in [Harness::Claude, Harness::OpenCode] {
+            let config = LlmConfig {
+                enabled: true,
+                harness,
+                model: None,
+                max_budget_usd: None,
+                timeout_seconds: 5,
+                confirm_before_send: true,
+                priority_prompt: "prompts/prioridade.md".to_string(),
+            };
+            let runner = build_llm_runner(&config, directory.path().join(harness.program_name()));
+            runner.cancel();
+            let error = runner.run(&request("oi", None)).unwrap_err();
+            assert!(error.to_string().contains("cancelado"), "{error}");
+        }
+    }
 
     trait RunRetrying: LlmRunner {
         fn run_retrying(&self, request: &LlmRequest) -> Result<String, LlmError> {

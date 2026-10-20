@@ -6,12 +6,12 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::application::pomodoro_notifications::AlertMessage;
+use crate::application::pomodoro_notifications::{phase_label, AlertMessage};
 use crate::domain::layout::{
     arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
     TOP_BAR_HEIGHT,
 };
-use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
+use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer, SECONDS_PER_MINUTE};
 use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
@@ -30,7 +30,6 @@ const FOCUS_MINIMUM_WIDTH: u16 = FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWA
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
 const MODAL_FRAME_THICKNESS: u16 = 2;
 const MINIMUM_DRAWABLE_SIDE: u16 = 3;
-const SECONDS_PER_MINUTE: u64 = 60;
 const ALERT_DISMISS_HINT: &str = "Qualquer tecla fecha";
 const WRAP_CONTINUATION_INDENT: &str = "  ";
 const SELECTION_MARKER: &str = "> ";
@@ -82,11 +81,7 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
 
 fn pomodoro_text(timer: &PomodoroTimer) -> String {
     let seconds = timer.remaining().as_secs();
-    let phase = match timer.phase() {
-        Phase::Focus => "foco",
-        Phase::ShortBreak => "descanso curto",
-        Phase::LongBreak => "descanso longo",
-    };
+    let phase = phase_label(timer.phase());
     let suffix = match timer.status() {
         PomodoroStatus::Running => "",
         PomodoroStatus::Paused => " (pausado)",
@@ -514,15 +509,11 @@ mod tests {
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
         WidgetSnapshot {
-            mini: None,
-            alerts: vec![],
             summary: Summary {
-                blocks: vec![],
-                title: title.to_string(),
                 lines,
+                ..Summary::titled(title)
             },
-            detail: None,
-            actions: vec![],
+            ..WidgetSnapshot::titled(title)
         }
     }
 

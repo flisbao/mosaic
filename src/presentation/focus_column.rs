@@ -77,22 +77,12 @@ fn row_style(entry: &WidgetEntry, focused: bool) -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::widget::{Mini, Summary, WidgetId, WidgetRecord, WidgetSnapshot};
+    use crate::domain::widget::{Mini, WidgetId, WidgetRecord, WidgetSnapshot};
     use crate::domain::widget_content::Tone;
     use ratatui::style::{Color, Modifier};
 
-    fn snapshot(title: &str) -> WidgetSnapshot {
-        WidgetSnapshot {
-            mini: None,
-            alerts: vec![],
-            summary: Summary {
-                blocks: vec![],
-                title: title.to_string(),
-                lines: vec![],
-            },
-            detail: None,
-            actions: vec![],
-        }
+    fn titled_snapshot(title: &str) -> WidgetSnapshot {
+        WidgetSnapshot::titled(title)
     }
 
     fn with_items(mut snapshot: WidgetSnapshot, item_count: usize) -> WidgetSnapshot {
@@ -154,15 +144,23 @@ mod tests {
 
     #[test]
     fn focus_column_uses_mini_or_item_count() {
-        let mut agenda = snapshot("Agenda");
+        let mut agenda = titled_snapshot("Agenda");
         agenda.mini = Some(Mini {
             value: "3".to_string(),
             text: "reuniões".to_string(),
             tone: Tone::Ok,
         });
         let agenda = entry("agenda", ready(agenda), None);
-        let kanban = entry("kanban", ready(with_items(snapshot("Kanban"), 2)), None);
-        let capped = entry("notas", ready(with_items(snapshot("Notas"), 5)), Some(1));
+        let kanban = entry(
+            "kanban",
+            ready(with_items(titled_snapshot("Kanban"), 2)),
+            None,
+        );
+        let capped = entry(
+            "notas",
+            ready(with_items(titled_snapshot("Notas"), 5)),
+            Some(1),
+        );
         let entries = [&agenda, &kanban, &capped];
         let rows: Vec<String> = focus_column_lines(&entries, Some(0), 40)
             .iter()
@@ -177,7 +175,7 @@ mod tests {
     #[test]
     fn focus_column_marks_failing_widget() {
         let failing = entry("kanban", failed(), None);
-        let healthy = entry("agenda", ready(snapshot("Agenda")), None);
+        let healthy = entry("agenda", ready(titled_snapshot("Agenda")), None);
         let entries = [&healthy, &failing];
         let lines = focus_column_lines(&entries, Some(0), 40);
         let failing_line = &lines[1];

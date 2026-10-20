@@ -1,44 +1,42 @@
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
 
-use crate::application::ports::{ActionExecutor, Cancellable, SourceError, WidgetSource};
+use crate::application::launch_spec::ProviderCommand;
+use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
-use crate::domain::widget_content::clean_text_limited;
-use crate::infrastructure::config::WidgetSettings;
+use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::plugin_protocol::parse_snapshot;
-use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
-use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
+use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 
 const ITEM_ID_KEY: &str = "item_id";
 
 pub struct PluginRunner {
-    settings: WidgetSettings,
+    command: ProviderCommand,
     working_directory: PathBuf,
     cancel_flag: CancelFlag,
 }
 
 impl PluginRunner {
-    pub fn new(settings: WidgetSettings, working_directory: PathBuf) -> Self {
+    pub fn new(command: ProviderCommand, working_directory: PathBuf) -> Self {
         Self {
-            settings,
+            command,
             working_directory,
             cancel_flag: CancelFlag::default(),
         }
     }
 
     fn run(&self, extra_args: &[&str], stdin_text: Option<&str>) -> Result<String, SourceError> {
-        let mut command = Command::new(&self.settings.command);
+        let mut command = Command::new(&self.command.program);
         command
-            .args(&self.settings.args)
+            .args(&self.command.args)
             .args(extra_args)
-            .envs(self.settings.env.iter().map(|(key, value)| (key, value)))
+            .envs(self.command.env.iter().map(|(key, value)| (key, value)))
             .current_dir(&self.working_directory);
         let limits = ProcessLimits {
-            timeout: Duration::from_secs(self.settings.timeout_seconds),
+            timeout: self.command.timeout,
             maximum_output_bytes: MAXIMUM_PLUGIN_OUTPUT_BYTES,
         };
         run_process(command, stdin_text, &limits, &self.cancel_flag)
@@ -57,13 +55,9 @@ impl WidgetSource for PluginRunner {
     }
 }
 
-impl Cancellable for PluginRunner {
-    fn cancel(&self) {
-        self.cancel_flag.cancel();
-    }
-
-    fn request_cancel(&self) {
-        self.cancel_flag.request_cancel();
+impl HasCancelFlag for PluginRunner {
+    fn cancel_flag(&self) -> &CancelFlag {
+        &self.cancel_flag
     }
 }
 
@@ -102,25 +96,19 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::application::ports::Cancellable;
     use crate::domain::action::ProposedAction;
     use crate::domain::widget::{ActionScope, ActionSpec, WidgetId};
-    use crate::infrastructure::config::default_llm_selection;
 
     fn runner(directory: &Path, script: &str, timeout_seconds: u64) -> PluginRunner {
         fs::write(directory.join("plugin.sh"), script).unwrap();
-        let settings = WidgetSettings {
-            id: WidgetId::new("test"),
-            command: "sh".to_string(),
+        let command = ProviderCommand {
+            program: "sh".to_string(),
             args: vec!["plugin.sh".to_string()],
             env: vec![("KANBAN_DIR".to_string(), "/tmp/kanban".to_string())],
-            interval_seconds: 30,
-            interval_adjusted: false,
-            timeout_seconds,
-            span: 1,
-            max_items: None,
-            llm_selection: default_llm_selection(vec![]),
+            timeout: Duration::from_secs(timeout_seconds),
         };
-        PluginRunner::new(settings, directory.to_path_buf())
+        PluginRunner::new(command, directory.to_path_buf())
     }
 
     fn snapshot_error(runner: &PluginRunner) -> String {
@@ -361,7 +349,7 @@ mod tests {
     fn missing_command_reports_spawn_failure() {
         let directory = tempfile::tempdir().unwrap();
         let mut runner = runner(directory.path(), "", 5);
-        runner.settings.command = "comando-que-nao-existe-xyz".to_string();
+        runner.command.program = "comando-que-nao-existe-xyz".to_string();
         assert!(snapshot_error(&runner).contains("comando-que-nao-existe-xyz"));
     }
 }

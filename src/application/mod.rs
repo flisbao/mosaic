@@ -1,13 +1,16 @@
 pub mod alert_tracker;
 pub mod check_report;
 pub mod execute_action;
+pub mod launch_spec;
 pub mod llm;
 pub mod pomodoro_notifications;
 pub mod ports;
 pub mod recommendation;
+pub mod recommendation_request;
 pub mod recommendation_view;
 pub mod refresh;
 pub mod reload;
 pub mod reload_plan;
+pub mod reload_policy;
 pub mod shutdown;
 pub mod widget_notices;

@@ -1,9 +1,11 @@
+pub mod app_paths;
 pub mod config;
 pub mod default_files;
 pub mod llm_cli;
 pub mod notifiers;
 pub mod plugin_protocol;
 pub mod plugin_runner;
+pub mod priority_prompt;
 pub mod private_directory;
 pub mod process;
 pub mod protocol_blocks;

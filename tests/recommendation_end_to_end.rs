@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::NaiveDate;
+use mosaic::application::launch_spec::ProviderCommand;
 use mosaic::application::llm::{
     execute_recommendation, LlmError, RecommendationOutcome, RecommendationStore,
 };
@@ -13,10 +13,11 @@ use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContex
 use mosaic::application::recommendation_view::recommendation_snapshot;
 use mosaic::application::refresh::refresh_widget;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
-use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::llm_cli::ClaudeCli;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::FileRecommendationStore;
+mod common;
+use common::morning_now as now;
 
 const FORK_RACE_RETRIES: usize = 20;
 const PRIVATE_TEMPORARY_DIRECTORY_MODE: u32 = 0o700;
@@ -31,28 +32,15 @@ fn private_tempdir() -> tempfile::TempDir {
     directory
 }
 
-fn now() -> chrono::NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 10, 17)
-        .unwrap()
-        .and_hms_opt(8, 30, 0)
-        .unwrap()
-}
-
 fn kanban_runner(root: &Path) -> PluginRunner {
     let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/kanban.py");
-    let settings = WidgetSettings {
-        id: WidgetId::new("kanban"),
-        command: "python3".to_string(),
+    let command = ProviderCommand {
+        program: "python3".to_string(),
         args: vec![plugin.to_string_lossy().to_string()],
         env: vec![("KANBAN_DIR".to_string(), root.to_string_lossy().to_string())],
-        interval_seconds: 30,
-        interval_adjusted: false,
-        timeout_seconds: 10,
-        span: 1,
-        max_items: None,
-        llm_selection: default_llm_selection(vec!["inbox".to_string()]),
+        timeout: std::time::Duration::from_secs(10),
     };
-    PluginRunner::new(settings, root.to_path_buf())
+    PluginRunner::new(command, root.to_path_buf())
 }
 
 fn kanban_root(directory: &Path) -> PathBuf {
