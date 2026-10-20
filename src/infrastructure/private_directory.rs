@@ -18,6 +18,8 @@ const OTHERS_AND_GROUP_WRITE_MASK: u32 = 0o022;
 #[cfg(unix)]
 const STICKY_BIT: u32 = 0o1000;
 #[cfg(unix)]
+const OTHERS_WRITE_MASK: u32 = 0o002;
+#[cfg(unix)]
 const ROOT_USER_ID: u32 = 0;
 #[cfg(unix)]
 const CURRENT_PROCESS_DIRECTORY: &str = "/proc/self";
@@ -126,6 +128,30 @@ pub fn prepare_private_directory(path: &Path) -> Result<(), PrivateDirectoryErro
             ));
         }
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn verify_trusted_path(path: &Path) -> Result<(), PrivateDirectoryError> {
+    let metadata =
+        fs::metadata(path).map_err(|error| PrivateDirectoryError::new(path, error.to_string()))?;
+    let user_id = current_user_id().ok_or_else(|| {
+        PrivateDirectoryError::new(path, "não foi possível determinar o usuário atual")
+    })?;
+    if metadata.uid() != user_id && metadata.uid() != ROOT_USER_ID {
+        return Err(PrivateDirectoryError::new(path, "pertence a outro usuário"));
+    }
+    if metadata.permissions().mode() & OTHERS_WRITE_MASK != 0 {
+        return Err(PrivateDirectoryError::new(
+            path,
+            "gravável por qualquer usuário",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn verify_trusted_path(_path: &Path) -> Result<(), PrivateDirectoryError> {
     Ok(())
 }
 

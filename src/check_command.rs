@@ -144,6 +144,7 @@ pub fn run(arguments: &[String]) -> ExitCode {
         program: invocation.command,
         args: invocation.args,
         env: invocation.env,
+        inherit_env: None,
         timeout: Duration::from_secs(invocation.timeout_seconds),
     };
     let working_directory = invocation

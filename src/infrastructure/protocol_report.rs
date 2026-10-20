@@ -15,6 +15,7 @@ pub use crate::domain::snapshot_report::{ParsedSnapshot, Problem, Severity};
 
 pub const SUPPORTED_PROTOCOL_VERSION: u64 = 1;
 pub const MAXIMUM_ALERT_ID_CHARACTERS: usize = 100;
+pub const MAXIMUM_ITEM_ID_CHARACTERS: usize = 200;
 pub const MAXIMUM_ALERTS_PER_SNAPSHOT: usize = 100;
 pub const MAXIMUM_BLOCKS_PER_WIDGET: usize = 20;
 pub const MAXIMUM_LEGACY_LINES: usize = 200;
@@ -100,6 +101,10 @@ pub(super) fn indexed_path(parent: &str, index: usize) -> String {
 #[derive(Default)]
 pub(super) struct Reader {
     problems: Vec<Problem>,
+}
+
+fn is_valid_item_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().count() <= MAXIMUM_ITEM_ID_CHARACTERS && clean_text(id) == id
 }
 
 impl Reader {
@@ -441,7 +446,7 @@ impl Reader {
         let object = self.object_entry(entry, path)?;
         self.unknown_fields(object, &ITEM_KEYS, path);
         let text = self.required_text(object, "text", path)?;
-        let id = self.optional_string(object, "id", path).map(str::to_string);
+        let id = self.item_id(object, path);
         let flag = self.flag(object, path);
         let meta = self.meta(object, path);
         Some(DetailItem {
@@ -450,6 +455,22 @@ impl Reader {
             flag,
             meta,
         })
+    }
+
+    fn item_id(&mut self, object: &Map<String, Value>, path: &str) -> Option<String> {
+        let id_path = child_path(path, "id");
+        match object.get("id") {
+            Some(Value::String(id)) if is_valid_item_id(id) => Some(id.clone()),
+            Some(Value::String(_)) => {
+                self.warning(&id_path, &format!("id precisa ter de 1 a {MAXIMUM_ITEM_ID_CHARACTERS} caracteres, sem controle nem formatação; ignorado"));
+                None
+            }
+            Some(Value::Null) | None => None,
+            Some(_) => {
+                self.warning(&id_path, "precisa ser texto; ignorado");
+                None
+            }
+        }
     }
 
     fn meta(&mut self, item: &Map<String, Value>, path: &str) -> Vec<(String, String)> {

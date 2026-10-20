@@ -12,6 +12,9 @@ const BELL_CHARACTER: &[u8] = b"\x07";
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 const NOTIFY_MAXIMUM_OUTPUT_BYTES: usize = 1_024;
 pub const MAXIMUM_PENDING_NOTIFICATIONS: usize = 4;
+const MAXIMUM_NOTIFICATION_CHARACTERS: usize = 200;
+const OPTION_PREFIX: char = '-';
+const OPTION_GUARD: char = ' ';
 
 pub struct BellNotifier {
     output: Mutex<Box<dyn Write + Send>>,
@@ -66,8 +69,8 @@ impl Notifier for CommandNotifier {
         let mut command = Command::new(program);
         command
             .args(arguments)
-            .arg(&message.title)
-            .arg(&message.body);
+            .arg(notification_title(&message.title))
+            .arg(notification_body(&message.body));
         let limits = ProcessLimits {
             timeout: NOTIFY_TIMEOUT,
             maximum_output_bytes: NOTIFY_MAXIMUM_OUTPUT_BYTES,
@@ -108,6 +111,28 @@ impl Notifier for CompositeNotifier {
         for notifier in &self.notifiers {
             notifier.notify(message);
         }
+    }
+}
+
+fn notification_title(text: &str) -> String {
+    guard_option_prefix(truncate_notification(text))
+}
+fn notification_body(text: &str) -> String {
+    guard_option_prefix(escape_markup(&truncate_notification(text)))
+}
+fn truncate_notification(text: &str) -> String {
+    text.chars().take(MAXIMUM_NOTIFICATION_CHARACTERS).collect()
+}
+fn escape_markup(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+fn guard_option_prefix(text: String) -> String {
+    if text.starts_with(OPTION_PREFIX) {
+        format!("{OPTION_GUARD}{text}")
+    } else {
+        text
     }
 }
 
@@ -194,6 +219,21 @@ mod tests {
         assert_eq!(
             content,
             "--urgente|Foco concluído|Beber água\nPróximo: descanso curto"
+        );
+    }
+
+    #[test]
+    fn notification_arguments_are_safe_and_bounded() {
+        assert_eq!(notification_title("--icon=/x"), " --icon=/x");
+        assert_eq!(notification_body("<x>&</x>"), "&lt;x&gt;&amp;&lt;/x&gt;");
+        let long = "á".repeat(MAXIMUM_NOTIFICATION_CHARACTERS + 50);
+        assert_eq!(
+            notification_title(&long).chars().count(),
+            MAXIMUM_NOTIFICATION_CHARACTERS
+        );
+        assert_eq!(
+            notification_body(&long).chars().count(),
+            MAXIMUM_NOTIFICATION_CHARACTERS
         );
     }
 

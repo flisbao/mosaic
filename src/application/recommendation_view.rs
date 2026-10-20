@@ -1,7 +1,9 @@
 use crate::application::ports::StoredRecommendation;
 use crate::domain::widget::{DetailItem, DetailSection, Summary, SummaryLine, WidgetSnapshot};
+use crate::domain::widget_content::clean_text_limited;
 
 pub const SUMMARY_LINE_LIMIT: usize = 8;
+const RECOMMENDATION_LINE_MAXIMUM_CHARACTERS: usize = 300;
 
 const RECOMMENDATION_TITLE: &str = "IA";
 const IDLE_LINE: &str = "Pressione i para pedir uma recomendação";
@@ -19,9 +21,8 @@ pub fn recommendation_snapshot(stored: &StoredRecommendation) -> WidgetSnapshot 
     let lines: Vec<String> = stored
         .text
         .lines()
-        .map(str::trim)
+        .map(|line| clean_text_limited(line, RECOMMENDATION_LINE_MAXIMUM_CHARACTERS))
         .filter(|line| !line.is_empty())
-        .map(str::to_string)
         .collect();
     let summary_lines = lines.iter().take(SUMMARY_LINE_LIMIT).cloned().collect();
     let heading = format!(
@@ -100,6 +101,28 @@ mod tests {
         assert_eq!(sections[0].heading, "Recomendação de 17/10 08:30");
         assert_eq!(sections[0].items.len(), 12);
         assert!(sections[0].items.iter().all(|item| item.id.is_none()));
+    }
+
+    #[test]
+    fn recommendation_snapshot_removes_escape_and_bidi_characters() {
+        let snapshot = recommendation_snapshot(&stored("1. A\u{202e}B\u{1b}[31m\n\u{200b}\n2. C"));
+        let lines: Vec<&str> = snapshot
+            .summary
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect();
+        assert_eq!(lines, vec!["1. AB[31m", "2. C"]);
+    }
+
+    #[test]
+    fn recommendation_snapshot_truncates_very_long_lines() {
+        let long = "x".repeat(RECOMMENDATION_LINE_MAXIMUM_CHARACTERS + 100);
+        let snapshot = recommendation_snapshot(&stored(&long));
+        assert_eq!(
+            snapshot.summary.lines[0].text.chars().count(),
+            RECOMMENDATION_LINE_MAXIMUM_CHARACTERS
+        );
     }
 
     #[test]

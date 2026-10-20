@@ -8,6 +8,7 @@ pub struct ProviderCommand {
     pub program: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub inherit_env: Option<Vec<String>>,
     pub timeout: Duration,
 }
 
@@ -41,6 +42,7 @@ mod tests {
                 program: "python3".to_string(),
                 args: vec!["jira.py".to_string()],
                 env: vec![],
+                inherit_env: None,
                 timeout: Duration::from_secs(5),
             },
             schedule: WidgetSchedule {

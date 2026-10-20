@@ -21,6 +21,9 @@ use crate::application::reload_plan::plan_reload;
 use crate::application::reload_policy::RestartSections;
 use crate::domain::pomodoro::{PomodoroSettings, SECONDS_PER_MINUTE};
 use crate::domain::widget::WidgetId;
+use crate::infrastructure::private_directory::verify_trusted_path;
+
+pub const PLUGINS_DIRECTORY_NAME: &str = "plugins";
 
 pub const MINIMUM_INTERVAL_SECONDS: u64 = 30;
 pub const MAXIMUM_INTERVAL_SECONDS: u64 = 86_400;
@@ -46,6 +49,7 @@ pub struct WidgetSettings {
     pub command: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub inherit_env: Option<Vec<String>>,
     pub interval_seconds: u64,
     pub interval_adjusted: bool,
     pub timeout_seconds: u64,
@@ -66,6 +70,7 @@ impl WidgetSettings {
             command,
             args,
             env,
+            inherit_env: None,
             interval_seconds: DEFAULT_INTERVAL_SECONDS,
             interval_adjusted: false,
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
@@ -82,6 +87,7 @@ impl WidgetSettings {
                 program: self.command.clone(),
                 args: self.args.clone(),
                 env: self.env.clone(),
+                inherit_env: self.inherit_env.clone(),
                 timeout: Duration::from_secs(self.timeout_seconds),
             },
             schedule: WidgetSchedule {
@@ -203,6 +209,8 @@ pub enum ConfigError {
     DuplicateWidgetId(String),
     #[error("widget '{widget}': '{field}' não pode ser vazio")]
     EmptyValue { widget: String, field: &'static str },
+    #[error("widget '{widget}': '{field}' contém um nome inválido")]
+    InvalidValue { widget: String, field: &'static str },
     #[error("widget '{0}': id reservado pelo mosaic")]
     ReservedWidgetId(String),
     #[error("{location}: '{field}' precisa ser maior que zero")]
@@ -292,7 +300,20 @@ pub fn retain_restart_sections(active: &AppConfig, mut next: AppConfig) -> AppCo
 }
 
 pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
-    parse_config(&read_config_file(&config_file_path(directory))?)
+    parse_config(&read_installed_config(directory)?)
+}
+
+pub fn read_installed_config(directory: &Path) -> Result<String, ConfigError> {
+    for path in [
+        directory.to_path_buf(),
+        config_file_path(directory),
+        directory.join(PLUGINS_DIRECTORY_NAME),
+    ] {
+        if path.exists() {
+            verify_trusted_path(&path).map_err(|error| ConfigError::Parse(error.to_string()))?;
+        }
+    }
+    read_config_file(&config_file_path(directory))
 }
 
 pub fn prepare_reload(
@@ -406,6 +427,24 @@ mod tests {
         assert_eq!(widget.timeout_seconds, 3);
         assert_eq!(widget.span, 2);
         assert_eq!(widget.max_items, None);
+    }
+
+    #[test]
+    fn inherit_env_is_optional_and_validated() {
+        let absent = parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\n").unwrap();
+        assert_eq!(absent.widgets[0].inherit_env, None);
+        let listed = parse_config(
+            "[[widgets]]\nid = \"a\"\ncommand = \"x\"\ninherit_env = [\"JIRA_TOKEN_A\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            listed.widgets[0].inherit_env,
+            Some(vec!["JIRA_TOKEN_A".to_string()])
+        );
+        assert!(matches!(
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ninherit_env = [\"A=B\"]\n"),
+            Err(ConfigError::InvalidValue { .. })
+        ));
     }
 
     #[test]

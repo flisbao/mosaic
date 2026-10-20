@@ -200,8 +200,13 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/slow"):
             time.sleep(3)
-        body = json.dumps({"path": self.path}).encode()
-        self.send_response(200)
+        if self.path.startswith("/huge"):
+            body = b"[" + b"0," * 600 + b"0]"
+        elif self.path.startswith("/error"):
+            body = b"e" * 20000
+        else:
+            body = json.dumps({"path": self.path}).encode()
+        self.send_response(500 if self.path.startswith("/error") else 200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -225,6 +230,20 @@ class UrllibHttpTests(unittest.TestCase):
         status, body = jira.urllib_http(f"{self.base}/ok", "GET", {"Accept": "application/json"}, 5)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"path": "/ok"})
+
+    def test_urllib_http_rejects_a_body_above_the_limit(self):
+        original = jira.MAXIMUM_RESPONSE_BYTES
+        jira.MAXIMUM_RESPONSE_BYTES = 1000
+        try:
+            with self.assertRaises(jira.UnexpectedResponseError):
+                jira.urllib_http(f"{self.base}/huge", "GET", {}, 5)
+        finally:
+            jira.MAXIMUM_RESPONSE_BYTES = original
+
+    def test_urllib_http_truncates_an_error_body(self):
+        status, body = jira.urllib_http(f"{self.base}/error", "GET", {}, 5)
+        self.assertEqual(status, 500)
+        self.assertEqual(len(body), jira.MAXIMUM_ERROR_BODY_BYTES)
 
     def test_urllib_http_times_out(self):
         with self.assertRaises(OSError):

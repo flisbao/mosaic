@@ -68,6 +68,7 @@ fn jira_runner(server: &FakeJira, state_dir: &Path, mode: &str, token: &str) -> 
             .iter()
             .map(|(name, value)| (name.to_string(), value.clone()))
             .collect(),
+        inherit_env: None,
         timeout: std::time::Duration::from_secs(30),
     };
     PluginRunner::new(command, state_dir.to_path_buf())
