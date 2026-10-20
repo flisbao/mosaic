@@ -133,11 +133,15 @@ pub fn run_process(
     let mut child = spawn_isolated(command, stdin_text.is_some())?;
     feed_stdin(&mut child, stdin_text);
     cancel.register_child(child.id());
-    let stdout = capture(child.stdout.take(), limits.maximum_output_bytes, true);
+    let stdout = capture(
+        child.stdout.take(),
+        limits.maximum_output_bytes,
+        OverflowPolicy::Fail,
+    );
     let stderr = capture(
         child.stderr.take(),
         limits.maximum_output_bytes.min(MAXIMUM_ERROR_BYTES),
-        false,
+        OverflowPolicy::Truncate,
     );
     let status = wait_for_exit(&mut child, &stdout, limits, deadline, cancel)?;
 
@@ -281,10 +285,16 @@ fn process_group_argument(pid: u32) -> Option<String> {
     (group_id >= LOWEST_SAFE_PROCESS_GROUP_ID).then(|| format!("-{group_id}"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverflowPolicy {
+    Fail,
+    Truncate,
+}
+
 fn capture(
     stream: Option<impl Read + Send + 'static>,
     maximum_bytes: usize,
-    enforce_limit: bool,
+    policy: OverflowPolicy,
 ) -> CapturedOutput {
     let (sender, receiver) = mpsc::channel();
     let overflowed = Arc::new(AtomicBool::new(false));
@@ -301,7 +311,7 @@ fn capture(
                 Ok(0) | Err(_) => break,
                 Ok(count) => {
                     if collected.len() + count > maximum_bytes {
-                        if enforce_limit {
+                        if policy == OverflowPolicy::Fail {
                             overflow_flag.store(true, Ordering::SeqCst);
                             break;
                         }
@@ -437,6 +447,27 @@ mod tests {
     fn deadline_after_rejects_an_unrepresentable_timeout() {
         assert!(deadline_after(Duration::MAX).is_err());
         assert!(deadline_after(Duration::from_secs(1)).is_ok());
+    }
+
+    #[test]
+    fn capture_truncate_discards_oversized_chunks_and_fail_flags_the_overflow() {
+        let data = vec![b'a'; READ_CHUNK_BYTES * 2];
+
+        let truncated = capture(
+            Some(std::io::Cursor::new(data.clone())),
+            10,
+            OverflowPolicy::Truncate,
+        );
+        assert!(truncated
+            .receiver
+            .recv_timeout(WAIT_LIMIT)
+            .unwrap()
+            .is_empty());
+        assert!(!truncated.overflowed.load(Ordering::SeqCst));
+
+        let failed = capture(Some(std::io::Cursor::new(data)), 10, OverflowPolicy::Fail);
+        failed.receiver.recv_timeout(WAIT_LIMIT).unwrap();
+        assert!(failed.overflowed.load(Ordering::SeqCst));
     }
 
     #[test]
