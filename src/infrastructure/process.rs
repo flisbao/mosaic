@@ -48,9 +48,6 @@ pub enum ProcessError {
 
 #[cfg(unix)]
 const LOWEST_SAFE_PROCESS_GROUP_ID: i32 = 2;
-#[cfg(unix)]
-const KILL_PROGRAM_PATHS: [&str; 2] = ["/bin/kill", "/usr/bin/kill"];
-
 #[derive(Default)]
 struct CancelState {
     cancelled: AtomicBool,
@@ -290,32 +287,21 @@ fn isolate_process_group(_command: &mut Command) {}
 
 #[cfg(unix)]
 fn signal_process_group(pid: u32) {
-    let Some(program) = resolve_kill_program(&KILL_PROGRAM_PATHS) else {
-        return;
-    };
-    if let Some(target) = process_group_argument(pid) {
-        let _ = Command::new(program)
-            .args(["-KILL", "--", &target])
-            .output();
+    if let Some(group) = safe_process_group(pid) {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     }
 }
 
 #[cfg(unix)]
-fn resolve_kill_program<'a>(candidates: &[&'a str]) -> Option<&'a str> {
-    candidates
-        .iter()
-        .copied()
-        .find(|candidate| std::path::Path::new(candidate).is_file())
+fn safe_process_group(pid: u32) -> Option<rustix::process::Pid> {
+    i32::try_from(pid)
+        .ok()
+        .filter(|group_id| *group_id >= LOWEST_SAFE_PROCESS_GROUP_ID)
+        .and_then(rustix::process::Pid::from_raw)
 }
 
 #[cfg(not(unix))]
 fn signal_process_group(_pid: u32) {}
-
-#[cfg(unix)]
-fn process_group_argument(pid: u32) -> Option<String> {
-    let group_id = i32::try_from(pid).ok()?;
-    (group_id >= LOWEST_SAFE_PROCESS_GROUP_ID).then(|| format!("-{group_id}"))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OverflowPolicy {
@@ -517,23 +503,6 @@ mod tests {
         let failed = capture(Some(std::io::Cursor::new(data)), 10, OverflowPolicy::Fail);
         failed.receiver.recv_timeout(WAIT_LIMIT).unwrap();
         assert!(failed.overflowed.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn kill_program_is_never_resolved_through_path() {
-        assert_eq!(
-            resolve_kill_program(&["/caminho/que/nao/existe/kill"]),
-            None
-        );
-        assert_eq!(resolve_kill_program(&[]), None);
-    }
-
-    #[test]
-    fn kill_program_is_the_first_existing_absolute_path() {
-        assert_eq!(
-            resolve_kill_program(&["/caminho/que/nao/existe/kill", "/bin/sh", "/usr/bin/env"]),
-            Some("/bin/sh")
-        );
     }
 
     fn is_gone(pid: &str) -> bool {
@@ -794,11 +763,11 @@ mod tests {
     }
 
     #[test]
-    fn process_group_argument_never_targets_unsafe_ids() {
-        assert_eq!(process_group_argument(0), None);
-        assert_eq!(process_group_argument(1), None);
-        assert_eq!(process_group_argument(u32::MAX), None);
-        assert_eq!(process_group_argument(1234), Some("-1234".to_string()));
+    fn safe_process_group_never_targets_unsafe_ids() {
+        assert!(safe_process_group(0).is_none());
+        assert!(safe_process_group(1).is_none());
+        assert!(safe_process_group(u32::MAX).is_none());
+        assert!(safe_process_group(1234).is_some());
     }
 
     #[test]

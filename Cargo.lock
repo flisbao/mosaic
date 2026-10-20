@@ -761,6 +761,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "ratatui",
+ "rustix",
  "serde",
  "serde_json",
  "signal-hook",
