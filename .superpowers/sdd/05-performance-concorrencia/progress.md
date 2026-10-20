@@ -31,4 +31,4 @@ Ruling: o trecho de teste PERF-09 usa `runtime.start(..., 1)`, mas o repositóri
 
 ## Revisão final
 - Important corrigido: falha em `event::read()` agora vira `AppEvent::TerminalReadFailed` e é propagada como erro de terminal pelo loop principal. Teste de regressão primeiro falhou por ausência do helper/variante, depois passou; `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` passaram.
-- Minor adiado: Enter materializa `ActionSpec` ao sair do vetor de referências e `propose` clona o spec para o estado de confirmação. O reviewer reportou uma cópia adicional; impacto limitado a uma tecla de confirmação e não altera correção/semântica. Mantido fora do escopo de desempenho medido no plano; se a leitura do custo estiver errada, há uma cópia evitável no caminho Enter.
+- Minor corrigido: `propose` agora recebe `Option<ActionSpec>` e move o valor para `ProposedAction`, eliminando o clone adicional em Enter. Teste de transferência de propriedade falhou inicialmente por incompatibilidade do tipo de referência e passou após a mudança.

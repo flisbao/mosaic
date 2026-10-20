@@ -389,7 +389,7 @@ impl AppState {
             },
             KeyInput::Enter => {
                 let chosen = actions.get(selected).map(|action| (*action).clone());
-                match self.propose(chosen.as_ref()) {
+                match self.propose(chosen) {
                     Some(proposed) => Mode::Confirming(proposed),
                     None => Mode::Browsing,
                 }
@@ -451,8 +451,8 @@ impl AppState {
         }
     }
 
-    fn propose(&mut self, spec: Option<&ActionSpec>) -> Option<ProposedAction> {
-        let spec = spec?.clone();
+    fn propose(&mut self, spec: Option<ActionSpec>) -> Option<ProposedAction> {
+        let spec = spec?;
         let entry_index = self.focused_entry()?;
         let widget_id = self.entries.get(entry_index)?.id.clone();
         let item_id = match spec.scope {
@@ -1203,6 +1203,14 @@ mod tests {
         assert!(matches!(app.mode(), Mode::ChoosingAction { .. }));
         app.begin_widget_refresh(&WidgetId::new("kanban"));
         assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn propose_takes_ownership_of_the_selected_action_spec() {
+        let mut app = app();
+        let selected = app.available_actions()[0].clone();
+
+        assert!(app.propose(Some(selected)).is_some());
     }
 
     #[test]
