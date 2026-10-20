@@ -18,7 +18,7 @@ use crate::presentation::grid_layout::{
 };
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
-    box_block, box_body, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
+    box_block, box_header, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
 };
 use crate::presentation::widget_view::render_blocks;
 
@@ -221,7 +221,7 @@ fn detail_lines(
     width: usize,
     now: NaiveDateTime,
 ) -> (Vec<Line<'static>>, usize) {
-    let header = box_body(entry, width, now, FailureDetail::Shown).header;
+    let header = box_header(entry, width, now, FailureDetail::Shown);
     let header_height = header.len();
     let Some(sections) = entry
         .record

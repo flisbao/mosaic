@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Display;
 
 use chrono::{NaiveDateTime, TimeDelta};
@@ -97,12 +98,12 @@ impl Summary {
         }
     }
 
-    pub fn display_blocks(&self) -> Vec<Block> {
+    pub fn display_blocks(&self) -> Cow<'_, [Block]> {
         if !self.blocks.is_empty() {
-            return self.blocks.clone();
+            return Cow::Borrowed(&self.blocks);
         }
         if self.lines.is_empty() {
-            return vec![];
+            return Cow::Borrowed(&[]);
         }
         let lines = self
             .lines
@@ -113,7 +114,7 @@ impl Summary {
                 flag: line.flag,
             })
             .collect();
-        vec![Block::Lines(lines)]
+        Cow::Owned(vec![Block::Lines(lines)])
     }
 }
 
@@ -133,8 +134,8 @@ pub struct DetailSection {
 }
 
 impl DetailSection {
-    pub fn display_blocks(&self) -> Vec<Block> {
-        self.blocks.clone()
+    pub fn display_blocks(&self) -> Cow<'_, [Block]> {
+        Cow::Borrowed(&self.blocks)
     }
 }
 
@@ -372,6 +373,13 @@ mod tests {
             flag: Some(Flag::Warning),
         }]);
         assert_eq!(summary(legacy, vec![]).display_blocks(), vec![expected]);
+    }
+
+    #[test]
+    fn display_blocks_borrows_the_blocks_instead_of_cloning_them() {
+        let blocks = vec![Block::Lines(vec![])];
+        let borrowed = summary(vec![], blocks);
+        assert!(matches!(borrowed.display_blocks(), Cow::Borrowed(_)));
     }
 
     #[test]
