@@ -5,9 +5,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::application::launch_spec::WidgetLaunchSpec;
-use crate::application::ports::{Cancellable, WidgetRunner};
+use crate::application::ports::{Cancellable, WidgetLifecycle, WidgetRunner};
 use crate::application::refresh::refresh_widget;
-use crate::application::reload::{Generation, WidgetLifecycle, WidgetUpdate};
+use crate::application::reload::{Generation, WidgetUpdate};
 use crate::application::shutdown::ShutdownCoordinator;
 use crate::application::widget_notices::with_interval_notice;
 use crate::domain::widget::WidgetId;

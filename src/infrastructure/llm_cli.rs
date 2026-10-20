@@ -3,7 +3,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::application::llm::{CancellableLlmRunner, LlmError, LlmRequest, LlmRunner};
+use crate::application::ports::{CancellableLlmRunner, LlmError, LlmRequest, LlmRunner};
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::config::{Harness, LlmConfig};
 use crate::infrastructure::private_directory::prepare_private_directory;
@@ -241,8 +241,8 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-    use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
     use crate::application::ports::Cancellable;
+    use crate::application::ports::{LlmError, LlmRequest, LlmRunner};
 
     #[test]
     fn factory_builds_a_cancellable_runner_for_each_harness() {

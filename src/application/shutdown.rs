@@ -101,8 +101,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{should_stop, ShutdownCoordinator};
-    use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
     use crate::application::ports::Cancellable;
+    use crate::application::ports::{LlmError, LlmRequest, LlmRunner};
     use crate::application::refresh::fakes::snapshot_titled;
     use crate::application::refresh::fakes::FakeSource;
 

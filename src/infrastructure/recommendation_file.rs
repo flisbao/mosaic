@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
-use crate::application::llm::{RecommendationStore, StoreError, StoredRecommendation};
+use crate::application::ports::{RecommendationStore, StoreError, StoredRecommendation};
 use crate::infrastructure::private_directory::prepare_private_directory;
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";

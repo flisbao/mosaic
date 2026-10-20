@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::application::ports::SourceError;
+use crate::application::ports::{SourceError, WidgetLifecycle, WidgetSpec};
 use crate::application::reload_plan::{ReloadPlan, WidgetChange};
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 
@@ -11,17 +11,6 @@ pub struct WidgetUpdate {
     pub id: WidgetId,
     pub generation: Generation,
     pub result: Result<WidgetSnapshot, SourceError>,
-}
-
-pub trait WidgetSpec {
-    fn widget_id(&self) -> &WidgetId;
-}
-
-pub trait WidgetLifecycle {
-    type Spec: WidgetSpec;
-
-    fn start(&mut self, spec: &Self::Spec, generation: Generation);
-    fn retire(&mut self, id: &WidgetId);
 }
 
 #[derive(Debug, Clone, PartialEq)]

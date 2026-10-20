@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::application::pomodoro_notifications::{alert_for, AlertMessage};
+use crate::application::pomodoro_notifications::alert_for;
+use crate::application::ports::AlertMessage;
 use crate::domain::pomodoro::PomodoroTimer;
 
 #[derive(Debug, Error, PartialEq)]

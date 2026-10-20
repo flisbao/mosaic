@@ -1,4 +1,4 @@
-use crate::application::llm::StoredRecommendation;
+use crate::application::ports::StoredRecommendation;
 use crate::domain::widget::{DetailItem, DetailSection, Summary, SummaryLine, WidgetSnapshot};
 
 pub const SUMMARY_LINE_LIMIT: usize = 8;

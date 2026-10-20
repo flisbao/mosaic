@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::application::reload::WidgetSpec;
+use crate::application::ports::WidgetSpec;
 use crate::domain::widget::WidgetId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

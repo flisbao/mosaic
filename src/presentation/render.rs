@@ -6,7 +6,8 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::application::pomodoro_notifications::{phase_label, AlertMessage};
+use crate::application::pomodoro_notifications::phase_label;
+use crate::application::ports::AlertMessage;
 use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer, SECONDS_PER_MINUTE};
 use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};

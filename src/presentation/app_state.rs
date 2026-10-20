@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::NaiveDateTime;
 
-use crate::application::pomodoro_notifications::AlertMessage;
+use crate::application::ports::AlertMessage;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
 use crate::domain::action::{ConfirmedAction, ProposedAction};

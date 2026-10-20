@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::application::recommendation_request::{CriteriaError, CriteriaSource};
+use crate::application::ports::{CriteriaError, CriteriaSource};
 
 pub struct FilePriorityPrompt {
     path: PathBuf,

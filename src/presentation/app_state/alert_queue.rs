@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::application::pomodoro_notifications::AlertMessage;
+use crate::application::ports::AlertMessage;
 
 use super::MAXIMUM_QUEUED_ALERTS;
 

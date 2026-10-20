@@ -7,9 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mosaic::application::launch_spec::ProviderCommand;
-use mosaic::application::llm::{
-    execute_recommendation, LlmError, RecommendationOutcome, RecommendationStore,
-};
+use mosaic::application::llm::{execute_recommendation, RecommendationOutcome};
+use mosaic::application::ports::{LlmError, RecommendationStore};
 use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContext};
 use mosaic::application::recommendation_view::recommendation_snapshot;
 use mosaic::application::refresh::refresh_widget;

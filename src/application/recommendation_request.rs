@@ -1,15 +1,6 @@
-use chrono::NaiveDateTime;
-use thiserror::Error;
-
+use crate::application::ports::CriteriaSource;
 use crate::application::recommendation::{build_plan, RecommendationPlan, WidgetContext};
-
-#[derive(Debug, Clone, Error, PartialEq)]
-#[error("{0}")]
-pub struct CriteriaError(pub String);
-
-pub trait CriteriaSource {
-    fn load(&self) -> Result<String, CriteriaError>;
-}
+use chrono::NaiveDateTime;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SendPolicy {
@@ -58,6 +49,7 @@ fn confirmation_text(plan: &RecommendationPlan, target_label: &str) -> String {
 mod tests {
 
     use super::*;
+    use crate::application::ports::CriteriaError;
     use crate::application::recommendation::LlmSelection;
     use crate::domain::widget::{
         DetailItem, DetailSection, Summary, WidgetId, WidgetRecord, WidgetSnapshot,

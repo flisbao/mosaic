@@ -1,19 +1,10 @@
+use crate::application::ports::AlertMessage;
 use crate::domain::pomodoro::{Phase, PhaseEnded};
 
 const FOCUS_ENDED_TITLE: &str = "Foco concluído";
 const BREAK_ENDED_TITLE: &str = "Descanso terminou";
 const DEFAULT_REST_BODY: &str = "Hora de descansar";
 const BREAK_ENDED_BODY: &str = "Volte ao foco ou troque de tarefa (p inicia)";
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AlertMessage {
-    pub title: String,
-    pub body: String,
-}
-
-pub trait Notifier: Send + Sync {
-    fn notify(&self, message: &AlertMessage);
-}
 
 pub fn alert_for(ended: &PhaseEnded) -> AlertMessage {
     match ended.finished {

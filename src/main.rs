@@ -15,9 +15,10 @@ use chrono::NaiveDateTime;
 use mosaic::application::alert_tracker::AlertTracker;
 use mosaic::application::execute_action::execute_confirmed;
 use mosaic::application::launch_spec::WidgetLaunchSpec;
-use mosaic::application::llm::{execute_recommendation, LlmRunner, RecommendationStore};
-use mosaic::application::pomodoro_notifications::Notifier;
-use mosaic::application::ports::{Cancellable, Clock, WidgetRunner};
+use mosaic::application::llm::execute_recommendation;
+use mosaic::application::ports::{
+    Cancellable, Clock, LlmRunner, Notifier, RecommendationStore, WidgetRunner,
+};
 use mosaic::application::recommendation::{LlmSelection, RecommendationPlan, WidgetContext};
 use mosaic::application::recommendation_request::{
     prepare_recommendation, RecommendationStep, SendPolicy,

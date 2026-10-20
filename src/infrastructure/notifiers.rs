@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::application::pomodoro_notifications::{AlertMessage, Notifier};
+use crate::application::ports::{AlertMessage, Notifier};
 use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
 
 const BELL_CHARACTER: &[u8] = b"\x07";
