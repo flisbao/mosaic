@@ -51,6 +51,27 @@ MAXIMUM_PAGE_SIZE = 100
 MAXIMUM_QUERY_MESSAGE_LENGTH = 200
 STATUS_CATEGORIES = ("new", "indeterminate", "done")
 UNKNOWN_CATEGORY = "unknown"
+PROTOCOL_VERSION = 1
+SUMMARY_TEXT_LIMIT = 80
+MAXIMUM_BLOCK_ROWS = 200
+MAXIMUM_STAT_ITEMS = 8
+OTHERS_LABEL = "Outros"
+NOBODY_LABEL = "ninguem"
+MISSING_PRIORITY = "-"
+EMPTY_LABEL = "nenhum ticket"
+MORE_RESULTS_SUFFIX = "+"
+DETAIL_SEPARATOR = " — "
+OFFLINE_NOTICE_FORMAT = "dados de %H:%M (offline)"
+TONE_BY_CATEGORY = {"new": "muted", "indeterminate": "current", "done": "ok"}
+DEFAULT_TONE = "normal"
+COLUMN_TITLES = {
+    "key": "Chave",
+    "summary": "Resumo",
+    "status": "Status",
+    "assignee": "Responsável",
+    "priority": "Prioridade",
+    "updated": "Atualizado",
+}
 REMOVED_VARIABLES = (
     "JIRA_MODE",
     "JIRA_PROJECT",
@@ -458,3 +479,129 @@ def _parse_search_page(payload):
         raise UnexpectedResponseError("a resposta de busca do Jira não tem a lista de issues")
     parsed = (parse_issue(raw_issue) for raw_issue in raw_issues)
     return [issue for issue in parsed if issue is not None]
+
+
+def build_snapshot(result, options, site, now, offline_since=None):
+    blocks = [_build_summary_block(result, options, now)]
+    if offline_since is not None:
+        blocks.insert(0, _offline_notice_block(offline_since))
+    snapshot = {
+        "protocol": PROTOCOL_VERSION,
+        "summary": {"title": options.title, "blocks": blocks},
+    }
+    if result.issues:
+        snapshot["detail"] = _build_detail(result.issues, options, site)
+    return snapshot
+
+
+def _offline_notice_block(offline_since):
+    text = offline_since.astimezone().strftime(OFFLINE_NOTICE_FORMAT)
+    return {"type": "lines", "lines": [{"text": text, "tone": "warn"}]}
+
+
+def _build_summary_block(result, options, now):
+    if options.view == "stat":
+        return _stat_block(result, options)
+    if not result.issues:
+        return {"type": "lines", "lines": [{"text": EMPTY_LABEL, "tone": "muted"}]}
+    visible = result.issues[:MAXIMUM_BLOCK_ROWS]
+    if options.view == "table":
+        return _table_block(visible, options.columns, now)
+    return _lines_block(visible)
+
+
+def _lines_block(issues):
+    return {
+        "type": "lines",
+        "lines": [
+            {
+                "text": f"{issue.key} {flatten_text(issue.summary, SUMMARY_TEXT_LIMIT)}",
+                "tone": TONE_BY_CATEGORY.get(issue.status_category, DEFAULT_TONE),
+            }
+            for issue in issues
+        ],
+    }
+
+
+def _table_block(issues, columns, now):
+    return {
+        "type": "table",
+        "columns": [{"title": COLUMN_TITLES[column]} for column in columns],
+        "rows": [[_cell_text(issue, column, now) for column in columns] for issue in issues],
+    }
+
+
+def _cell_text(issue, column, now):
+    if column == "key":
+        return issue.key
+    if column == "summary":
+        return flatten_text(issue.summary, SUMMARY_TEXT_LIMIT)
+    if column == "status":
+        return issue.status
+    if column == "assignee":
+        return _group_name(issue, "assignee")
+    if column == "priority":
+        return _group_name(issue, "priority")
+    return format_duration(now - issue.updated)
+
+
+def _stat_block(result, options):
+    suffix = MORE_RESULTS_SUFFIX if result.has_more else ""
+    if options.group_by == "none" or not result.issues:
+        counts = [(options.title, len(result.issues))]
+    else:
+        counts = _collapse_small_groups(
+            [(name, len(members)) for name, members in _group_issues(result.issues, options.group_by)]
+        )
+    return {
+        "type": "stat",
+        "items": [{"value": f"{count}{suffix}", "label": label} for label, count in counts],
+    }
+
+
+def _collapse_small_groups(counts):
+    if len(counts) <= MAXIMUM_STAT_ITEMS:
+        return counts
+    kept = counts[: MAXIMUM_STAT_ITEMS - 1]
+    others = sum(count for _, count in counts[MAXIMUM_STAT_ITEMS - 1 :])
+    return kept + [(OTHERS_LABEL, others)]
+
+
+def _group_name(issue, group_by):
+    if group_by == "assignee":
+        return issue.assignee or NOBODY_LABEL
+    if group_by == "priority":
+        return issue.priority or MISSING_PRIORITY
+    return issue.status
+
+
+def _group_issues(issues, group_by):
+    groups = {}
+    for issue in issues:
+        groups.setdefault(_group_name(issue, group_by), []).append(issue)
+    return sorted(groups.items(), key=lambda group: (-len(group[1]), group[0]))
+
+
+def _build_detail(issues, options, site):
+    if options.group_by == "none":
+        groups = [(options.title, issues)]
+    else:
+        groups = _group_issues(issues, options.group_by)
+    return [
+        {"heading": name, "items": [_detail_item(issue, site) for issue in members]}
+        for name, members in groups
+    ]
+
+
+def _detail_item(issue, site):
+    summary = flatten_text(issue.summary, SUMMARY_TEXT_LIMIT)
+    return {
+        "id": issue.key,
+        "text": f"{issue.key}{DETAIL_SEPARATOR}{summary}",
+        "meta": {
+            "status": issue.status,
+            "prioridade": issue.priority or MISSING_PRIORITY,
+            "responsavel": issue.assignee or NOBODY_LABEL,
+            "site": site,
+        },
+    }

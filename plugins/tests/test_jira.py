@@ -468,5 +468,200 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(jira.flatten_text("abc", 0), "")
 
 
+NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+SITE = "empresa.atlassian.net"
+
+
+def make_issue(index=1, **overrides):
+    values = {
+        "key": f"ABC-{index}",
+        "summary": f"Resumo {index}",
+        "status": "Em andamento",
+        "status_category": "indeterminate",
+        "assignee": "Ana",
+        "priority": "Alta",
+        "created": NOW - timedelta(days=3),
+        "updated": NOW - timedelta(hours=5),
+    }
+    values.update(overrides)
+    return jira.Issue(**values)
+
+
+def make_options(**overrides):
+    values = {
+        "jql": "x",
+        "title": "Meus tickets",
+        "group_by": "none",
+        "view": "lines",
+        "columns": jira.DEFAULT_COLUMNS,
+        "max_issues": 100,
+    }
+    values.update(overrides)
+    return jira.WidgetOptions(**values)
+
+
+def snapshot_of(issues, has_more=False, offline_since=None, **option_overrides):
+    return jira.build_snapshot(
+        jira.SearchResult(issues, has_more),
+        make_options(**option_overrides),
+        SITE,
+        NOW,
+        offline_since,
+    )
+
+
+class PresentationTests(unittest.TestCase):
+    def test_lines_view_one_line_per_issue_with_tone_by_category(self):
+        issues = [
+            make_issue(1, status_category="new"),
+            make_issue(2, status_category="indeterminate"),
+            make_issue(3, status_category="done"),
+            make_issue(4, status_category="unknown"),
+        ]
+        snapshot = snapshot_of(issues)
+        self.assertEqual(snapshot["protocol"], 1)
+        self.assertEqual(snapshot["summary"]["title"], "Meus tickets")
+        block = snapshot["summary"]["blocks"][0]
+        self.assertEqual(block["type"], "lines")
+        self.assertEqual(
+            block["lines"],
+            [
+                {"text": "ABC-1 Resumo 1", "tone": "muted"},
+                {"text": "ABC-2 Resumo 2", "tone": "current"},
+                {"text": "ABC-3 Resumo 3", "tone": "ok"},
+                {"text": "ABC-4 Resumo 4", "tone": "normal"},
+            ],
+        )
+        self.assertNotIn("actions", snapshot)
+
+    def test_table_view_uses_requested_columns_and_headers(self):
+        snapshot = snapshot_of(
+            [make_issue(1, assignee=None)],
+            view="table",
+            columns=("key", "status", "assignee", "priority", "updated"),
+        )
+        block = snapshot["summary"]["blocks"][0]
+        self.assertEqual(block["type"], "table")
+        self.assertEqual(
+            [column["title"] for column in block["columns"]],
+            ["Chave", "Status", "Responsável", "Prioridade", "Atualizado"],
+        )
+        self.assertEqual(
+            block["rows"], [["ABC-1", "Em andamento", "ninguem", "Alta", "5h"]]
+        )
+
+    def test_stat_view_counts_and_marks_has_more_with_plus(self):
+        issues = [make_issue(1), make_issue(2)]
+        exact = snapshot_of(issues, view="stat")["summary"]["blocks"][0]
+        self.assertEqual(exact["type"], "stat")
+        self.assertEqual(exact["items"], [{"value": "2", "label": "Meus tickets"}])
+        partial = snapshot_of(issues, has_more=True, view="stat")
+        self.assertEqual(partial["summary"]["blocks"][0]["items"][0]["value"], "2+")
+
+    def test_group_by_assignee_orders_by_count_then_name_and_labels_nobody(self):
+        issues = [
+            make_issue(1, assignee="Zoe"),
+            make_issue(2, assignee=None),
+            make_issue(3, assignee="Ana"),
+            make_issue(4, assignee="Zoe"),
+        ]
+        snapshot = snapshot_of(issues, view="stat", group_by="assignee")
+        items = snapshot["summary"]["blocks"][0]["items"]
+        self.assertEqual(
+            [(item["label"], item["value"]) for item in items],
+            [("Zoe", "2"), ("Ana", "1"), ("ninguem", "1")],
+        )
+        self.assertEqual(
+            [section["heading"] for section in snapshot["detail"]],
+            ["Zoe", "Ana", "ninguem"],
+        )
+
+    def test_group_by_priority_labels_missing_priority(self):
+        snapshot = snapshot_of(
+            [make_issue(1, priority=None)], view="stat", group_by="priority"
+        )
+        label = snapshot["summary"]["blocks"][0]["items"][0]["label"]
+        self.assertEqual(label, "-")
+
+    def test_stat_with_more_than_eight_groups_collapses_into_others(self):
+        issues = []
+        for group in range(10):
+            for copy in range(10 - group):
+                issues.append(
+                    make_issue(len(issues), status=f"S{group}", assignee="x")
+                )
+        snapshot = snapshot_of(issues, view="stat", group_by="status")
+        items = snapshot["summary"]["blocks"][0]["items"]
+        self.assertEqual(len(items), 8)
+        self.assertEqual(items[-1], {"value": "6", "label": "Outros"})
+        self.assertEqual(len(snapshot["detail"]), 10)
+
+    def test_detail_items_carry_key_and_meta(self):
+        snapshot = snapshot_of([make_issue(1, assignee=None)])
+        self.assertEqual(len(snapshot["detail"]), 1)
+        section = snapshot["detail"][0]
+        self.assertEqual(section["heading"], "Meus tickets")
+        self.assertEqual(
+            section["items"],
+            [
+                {
+                    "id": "ABC-1",
+                    "text": "ABC-1 — Resumo 1",
+                    "meta": {
+                        "status": "Em andamento",
+                        "prioridade": "Alta",
+                        "responsavel": "ninguem",
+                        "site": SITE,
+                    },
+                }
+            ],
+        )
+
+    def test_empty_result_is_a_valid_widget_in_every_view(self):
+        for view in jira.VIEW_CHOICES:
+            snapshot = snapshot_of([], view=view)
+            self.assertNotIn("detail", snapshot)
+            block = snapshot["summary"]["blocks"][0]
+            if view == "stat":
+                self.assertEqual(
+                    block["items"], [{"value": "0", "label": "Meus tickets"}]
+                )
+            else:
+                self.assertEqual(block["type"], "lines")
+                self.assertEqual(
+                    block["lines"], [{"text": "nenhum ticket", "tone": "muted"}]
+                )
+        grouped = snapshot_of([], view="stat", group_by="status")
+        self.assertEqual(grouped["summary"]["blocks"][0]["items"][0]["value"], "0")
+
+    def test_rows_are_capped_at_200_and_output_stays_under_1_mib(self):
+        issues = [make_issue(index, summary="longo " * 100) for index in range(500)]
+        for view in ("lines", "table"):
+            snapshot = snapshot_of(issues, view=view, max_issues=500)
+            self.assertLess(len(json.dumps(snapshot).encode()), 1_048_576)
+            block = snapshot["summary"]["blocks"][0]
+            rows = block["lines"] if view == "lines" else block["rows"]
+            self.assertEqual(len(rows), 200)
+
+    def test_offline_notice_is_first_block_with_warn_tone(self):
+        offline_since = datetime(2026, 10, 20, 9, 30, tzinfo=timezone.utc)
+        snapshot = snapshot_of([make_issue(1)], offline_since=offline_since)
+        blocks = snapshot["summary"]["blocks"]
+        expected = offline_since.astimezone().strftime("dados de %H:%M (offline)")
+        self.assertEqual(
+            blocks[0], {"type": "lines", "lines": [{"text": expected, "tone": "warn"}]}
+        )
+        self.assertEqual(blocks[1]["type"], "lines")
+
+    def test_summary_text_is_flattened_and_truncated(self):
+        title = "linha um\nlinha dois " + "x" * 200
+        snapshot = snapshot_of([make_issue(1, summary=title)])
+        text = snapshot["summary"]["blocks"][0]["lines"][0]["text"]
+        self.assertNotIn("\n", text)
+        self.assertTrue(text.startswith("ABC-1 linha um linha dois"))
+        self.assertLessEqual(len(text), len("ABC-1 ") + 80)
+        self.assertTrue(text.endswith("…"))
+
+
 if __name__ == "__main__":
     unittest.main()
