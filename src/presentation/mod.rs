@@ -3,6 +3,7 @@ pub mod app_state;
 pub mod blocks;
 pub mod focus_column;
 pub mod key_input;
+pub mod reload_notice;
 pub mod render;
 pub mod tab_layout;
 pub mod text_fit;

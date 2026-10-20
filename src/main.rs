@@ -31,7 +31,7 @@ use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, load_config, prepare_reload, read_config_file,
-    reload_notice, retain_restart_sections, AppConfig, ConfigError, Harness, LlmConfig,
+    restart_sections, retain_restart_sections, AppConfig, ConfigError, Harness, LlmConfig,
     WidgetSettings,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
@@ -49,6 +49,7 @@ use mosaic::presentation::app_events::{
 };
 use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::{from_crossterm, KeyInput};
+use mosaic::presentation::reload_notice::reload_notice;
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
@@ -442,7 +443,7 @@ fn apply_reloaded_config(
     next: AppConfig,
     plan: &ReloadPlan,
 ) {
-    let notice = reload_notice(&services.config, &next);
+    let notice = reload_notice(&restart_sections(&services.config, &next), &next.warnings);
     let TabLayout {
         entries,
         tabs,
