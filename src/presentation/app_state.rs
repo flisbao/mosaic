@@ -30,6 +30,21 @@ const RECOMMENDATION_BUSY_NOTICE: &str = "A IA já está processando um pedido";
 const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfirmationAnswer {
+    Accept,
+    Reject,
+    Ignore,
+}
+
+fn confirmation_answer(key: KeyInput) -> ConfirmationAnswer {
+    match key {
+        KeyInput::Character('s') => ConfirmationAnswer::Accept,
+        KeyInput::Escape | KeyInput::Character('n') => ConfirmationAnswer::Reject,
+        _ => ConfirmationAnswer::Ignore,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WidgetEntry {
     pub id: WidgetId,
@@ -377,8 +392,8 @@ impl AppState {
     }
 
     fn handle_confirmation_key(&mut self, key: KeyInput, proposed: ProposedAction) -> Transition {
-        match key {
-            KeyInput::Character('s') => {
+        match confirmation_answer(key) {
+            ConfirmationAnswer::Accept => {
                 let confirmed = proposed.confirm();
                 if !self.pending_actions.try_begin(confirmed.widget()) {
                     self.show_notice(ACTION_PENDING_NOTICE.to_string());
@@ -386,8 +401,8 @@ impl AppState {
                 }
                 Transition::emit(Command::Execute(confirmed))
             }
-            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
-            _ => Transition::to(Mode::Confirming(proposed)),
+            ConfirmationAnswer::Reject => Transition::idle(),
+            ConfirmationAnswer::Ignore => Transition::to(Mode::Confirming(proposed)),
         }
     }
 
@@ -397,10 +412,10 @@ impl AppState {
         text: String,
         plan: RecommendationPlan,
     ) -> Transition {
-        match key {
-            KeyInput::Character('s') => Transition::emit(Command::SendRecommendation(plan)),
-            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
-            _ => Transition::to(Mode::ConfirmingSend { text, plan }),
+        match confirmation_answer(key) {
+            ConfirmationAnswer::Accept => Transition::emit(Command::SendRecommendation(plan)),
+            ConfirmationAnswer::Reject => Transition::idle(),
+            ConfirmationAnswer::Ignore => Transition::to(Mode::ConfirmingSend { text, plan }),
         }
     }
 
@@ -474,6 +489,30 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirmation_keys_are_classified_in_one_place() {
+        assert_eq!(
+            confirmation_answer(KeyInput::Character('s')),
+            ConfirmationAnswer::Accept
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Character('n')),
+            ConfirmationAnswer::Reject
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Escape),
+            ConfirmationAnswer::Reject
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Character('x')),
+            ConfirmationAnswer::Ignore
+        );
+        assert_eq!(
+            confirmation_answer(KeyInput::Enter),
+            ConfirmationAnswer::Ignore
+        );
+    }
     use crate::domain::pomodoro::{PomodoroSettings, PomodoroStatus};
     use crate::domain::widget::{
         ActionScope, ActionSpec, DetailItem, DetailSection, Summary, WidgetSnapshot,
