@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use mosaic::application::check_report::build_check_report;
+use mosaic::application::check_report::{build_check_report, SnapshotParseFailure};
 use mosaic::domain::widget::{WidgetId, WidgetSnapshot};
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, parse_config, read_config_file, ConfigError, WidgetSettings,
@@ -102,7 +102,9 @@ pub fn run(arguments: &[String]) -> ExitCode {
     };
     let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let runner = PluginRunner::new(settings, working_directory);
-    let parse = |json: &str| parse_snapshot_report(json).map_err(|error| error.to_string());
+    let parse = |json: &str| {
+        parse_snapshot_report(json).map_err(|error| SnapshotParseFailure(error.to_string()))
+    };
     let outcome = build_check_report(runner.raw_snapshot_output(), &parse, &check_preview);
     println!("{}", outcome.text);
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(EXIT_CODE_FAILURE))

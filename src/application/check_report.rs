@@ -1,3 +1,5 @@
+use thiserror::Error;
+
 use crate::application::ports::SourceError;
 use crate::domain::snapshot_report::{ParsedSnapshot, Problem, Severity};
 use crate::domain::widget::{Mini, WidgetSnapshot};
@@ -11,14 +13,18 @@ pub struct CheckOutcome {
     pub exit_code: i32,
 }
 
+#[derive(Debug, Error, PartialEq)]
+#[error("{0}")]
+pub struct SnapshotParseFailure(pub String);
+
 pub fn build_check_report(
     raw: Result<String, SourceError>,
-    parse: &dyn Fn(&str) -> Result<ParsedSnapshot, String>,
+    parse: &dyn Fn(&str) -> Result<ParsedSnapshot, SnapshotParseFailure>,
     preview: &dyn Fn(&WidgetSnapshot) -> Vec<String>,
 ) -> CheckOutcome {
     let parsed = raw
         .map_err(|error| error.to_string())
-        .and_then(|output| parse(&output));
+        .and_then(|output| parse(&output).map_err(|error| error.to_string()));
     match parsed {
         Ok(parsed) => report_parsed(parsed, preview),
         Err(message) => CheckOutcome {
@@ -138,7 +144,7 @@ mod tests {
 
     #[test]
     fn execution_failure_is_reported_as_an_error() {
-        let parse = |_: &str| -> Result<ParsedSnapshot, String> { unreachable!() };
+        let parse = |_: &str| -> Result<ParsedSnapshot, SnapshotParseFailure> { unreachable!() };
         let preview = |_: &WidgetSnapshot| -> Vec<String> { unreachable!() };
         let outcome = build_check_report(
             Err(SourceError::Failed("plugin quebrou".to_string())),
@@ -151,7 +157,7 @@ mod tests {
 
     #[test]
     fn invalid_json_is_reported_as_an_error() {
-        let parse = |_: &str| Err("JSON ruim".to_string());
+        let parse = |_: &str| Err(SnapshotParseFailure("JSON ruim".to_string()));
         let preview = |_: &WidgetSnapshot| -> Vec<String> { unreachable!() };
         let outcome = build_check_report(Ok("{".to_string()), &parse, &preview);
         assert_eq!(outcome.exit_code, 1);
@@ -160,7 +166,7 @@ mod tests {
 
     #[test]
     fn mini_is_shown_between_the_title_and_the_preview() {
-        let parse = |_: &str| -> Result<ParsedSnapshot, String> {
+        let parse = |_: &str| -> Result<ParsedSnapshot, SnapshotParseFailure> {
             Ok(ParsedSnapshot {
                 snapshot: WidgetSnapshot {
                     mini: Some(Mini {
