@@ -132,6 +132,26 @@ pub struct WidgetSnapshot {
     pub mini: Option<Mini>,
 }
 
+impl WidgetSnapshot {
+    pub fn detail_items(&self) -> impl Iterator<Item = &DetailItem> {
+        self.detail
+            .iter()
+            .flatten()
+            .flat_map(|section| section.items.iter())
+    }
+
+    pub fn items_in_sections<'a>(
+        &'a self,
+        headings: &'a [String],
+    ) -> impl Iterator<Item = &'a DetailItem> {
+        self.detail
+            .iter()
+            .flatten()
+            .filter(move |section| headings.contains(&section.heading))
+            .flat_map(|section| section.items.iter())
+    }
+}
+
 pub const STALE_AFTER_INTERVALS: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,6 +190,14 @@ impl WidgetRecord {
 
     pub fn snapshot(&self) -> Option<&WidgetSnapshot> {
         self.snapshot.as_ref()
+    }
+
+    pub fn usable_snapshot(&self) -> Option<&WidgetSnapshot> {
+        if self.is_failing() {
+            None
+        } else {
+            self.snapshot()
+        }
     }
 
     pub fn last_error(&self) -> Option<&str> {
@@ -437,5 +465,64 @@ mod tests {
     #[test]
     fn widget_id_exposes_inner_text() {
         assert_eq!(WidgetId::new("kanban").as_str(), "kanban");
+    }
+
+    fn detail_snapshot() -> WidgetSnapshot {
+        let item = |id: &str| DetailItem {
+            id: Some(id.to_string()),
+            text: id.to_string(),
+            flag: None,
+            meta: vec![],
+        };
+        WidgetSnapshot {
+            detail: Some(vec![
+                DetailSection {
+                    heading: "inbox".to_string(),
+                    items: vec![item("a"), item("b")],
+                    blocks: vec![],
+                },
+                DetailSection {
+                    heading: "done".to_string(),
+                    items: vec![item("c")],
+                    blocks: vec![],
+                },
+            ]),
+            ..snapshot("T")
+        }
+    }
+
+    #[test]
+    fn usable_snapshot_is_none_while_loading_or_failing_and_some_when_loaded() {
+        let now = base_time();
+        let mut record = WidgetRecord::loading();
+        assert_eq!(record.usable_snapshot(), None);
+
+        record.apply(succeed("Kanban"), now);
+        assert_eq!(record.usable_snapshot(), Some(&snapshot("Kanban")));
+
+        record.apply(fail("falha"), seconds_after(now, 1));
+        assert_eq!(record.usable_snapshot(), None);
+        assert!(record.snapshot().is_some());
+    }
+
+    #[test]
+    fn detail_items_flattens_every_section_in_order() {
+        let ids: Vec<String> = detail_snapshot()
+            .detail_items()
+            .map(|item| item.text.clone())
+            .collect();
+        assert_eq!(ids, vec!["a", "b", "c"]);
+        assert_eq!(snapshot("T").detail_items().count(), 0);
+    }
+
+    #[test]
+    fn items_in_sections_keeps_only_the_named_headings() {
+        let headings = vec!["done".to_string()];
+        let snapshot = detail_snapshot();
+        let ids: Vec<&str> = snapshot
+            .items_in_sections(&headings)
+            .map(|item| item.text.as_str())
+            .collect();
+        assert_eq!(ids, vec!["c"]);
     }
 }

@@ -1,10 +1,10 @@
 use crate::application::llm::StoredRecommendation;
 use crate::domain::widget::{DetailItem, DetailSection, Summary, SummaryLine, WidgetSnapshot};
 
-pub const IA_WIDGET_ID: &str = "ia";
+pub const RECOMMENDATION_WIDGET_ID: &str = "ia";
 pub const SUMMARY_LINE_LIMIT: usize = 8;
 
-const IA_TITLE: &str = "IA";
+const RECOMMENDATION_TITLE: &str = "IA";
 const IDLE_LINE: &str = "Pressione i para pedir uma recomendação";
 const IDLE_HEADING: &str = "Recomendação";
 
@@ -42,7 +42,7 @@ fn snapshot(
         alerts: vec![],
         summary: Summary {
             blocks: vec![],
-            title: IA_TITLE.to_string(),
+            title: RECOMMENDATION_TITLE.to_string(),
             lines: summary_lines
                 .into_iter()
                 .map(|text| SummaryLine { text, flag: None })

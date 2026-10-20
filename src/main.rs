@@ -20,8 +20,8 @@ use mosaic::application::ports::{Cancellable, Clock, WidgetRunner};
 use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
-use mosaic::application::recommendation_view::IA_WIDGET_ID;
-use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations};
+use mosaic::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
+use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetUpdate};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::domain::action::ConfirmedAction;
@@ -41,11 +41,12 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
-use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
-use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime, WidgetUpdate};
-use mosaic::presentation::app_events::{apply_event, stored_ia_result, AppEvent, EventContext};
+use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime};
+use mosaic::presentation::app_events::{
+    apply_event, stored_recommendation_result, AppEvent, EventContext,
+};
 use mosaic::presentation::app_state::{AppState, Command};
-use mosaic::presentation::key_input::from_crossterm;
+use mosaic::presentation::key_input::{from_crossterm, KeyInput};
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
@@ -91,6 +92,19 @@ struct Services {
     config: AppConfig,
 }
 
+struct EventChannel {
+    sender: Sender<AppEvent>,
+    receiver: mpsc::Receiver<AppEvent>,
+}
+
+struct App {
+    state: AppState,
+    spans: Vec<u16>,
+    services: Services,
+    events: EventChannel,
+    clock: SystemClock,
+}
+
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().map(String::as_str) == Some(CHECK_SUBCOMMAND) {
@@ -109,52 +123,60 @@ fn run() -> Result<(), AppError> {
     let directory = config_directory()?;
     install_defaults_if_missing(&directory)?;
     let config = load_config(&directory)?;
-    let _graphics_support = detect_graphics_support(&|name| std::env::var(name).ok());
-
     let termination = termination_requested()?;
     let (sender, receiver) = mpsc::channel();
-    let mut services = build_services(&config, &directory, &sender, Arc::clone(&termination));
-    let clock = SystemClock;
-    let ia_record = services
+    let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
+    let (state, spans) = initial_state(&config, &services, &SystemClock);
+    let mut app = App {
+        state,
+        spans,
+        services,
+        events: EventChannel { sender, receiver },
+        clock: SystemClock,
+    };
+
+    let mut terminal = ratatui::init();
+    let result = app.run_event_loop(&mut terminal);
+    ratatui::restore();
+    app.services.shutdown.shutdown();
+    result
+}
+
+fn initial_state(
+    config: &AppConfig,
+    services: &Services,
+    clock: &dyn Clock,
+) -> (AppState, Vec<u16>) {
+    let recommendation_record = services
         .llm
         .as_ref()
-        .map(|llm| stored_ia_record(llm.store.as_ref(), clock.now()));
+        .map(|llm| stored_recommendation_record(llm.store.as_ref(), clock.now()));
     let TabLayout {
         entries,
         tabs,
-        mut spans,
+        spans,
     } = build_tab_views(
-        &widget_placements(&config),
-        &tab_placements(&config),
-        ia_record,
+        &widget_placements(config),
+        &tab_placements(config),
+        recommendation_record,
     );
     let mut state = AppState::new(entries, tabs);
-    let warnings: Vec<String> = config
-        .warnings
-        .iter()
-        .chain(&services.startup_warnings)
-        .cloned()
-        .collect();
-    if let Some(notice) = startup_notice(&warnings) {
+    if let Some(notice) = startup_notice(&startup_warnings(config, services)) {
         state.show_notice(notice);
     }
     if config.pomodoro.enabled {
         state = state.with_pomodoro(PomodoroTimer::new(config.pomodoro.settings()));
     }
+    (state, spans)
+}
 
-    let mut terminal = ratatui::init();
-    let result = event_loop(
-        &mut terminal,
-        &mut state,
-        &mut spans,
-        &clock,
-        &mut services,
-        &sender,
-        &receiver,
-    );
-    ratatui::restore();
-    services.shutdown.shutdown();
-    result
+fn startup_warnings(config: &AppConfig, services: &Services) -> Vec<String> {
+    config
+        .warnings
+        .iter()
+        .chain(&services.startup_warnings)
+        .cloned()
+        .collect()
 }
 
 fn widget_placements(config: &AppConfig) -> Vec<WidgetPlacement> {
@@ -198,7 +220,7 @@ fn build_services(
     let mut runtime = WidgetRuntime::new(
         factory,
         sender.clone(),
-        widget_updated,
+        AppEvent::WidgetUpdated,
         Arc::clone(&shutdown),
     );
     let mut generations = WidgetGenerations::default();
@@ -231,10 +253,6 @@ fn build_services(
     }
 }
 
-fn widget_updated(update: WidgetUpdate) -> AppEvent {
-    AppEvent::WidgetUpdated(update.id, update.generation, update.result)
-}
-
 fn startup_plan(widgets: &[WidgetSettings]) -> ReloadPlan {
     ReloadPlan {
         changes: widgets
@@ -265,13 +283,13 @@ fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<
     let timeout = Duration::from_secs(config.llm.timeout_seconds);
     let (runner, cancellable) = match config.llm.harness {
         Harness::Claude => share_llm_runner(ClaudeCli::new(
-            "claude".to_string(),
+            Harness::Claude.program_name().to_string(),
             working_directory,
             config.llm.max_budget_usd,
             timeout,
         )),
         Harness::OpenCode => share_llm_runner(OpenCodeCli::new(
-            "opencode".to_string(),
+            Harness::OpenCode.program_name().to_string(),
             working_directory,
             timeout,
         )),
@@ -295,16 +313,7 @@ fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<
 fn llm_selections(widgets: &[WidgetSettings]) -> HashMap<String, LlmSelection> {
     widgets
         .iter()
-        .map(|widget| {
-            (
-                widget.id.as_str().to_string(),
-                LlmSelection {
-                    sections: widget.llm_sections.clone(),
-                    max_items: widget.llm_max_items,
-                    max_characters_per_item: widget.llm_max_characters_per_item,
-                },
-            )
-        })
+        .map(|widget| (widget.id.as_str().to_string(), widget.llm_selection.clone()))
         .collect()
 }
 
@@ -324,63 +333,90 @@ fn build_notifier(config: &AppConfig, shutdown: &ShutdownCoordinator) -> Composi
     CompositeNotifier::new(notifiers)
 }
 
-fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    state: &mut AppState,
-    spans: &mut Vec<u16>,
-    clock: &dyn Clock,
-    services: &mut Services,
-    sender: &Sender<AppEvent>,
-    receiver: &mpsc::Receiver<AppEvent>,
-) -> Result<(), AppError> {
-    let mut last_tick = Instant::now();
-    let mut alert_tracker = AlertTracker::new();
-    loop {
-        if should_stop(&services.termination) {
-            return Ok(());
-        }
-        while let Ok(app_event) = receiver.try_recv() {
-            let context = EventContext {
-                generations: &services.generations,
-                notifier: &services.notifier,
-                recommendation_store: services.llm.as_ref().map(|llm| llm.store.as_ref()),
+impl App {
+    fn run_event_loop(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<(), AppError> {
+        let mut last_tick = Instant::now();
+        let mut alert_tracker = AlertTracker::new();
+        loop {
+            if should_stop(&self.services.termination) {
+                return Ok(());
+            }
+            self.apply_pending_events(&mut alert_tracker);
+            let elapsed = last_tick.elapsed();
+            last_tick = Instant::now();
+            if let Some(alert) = self.state.advance_pomodoro(elapsed) {
+                self.services.notifier.notify(&alert);
+            }
+            terminal.draw(|frame| {
+                render(frame, &self.state, self.spans.as_slice(), self.clock.now())
+            })?;
+            if !event::poll(INPUT_POLL_INTERVAL)? {
+                continue;
+            }
+            let Event::Key(key) = event::read()? else {
+                continue;
             };
-            apply_event(state, app_event, &context, &mut alert_tracker, clock.now());
-        }
-        let elapsed = last_tick.elapsed();
-        last_tick = Instant::now();
-        if let Some(alert) = state.advance_pomodoro(elapsed) {
-            services.notifier.notify(&alert);
-        }
-        terminal.draw(|frame| render(frame, state, spans.as_slice(), clock.now()))?;
-        if !event::poll(INPUT_POLL_INTERVAL)? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        let Some(input) = from_crossterm(key) else {
-            continue;
-        };
-        match state.handle_key(input) {
-            Some(Command::Quit) => return Ok(()),
-            Some(Command::RefreshAll) => services.runtime.trigger_all(),
-            Some(Command::ReloadConfig) => reload_config(state, services, spans),
-            Some(Command::Execute(action)) => spawn_action(action, state, services, sender),
-            Some(Command::RequestRecommendation) => {
-                request_recommendation(state, services, clock, sender)
+            let Some(input) = from_crossterm(key) else {
+                continue;
+            };
+            if let Some(Command::Quit) = self.handle_input(input) {
+                return Ok(());
             }
-            Some(Command::SendRecommendation(plan)) => {
-                start_recommendation(state, services, plan, clock, sender)
-            }
-            None => {}
         }
+    }
+
+    fn apply_pending_events(&mut self, alert_tracker: &mut AlertTracker) {
+        while let Ok(app_event) = self.events.receiver.try_recv() {
+            let context = EventContext {
+                generations: &self.services.generations,
+                notifier: &self.services.notifier,
+                recommendation_store: self.services.llm.as_ref().map(|llm| llm.store.as_ref()),
+            };
+            apply_event(
+                &mut self.state,
+                app_event,
+                &context,
+                alert_tracker,
+                self.clock.now(),
+            );
+        }
+    }
+
+    fn handle_input(&mut self, input: KeyInput) -> Option<Command> {
+        let command = self.state.handle_key(input)?;
+        match command {
+            Command::Quit => return Some(Command::Quit),
+            Command::RefreshAll => self.services.runtime.trigger_all(),
+            Command::ReloadConfig => {
+                reload_config(&mut self.state, &mut self.services, &mut self.spans)
+            }
+            Command::Execute(action) => {
+                spawn_action(action, &mut self.state, &self.services, &self.events.sender)
+            }
+            Command::RequestRecommendation => request_recommendation(
+                &mut self.state,
+                &self.services,
+                &self.clock,
+                &self.events.sender,
+            ),
+            Command::SendRecommendation(plan) => start_recommendation(
+                &mut self.state,
+                &self.services,
+                plan,
+                &self.clock,
+                &self.events.sender,
+            ),
+        }
+        None
     }
 }
 
-fn stored_ia_record(store: &dyn RecommendationStore, now: NaiveDateTime) -> WidgetRecord {
+fn stored_recommendation_record(
+    store: &dyn RecommendationStore,
+    now: NaiveDateTime,
+) -> WidgetRecord {
     let mut record = WidgetRecord::loading();
-    record.apply(stored_ia_result(store), now);
+    record.apply(stored_recommendation_result(store), now);
     record
 }
 
@@ -420,15 +456,15 @@ fn apply_reloaded_config(
 }
 
 fn rebuilt_layout(state: &AppState, config: &AppConfig, plan: &ReloadPlan) -> TabLayout {
-    let ia_record = state
+    let recommendation_record = state
         .entries()
         .iter()
-        .find(|entry| entry.id.as_str() == IA_WIDGET_ID)
+        .find(|entry| entry.id.as_str() == RECOMMENDATION_WIDGET_ID)
         .map(|entry| entry.record.clone());
     let mut layout = build_tab_views(
         &widget_placements(config),
         &tab_placements(config),
-        ia_record,
+        recommendation_record,
     );
     carry_over_records(
         &mut layout.entries,
@@ -456,8 +492,57 @@ fn spawn_action(
     let sender = sender.clone();
     thread::spawn(move || {
         let (notice, result) = execute_confirmed(runner.as_ref(), runner.as_ref(), action);
-        let _ = sender.send(AppEvent::ActionFinished(widget, generation, notice, result));
+        let update = WidgetUpdate {
+            id: widget,
+            generation,
+            result,
+        };
+        let _ = sender.send(AppEvent::ActionFinished { update, notice });
     });
+}
+
+#[derive(Debug, Error)]
+#[error("Não foi possível ler {path}: {source}")]
+struct PriorityCriteriaUnreadable {
+    path: String,
+    source: std::io::Error,
+}
+
+fn read_priority_criteria(
+    config_directory: &Path,
+    config: &LlmConfig,
+) -> Result<String, PriorityCriteriaUnreadable> {
+    let prompt_path = config_directory.join(&config.priority_prompt);
+    fs::read_to_string(&prompt_path).map_err(|source| PriorityCriteriaUnreadable {
+        path: prompt_path.display().to_string(),
+        source,
+    })
+}
+
+fn widget_contexts<'a>(
+    state: &'a AppState,
+    selections: &'a HashMap<String, LlmSelection>,
+) -> Vec<WidgetContext<'a>> {
+    state
+        .entries()
+        .iter()
+        .filter_map(|entry| {
+            Some(WidgetContext {
+                widget_id: &entry.id,
+                selection: selections.get(entry.id.as_str())?,
+                state: &entry.record,
+            })
+        })
+        .collect()
+}
+
+fn confirmation_text(plan: &RecommendationPlan, config: &LlmConfig) -> String {
+    format!(
+        "Enviar {} itens (~{} tokens, estimativa) para {}?",
+        plan.item_count,
+        plan.estimated_tokens,
+        describe_target(config)
+    )
 }
 
 fn request_recommendation(
@@ -470,40 +555,22 @@ fn request_recommendation(
         state.show_notice(LLM_DISABLED_NOTICE.to_string());
         return;
     };
-    let prompt_path = services.config_directory.join(&llm.config.priority_prompt);
-    let criteria = match fs::read_to_string(&prompt_path) {
+    let criteria = match read_priority_criteria(&services.config_directory, &llm.config) {
         Ok(criteria) => criteria,
         Err(error) => {
-            state.show_notice(format!(
-                "Não foi possível ler {}: {error}",
-                prompt_path.display()
-            ));
+            state.show_notice(error.to_string());
             return;
         }
     };
-    let plan = {
-        let contexts: Vec<WidgetContext> = state
-            .entries()
-            .iter()
-            .filter_map(|entry| {
-                Some(WidgetContext {
-                    widget_id: &entry.id,
-                    selection: llm.selections.get(entry.id.as_str())?,
-                    state: &entry.record,
-                })
-            })
-            .collect();
-        build_plan(&criteria, clock.now(), &contexts)
-    };
+    let plan = build_plan(
+        &criteria,
+        clock.now(),
+        &widget_contexts(state, &llm.selections),
+    );
     match plan {
         Err(error) => state.show_notice(error.to_string()),
         Ok(plan) if llm.config.confirm_before_send => {
-            let text = format!(
-                "Enviar {} itens (~{} tokens, estimativa) para {}?",
-                plan.item_count,
-                plan.estimated_tokens,
-                describe_target(&llm.config)
-            );
+            let text = confirmation_text(&plan, &llm.config);
             state.ask_send_confirmation(text, plan);
         }
         Ok(plan) => start_recommendation(state, services, plan, clock, sender),
@@ -520,7 +587,7 @@ fn start_recommendation(
     let Some(llm) = &services.llm else {
         return;
     };
-    state.begin_widget_refresh(&WidgetId::new(IA_WIDGET_ID));
+    state.begin_widget_refresh(&WidgetId::new(RECOMMENDATION_WIDGET_ID));
     let runner = Arc::clone(&llm.runner);
     let store = Arc::clone(&llm.store);
     let model = llm.config.model.clone();
@@ -539,12 +606,57 @@ fn start_recommendation(
 }
 
 fn describe_target(config: &LlmConfig) -> String {
-    let harness = match config.harness {
-        Harness::Claude => "claude",
-        Harness::OpenCode => "opencode",
-    };
+    let harness = config.harness.program_name();
     match &config.model {
         Some(model) => format!("{harness}/{model}"),
         None => harness.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn llm_config(model: Option<&str>) -> LlmConfig {
+        LlmConfig {
+            enabled: true,
+            harness: Harness::Claude,
+            model: model.map(str::to_string),
+            max_budget_usd: None,
+            timeout_seconds: 5,
+            confirm_before_send: true,
+            priority_prompt: "prompts/prioridade.md".to_string(),
+        }
+    }
+
+    #[test]
+    fn confirmation_text_names_the_item_count_the_estimate_and_the_target() {
+        let plan = RecommendationPlan {
+            prompt: "p".to_string(),
+            item_count: 3,
+            estimated_tokens: 40,
+        };
+
+        assert_eq!(
+            confirmation_text(&plan, &llm_config(Some("haiku"))),
+            "Enviar 3 itens (~40 tokens, estimativa) para claude/haiku?"
+        );
+        assert_eq!(
+            confirmation_text(&plan, &llm_config(None)),
+            "Enviar 3 itens (~40 tokens, estimativa) para claude?"
+        );
+    }
+
+    #[test]
+    fn missing_priority_prompt_reports_its_path() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let error = read_priority_criteria(directory.path(), &llm_config(None)).unwrap_err();
+
+        assert!(
+            error.to_string().starts_with("Não foi possível ler "),
+            "{error}"
+        );
+        assert!(error.to_string().contains("prioridade.md"), "{error}");
     }
 }

@@ -24,6 +24,9 @@ pub const MAXIMUM_KEY_CHARACTERS: usize = 100;
 
 const EMPTY_PARAMS_JSON: &str = "{}";
 const UNKNOWN_FIELD_MESSAGE: &str = "campo desconhecido";
+const NOT_TEXT_IGNORED_MESSAGE: &str = "precisa ser texto; ignorado";
+const NOT_A_LIST_MESSAGE: &str = "precisa ser uma lista";
+const MISSING_FIELD_MESSAGE: &str = "campo obrigatório ausente";
 const ROOT_KEYS: [&str; 6] = ["protocol", "summary", "detail", "actions", "alerts", "mini"];
 const SUMMARY_KEYS: [&str; 3] = ["title", "lines", "blocks"];
 const DETAIL_KEYS: [&str; 1] = ["sections"];
@@ -158,7 +161,7 @@ impl Reader {
                 None
             }
             None => {
-                self.error(&field_path, "campo obrigatório ausente");
+                self.error(&field_path, MISSING_FIELD_MESSAGE);
                 None
             }
         }
@@ -175,7 +178,7 @@ impl Reader {
             Some(Value::String(text)) => Some(self.limited(text, &field_path)),
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.warning(&field_path, "precisa ser texto; ignorado");
+                self.warning(&field_path, NOT_TEXT_IGNORED_MESSAGE);
                 None
             }
         }
@@ -196,7 +199,7 @@ impl Reader {
             }
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.warning(&field_path, "precisa ser texto; ignorado");
+                self.warning(&field_path, NOT_TEXT_IGNORED_MESSAGE);
                 None
             }
         }
@@ -245,7 +248,7 @@ impl Reader {
             Some(Value::Array(entries)) => Some(entries),
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.error(&child_path(path, key), "precisa ser uma lista");
+                self.error(&child_path(path, key), NOT_A_LIST_MESSAGE);
                 None
             }
         }
@@ -270,6 +273,15 @@ impl Reader {
             .count()
     }
 
+    pub(super) fn accepting_no_errors<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> Option<T> {
+        let errors_before = self.error_count();
+        let value = parse(self);
+        (self.error_count() == errors_before).then_some(value)
+    }
+
     pub(super) fn capped<'a>(
         &mut self,
         entries: &'a [Value],
@@ -283,6 +295,23 @@ impl Reader {
         &entries[..limit]
     }
 
+    fn parse_each<T>(
+        &mut self,
+        entries: &[Value],
+        limit: usize,
+        path: &str,
+        mut parse_entry: impl FnMut(&mut Self, &Value, &str) -> Option<T>,
+    ) -> Vec<T> {
+        let entries = self.capped(entries, limit, path);
+        let mut parsed = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            if let Some(value) = parse_entry(self, entry, &indexed_path(path, index)) {
+                parsed.push(value);
+            }
+        }
+        parsed
+    }
+
     pub(super) fn required_list<'a>(
         &mut self,
         object: &'a Map<String, Value>,
@@ -292,11 +321,11 @@ impl Reader {
         match object.get(key) {
             Some(Value::Array(entries)) => entries,
             Some(_) => {
-                self.error(&child_path(path, key), "precisa ser uma lista");
+                self.error(&child_path(path, key), NOT_A_LIST_MESSAGE);
                 &[]
             }
             None => {
-                self.error(&child_path(path, key), "campo obrigatório ausente");
+                self.error(&child_path(path, key), MISSING_FIELD_MESSAGE);
                 &[]
             }
         }
@@ -314,7 +343,7 @@ impl Reader {
             }),
             Some(Value::Null) | None => Tone::Normal,
             Some(_) => {
-                self.warning(&tone_path, "precisa ser texto; ignorado");
+                self.warning(&tone_path, NOT_TEXT_IGNORED_MESSAGE);
                 Tone::Normal
             }
         }
@@ -325,14 +354,12 @@ impl Reader {
         let Some(entries) = self.list(object, "blocks", path) else {
             return vec![];
         };
-        let entries = self.capped(entries, MAXIMUM_BLOCKS_PER_WIDGET, &blocks_path);
-        let mut blocks = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            if let Some(block) = self.block(entry, &indexed_path(&blocks_path, index)) {
-                blocks.push(block);
-            }
-        }
-        blocks
+        self.parse_each(
+            entries,
+            MAXIMUM_BLOCKS_PER_WIDGET,
+            &blocks_path,
+            Self::block,
+        )
     }
 
     fn block(&mut self, entry: &Value, path: &str) -> Option<Block> {
@@ -349,9 +376,7 @@ impl Reader {
             self.warning(path, &message);
             return None;
         };
-        let errors_before = self.error_count();
-        let block = parser.parse(self, object, path);
-        (self.error_count() == errors_before).then_some(block)
+        parser.parse(self, object, path)
     }
 
     fn mini(&mut self, root: &Map<String, Value>) -> Option<Mini> {
@@ -388,20 +413,19 @@ impl Reader {
         let Some(entries) = self.list(summary, "lines", "summary") else {
             return vec![];
         };
-        let entries = self.capped(entries, MAXIMUM_LEGACY_LINES, "summary.lines");
-        let mut lines = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let path = indexed_path("summary.lines", index);
-            let Some(object) = self.object_entry(entry, &path) else {
-                continue;
-            };
-            let Some(text) = self.required_text(object, "text", &path) else {
-                continue;
-            };
-            let flag = self.flag(object, &path);
-            lines.push(SummaryLine { text, flag });
-        }
-        lines
+        self.parse_each(
+            entries,
+            MAXIMUM_LEGACY_LINES,
+            "summary.lines",
+            Self::legacy_line,
+        )
+    }
+
+    fn legacy_line(&mut self, entry: &Value, path: &str) -> Option<SummaryLine> {
+        let object = self.object_entry(entry, path)?;
+        let text = self.required_text(object, "text", path)?;
+        let flag = self.flag(object, path);
+        Some(SummaryLine { text, flag })
     }
 
     fn detail(&mut self, root: &Map<String, Value>) -> Option<Vec<DetailSection>> {
@@ -411,15 +435,7 @@ impl Reader {
         };
         self.unknown_fields(detail, &DETAIL_KEYS, "detail");
         let entries = self.list(detail, "sections", "detail")?;
-        let entries = self.capped(entries, MAXIMUM_SECTIONS, "detail.sections");
-        let mut sections = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            let path = indexed_path("detail.sections", index);
-            if let Some(section) = self.section(entry, &path) {
-                sections.push(section);
-            }
-        }
-        Some(sections)
+        Some(self.parse_each(entries, MAXIMUM_SECTIONS, "detail.sections", Self::section))
     }
 
     fn section(&mut self, entry: &Value, path: &str) -> Option<DetailSection> {
@@ -428,16 +444,10 @@ impl Reader {
         let heading = self.required_text(object, "heading", path)?;
         let blocks = self.blocks(object, path);
         let items_path = child_path(path, "items");
-        let mut items = vec![];
         let entries = self
             .list(object, "items", path)
             .map_or(&[][..], Vec::as_slice);
-        let entries = self.capped(entries, MAXIMUM_ITEMS_PER_SECTION, &items_path);
-        for (index, item) in entries.iter().enumerate() {
-            if let Some(item) = self.item(item, &indexed_path(&items_path, index)) {
-                items.push(item);
-            }
-        }
+        let items = self.parse_each(entries, MAXIMUM_ITEMS_PER_SECTION, &items_path, Self::item);
         Some(DetailSection {
             heading,
             items,
@@ -453,7 +463,7 @@ impl Reader {
             Some(Value::String(id)) => Some(id.clone()),
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.warning(&child_path(path, "id"), "precisa ser texto; ignorado");
+                self.warning(&child_path(path, "id"), NOT_TEXT_IGNORED_MESSAGE);
                 None
             }
         };
@@ -484,7 +494,7 @@ impl Reader {
                     let value = self.limited(text, &key_path(&meta_path, key));
                     pairs.push((clean_text_limited(key, MAXIMUM_TEXT_CHARACTERS), value));
                 }
-                _ => self.warning(&key_path(&meta_path, key), "precisa ser texto; ignorado"),
+                _ => self.warning(&key_path(&meta_path, key), NOT_TEXT_IGNORED_MESSAGE),
             }
         }
         pairs
@@ -494,14 +504,7 @@ impl Reader {
         let Some(entries) = self.list(root, "actions", "") else {
             return vec![];
         };
-        let entries = self.capped(entries, MAXIMUM_ACTIONS, "actions");
-        let mut actions = vec![];
-        for (index, entry) in entries.iter().enumerate() {
-            if let Some(action) = self.action(entry, &indexed_path("actions", index)) {
-                actions.push(action);
-            }
-        }
-        actions
+        self.parse_each(entries, MAXIMUM_ACTIONS, "actions", Self::action)
     }
 
     fn action(&mut self, entry: &Value, path: &str) -> Option<ActionSpec> {
@@ -540,19 +543,7 @@ impl Reader {
         let Some(entries) = self.list(root, "alerts", "") else {
             return vec![];
         };
-        if entries.len() > MAXIMUM_ALERTS_PER_SNAPSHOT {
-            self.warning(
-                "alerts",
-                &format!("apenas {MAXIMUM_ALERTS_PER_SNAPSHOT} avisos são lidos por leitura"),
-            );
-        }
-        let mut alerts = vec![];
-        for (index, entry) in entries.iter().take(MAXIMUM_ALERTS_PER_SNAPSHOT).enumerate() {
-            if let Some(alert) = self.alert(entry, &indexed_path("alerts", index)) {
-                alerts.push(alert);
-            }
-        }
-        alerts
+        self.parse_each(entries, MAXIMUM_ALERTS_PER_SNAPSHOT, "alerts", Self::alert)
     }
 
     fn alert(&mut self, entry: &Value, path: &str) -> Option<Alert> {
@@ -641,6 +632,24 @@ mod tests {
             .filter(|problem| problem.severity == severity)
             .map(|problem| problem.path.clone())
             .collect()
+    }
+
+    #[test]
+    fn accepting_no_errors_discards_the_value_only_when_an_error_was_reported() {
+        let mut reader = Reader::default();
+
+        let with_warning = reader.accepting_no_errors(|reader| {
+            reader.warning("a", "aviso");
+            1
+        });
+        let with_error = reader.accepting_no_errors(|reader| {
+            reader.error("b", "erro");
+            2
+        });
+
+        assert_eq!(with_warning, Some(1));
+        assert_eq!(with_error, None);
+        assert_eq!(reader.problems.len(), 2);
     }
 
     #[test]
@@ -1428,5 +1437,24 @@ mod tests {
             "{warned:?}"
         );
         assert!(warned.contains(&"actions".to_string()), "{warned:?}");
+    }
+
+    #[test]
+    fn alerts_beyond_the_limit_are_capped_with_the_shared_warning() {
+        let alerts = (0..=MAXIMUM_ALERTS_PER_SNAPSHOT)
+            .map(|index| format!(r#"{{"id":"a{index}","title":"T"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let parsed = report(&format!(
+            r#"{{"summary":{{"title":"K"}},"alerts":[{alerts}]}}"#
+        ));
+
+        assert_eq!(parsed.snapshot.alerts.len(), MAXIMUM_ALERTS_PER_SNAPSHOT);
+        let warning = parsed
+            .problems
+            .iter()
+            .find(|problem| problem.path == "alerts")
+            .unwrap();
+        assert_eq!(warning.message, "apenas 100 itens são lidos");
     }
 }

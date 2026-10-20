@@ -121,23 +121,17 @@ pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError
         return Ok(false);
     }
     let plugins_directory = directory.join(PLUGINS_DIRECTORY_NAME);
-    fs::create_dir_all(&plugins_directory).map_err(to_io_error)?;
+    fs::create_dir_all(&plugins_directory).map_err(ConfigError::io(&plugins_directory))?;
     for (name, content) in BUNDLED_PLUGINS {
-        fs::write(plugins_directory.join(name), content).map_err(to_io_error)?;
+        let plugin_path = plugins_directory.join(name);
+        fs::write(&plugin_path, content).map_err(ConfigError::io(&plugin_path))?;
     }
     let prompts_directory = directory.join(PROMPTS_DIRECTORY_NAME);
-    fs::create_dir_all(&prompts_directory).map_err(to_io_error)?;
-    fs::write(
-        prompts_directory.join(PRIORITY_PROMPT_FILE_NAME),
-        PRIORITY_PROMPT,
-    )
-    .map_err(to_io_error)?;
-    fs::write(config_path, DEFAULT_CONFIG).map_err(to_io_error)?;
+    fs::create_dir_all(&prompts_directory).map_err(ConfigError::io(&prompts_directory))?;
+    let prompt_path = prompts_directory.join(PRIORITY_PROMPT_FILE_NAME);
+    fs::write(&prompt_path, PRIORITY_PROMPT).map_err(ConfigError::io(&prompt_path))?;
+    fs::write(&config_path, DEFAULT_CONFIG).map_err(ConfigError::io(&config_path))?;
     Ok(true)
-}
-
-fn to_io_error(error: std::io::Error) -> ConfigError {
-    ConfigError::Io(error.to_string())
 }
 
 #[cfg(test)]
@@ -180,10 +174,10 @@ mod tests {
     fn default_config_enables_kanban_for_the_llm() {
         let config = parse_config(default_config_text()).unwrap();
         assert_eq!(
-            config.widgets[0].llm_sections,
+            config.widgets[0].llm_selection.sections,
             vec!["inbox", "in progress", "acompanhar_jira"]
         );
-        assert!(config.widgets[1].llm_sections.is_empty());
+        assert!(config.widgets[1].llm_selection.sections.is_empty());
     }
 
     #[test]

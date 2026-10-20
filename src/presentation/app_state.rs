@@ -1,12 +1,12 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
 
-use crate::application::pomodoro_notifications::{alert_for, AlertMessage};
+use crate::application::pomodoro_notifications::AlertMessage;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
-use crate::application::recommendation_view::IA_WIDGET_ID;
+use crate::application::recommendation_view::RECOMMENDATION_WIDGET_ID;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
 use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::shortcuts::assign_shortcuts;
@@ -15,13 +15,17 @@ use crate::domain::widget::{
 };
 use crate::presentation::key_input::KeyInput;
 
+mod alert_queue;
 mod focus_navigation;
+mod pomodoro_control;
+
+use alert_queue::AlertQueue;
+use pomodoro_control::PomodoroControl;
 
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
 pub const PAGE_JUMP_ITEMS: usize = 10;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
-const POMODORO_DISABLED_NOTICE: &str = "Pomodoro desligado na configuração";
-const IA_BUSY_NOTICE: &str = "A IA já está processando um pedido";
+const RECOMMENDATION_BUSY_NOTICE: &str = "A IA já está processando um pedido";
 const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
@@ -62,6 +66,31 @@ pub enum Command {
     SendRecommendation(RecommendationPlan),
 }
 
+struct Transition {
+    mode: Mode,
+    command: Option<Command>,
+}
+
+impl Transition {
+    fn to(mode: Mode) -> Self {
+        Self {
+            mode,
+            command: None,
+        }
+    }
+
+    fn idle() -> Self {
+        Self::to(Mode::Browsing)
+    }
+
+    fn emit(command: Command) -> Self {
+        Self {
+            mode: Mode::Browsing,
+            command: Some(command),
+        }
+    }
+}
+
 pub struct AppState {
     entries: Vec<WidgetEntry>,
     tabs: Vec<TabView>,
@@ -71,8 +100,8 @@ pub struct AppState {
     selected_item: usize,
     mode: Mode,
     notice: Option<String>,
-    pomodoro: Option<PomodoroTimer>,
-    alerts: VecDeque<AlertMessage>,
+    pomodoro: PomodoroControl,
+    alerts: AlertQueue,
     pending_actions: HashSet<WidgetId>,
 }
 
@@ -87,8 +116,8 @@ impl AppState {
             selected_item: 0,
             mode: Mode::Browsing,
             notice: None,
-            pomodoro: None,
-            alerts: VecDeque::new(),
+            pomodoro: PomodoroControl::default(),
+            alerts: AlertQueue::default(),
             pending_actions: HashSet::new(),
         }
     }
@@ -110,12 +139,12 @@ impl AppState {
     }
 
     pub fn with_pomodoro(mut self, timer: PomodoroTimer) -> Self {
-        self.pomodoro = Some(timer);
+        self.pomodoro = PomodoroControl::enabled(timer);
         self
     }
 
     pub fn pomodoro(&self) -> Option<&PomodoroTimer> {
-        self.pomodoro.as_ref()
+        self.pomodoro.timer()
     }
 
     pub fn alert(&self) -> Option<&AlertMessage> {
@@ -123,18 +152,15 @@ impl AppState {
     }
 
     pub fn pending_alert_count(&self) -> usize {
-        self.alerts.len()
+        self.alerts.pending_count()
     }
 
     pub fn show_alert(&mut self, message: AlertMessage) {
-        if self.alerts.len() < MAXIMUM_QUEUED_ALERTS {
-            self.alerts.push_back(message);
-        }
+        self.alerts.push(message);
     }
 
     pub fn advance_pomodoro(&mut self, elapsed: Duration) -> Option<AlertMessage> {
-        let ended = self.pomodoro.as_mut()?.advance(elapsed)?;
-        let alert = alert_for(&ended);
+        let alert = self.pomodoro.advance(elapsed)?;
         self.show_alert(alert.clone());
         Some(alert)
     }
@@ -239,31 +265,17 @@ impl AppState {
     }
 
     pub fn detail_items(&self) -> Vec<&DetailItem> {
-        let Some(record) = self.focused_record() else {
-            return Vec::new();
-        };
-        if record.is_failing() {
-            return Vec::new();
-        }
-        let Some(snapshot) = record.snapshot() else {
-            return Vec::new();
-        };
-        snapshot
-            .detail
-            .iter()
-            .flatten()
-            .flat_map(|section| section.items.iter())
-            .collect()
+        self.focused_record()
+            .and_then(WidgetRecord::usable_snapshot)
+            .map(|snapshot| snapshot.detail_items().collect())
+            .unwrap_or_default()
     }
 
     pub fn available_actions(&self) -> Vec<ActionSpec> {
-        let Some(record) = self.focused_record() else {
-            return Vec::new();
-        };
-        if record.is_failing() {
-            return Vec::new();
-        }
-        let Some(snapshot) = record.snapshot() else {
+        let Some(snapshot) = self
+            .focused_record()
+            .and_then(WidgetRecord::usable_snapshot)
+        else {
             return Vec::new();
         };
         let item_selected = self.selected_detail_item_id().is_some();
@@ -277,23 +289,22 @@ impl AppState {
 
     pub fn handle_key(&mut self, key: KeyInput) -> Option<Command> {
         self.notice = None;
-        if self.alerts.pop_front().is_some() {
+        if self.alerts.dismiss_front() {
             return None;
         }
-        match std::mem::replace(&mut self.mode, Mode::Browsing) {
+        let transition = match self.mode.clone() {
             Mode::Browsing => self.handle_browsing_key(key),
-            Mode::ChoosingAction { selected } => {
-                self.handle_action_menu_key(key, selected);
-                None
-            }
+            Mode::ChoosingAction { selected } => self.handle_action_menu_key(key, selected),
             Mode::Confirming(proposed) => self.handle_confirmation_key(key, proposed),
             Mode::ConfirmingSend { text, plan } => {
                 self.handle_send_confirmation_key(key, text, plan)
             }
-        }
+        };
+        self.mode = transition.mode;
+        transition.command
     }
 
-    fn handle_browsing_key(&mut self, key: KeyInput) -> Option<Command> {
+    fn handle_browsing_key(&mut self, key: KeyInput) -> Transition {
         match key {
             KeyInput::Character(letter) => self.handle_character(letter),
             KeyInput::Tab
@@ -309,49 +320,46 @@ impl AppState {
             | KeyInput::Home
             | KeyInput::End => {
                 self.handle_navigation_key(key);
-                None
+                Transition::idle()
             }
         }
     }
 
-    fn handle_character(&mut self, letter: char) -> Option<Command> {
+    fn handle_character(&mut self, letter: char) -> Transition {
         match letter {
-            'r' => Some(Command::RefreshAll),
-            'R' => Some(Command::ReloadConfig),
-            'q' => Some(Command::Quit),
+            'r' => Transition::emit(Command::RefreshAll),
+            'R' => Transition::emit(Command::ReloadConfig),
+            'q' => Transition::emit(Command::Quit),
             'i' => self.request_recommendation(),
             'p' => {
                 self.toggle_pomodoro();
-                None
+                Transition::idle()
             }
             'x' => {
                 self.reset_pomodoro();
-                None
+                Transition::idle()
             }
-            'a' => {
-                self.open_action_menu();
-                None
-            }
+            'a' => Transition::to(self.open_action_menu()),
             other => {
                 self.handle_selection_character(other);
-                None
+                Transition::idle()
             }
         }
     }
 
-    fn request_recommendation(&mut self) -> Option<Command> {
-        if self.ia_is_loading() {
-            self.notice = Some(IA_BUSY_NOTICE.to_string());
-            None
+    fn request_recommendation(&mut self) -> Transition {
+        if self.recommendation_is_loading() {
+            self.notice = Some(RECOMMENDATION_BUSY_NOTICE.to_string());
+            Transition::idle()
         } else {
-            Some(Command::RequestRecommendation)
+            Transition::emit(Command::RequestRecommendation)
         }
     }
 
-    fn handle_action_menu_key(&mut self, key: KeyInput, selected: usize) {
+    fn handle_action_menu_key(&mut self, key: KeyInput, selected: usize) -> Transition {
         let actions = self.available_actions();
         let last = actions.len().saturating_sub(1);
-        self.mode = match key {
+        Transition::to(match key {
             KeyInput::Down => Mode::ChoosingAction {
                 selected: (selected + 1).min(last),
             },
@@ -364,28 +372,21 @@ impl AppState {
             },
             KeyInput::Escape | KeyInput::Character('n') => Mode::Browsing,
             _ => Mode::ChoosingAction { selected },
-        };
+        })
     }
 
-    fn handle_confirmation_key(
-        &mut self,
-        key: KeyInput,
-        proposed: ProposedAction,
-    ) -> Option<Command> {
+    fn handle_confirmation_key(&mut self, key: KeyInput, proposed: ProposedAction) -> Transition {
         match key {
             KeyInput::Character('s') => {
                 let confirmed = proposed.confirm();
                 if !self.pending_actions.insert(confirmed.widget().clone()) {
                     self.show_notice(ACTION_PENDING_NOTICE.to_string());
-                    return None;
+                    return Transition::idle();
                 }
-                Some(Command::Execute(confirmed))
+                Transition::emit(Command::Execute(confirmed))
             }
-            KeyInput::Escape | KeyInput::Character('n') => None,
-            _ => {
-                self.mode = Mode::Confirming(proposed);
-                None
-            }
+            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
+            _ => Transition::to(Mode::Confirming(proposed)),
         }
     }
 
@@ -394,34 +395,29 @@ impl AppState {
         key: KeyInput,
         text: String,
         plan: RecommendationPlan,
-    ) -> Option<Command> {
+    ) -> Transition {
         match key {
-            KeyInput::Character('s') => Some(Command::SendRecommendation(plan)),
-            KeyInput::Escape | KeyInput::Character('n') => None,
-            _ => {
-                self.mode = Mode::ConfirmingSend { text, plan };
-                None
-            }
+            KeyInput::Character('s') => Transition::emit(Command::SendRecommendation(plan)),
+            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
+            _ => Transition::to(Mode::ConfirmingSend { text, plan }),
         }
     }
 
-    fn ia_is_loading(&self) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.id.as_str() == IA_WIDGET_ID && entry.record.is_refreshing())
+    fn recommendation_is_loading(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.id.as_str() == RECOMMENDATION_WIDGET_ID && entry.record.is_refreshing()
+        })
     }
 
     fn toggle_pomodoro(&mut self) {
-        match self.pomodoro.as_mut() {
-            Some(timer) => timer.toggle(),
-            None => self.notice = Some(POMODORO_DISABLED_NOTICE.to_string()),
+        if let Err(error) = self.pomodoro.toggle() {
+            self.notice = Some(error.to_string());
         }
     }
 
     fn reset_pomodoro(&mut self) {
-        match self.pomodoro.as_mut() {
-            Some(timer) => timer.reset(),
-            None => self.notice = Some(POMODORO_DISABLED_NOTICE.to_string()),
+        if let Err(error) = self.pomodoro.reset() {
+            self.notice = Some(error.to_string());
         }
     }
 
@@ -442,11 +438,12 @@ impl AppState {
         }
     }
 
-    fn open_action_menu(&mut self) {
+    fn open_action_menu(&mut self) -> Mode {
         if self.available_actions().is_empty() {
             self.notice = Some(NO_ACTIONS_NOTICE.to_string());
+            Mode::Browsing
         } else {
-            self.mode = Mode::ChoosingAction { selected: 0 };
+            Mode::ChoosingAction { selected: 0 }
         }
     }
 
@@ -668,6 +665,30 @@ mod tests {
             title: title.to_string(),
             body: String::new(),
         }
+    }
+
+    #[test]
+    fn irrelevant_key_preserves_every_modal_mode() {
+        let mut confirming = app_confirming_move_of_second_item();
+        let before = confirming.mode().clone();
+        assert_eq!(confirming.handle_key(character('z')), None);
+        assert_eq!(confirming.mode(), &before);
+
+        let mut sending = app();
+        sending.ask_send_confirmation("enviar?".to_string(), plan());
+        let before = sending.mode().clone();
+        assert_eq!(sending.handle_key(character('z')), None);
+        assert_eq!(sending.mode(), &before);
+
+        let mut choosing = app();
+        press(
+            &mut choosing,
+            &[KeyInput::Enter, KeyInput::Down, character('a')],
+        );
+        let before = choosing.mode().clone();
+        assert!(matches!(before, Mode::ChoosingAction { .. }));
+        assert_eq!(choosing.handle_key(character('z')), None);
+        assert_eq!(choosing.mode(), &before);
     }
 
     #[test]
@@ -1302,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn i_is_blocked_with_notice_while_the_ia_is_loading() {
+    fn i_is_blocked_with_notice_while_the_recommendation_is_loading() {
         let mut app = AppState::new(
             vec![entry("ia", WidgetRecord::loading())],
             vec![tab("IA", &[0])],

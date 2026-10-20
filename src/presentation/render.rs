@@ -7,19 +7,24 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::application::pomodoro_notifications::AlertMessage;
-use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
+use crate::domain::layout::{
+    arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
+    TOP_BAR_HEIGHT,
+};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
-use crate::domain::widget::DetailSection;
+use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
-    box_block, box_body, dim_if_stale, render_widget_box, BoxContext,
+    box_block, box_body, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
 };
 use crate::presentation::widget_view::render_blocks;
 
 const FALLBACK_SPAN: u16 = 1;
-const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
+const CONFIRMATION_HINT: &str = "[s] confirma  [n] cancela";
+const NOTICE_ROW_HEIGHT: u16 = 1;
+const MINIMUM_HEIGHT_FOR_NOTICE: u16 = 2;
 const FOCUS_COLUMN_WIDTH: u16 = 22;
 const FOCUS_MINIMUM_WIDTH: u16 = FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWABLE_SIDE);
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
@@ -112,7 +117,11 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
                 };
                 let context = BoxContext {
                     shortcut: state.shortcut_of(entry_index),
-                    selected: Some(entry_index) == state.focused_entry(),
+                    emphasis: if Some(entry_index) == state.focused_entry() {
+                        Emphasis::Focused
+                    } else {
+                        Emphasis::Normal
+                    },
                     now,
                     warning: None,
                 };
@@ -124,17 +133,22 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
         GridLayout::Compact(placement) => {
             let first = entry_indexes.first().copied();
             if let Some(entry) = first.and_then(|index| state.entries().get(index)) {
+                let warning = enlarge_warning();
                 let context = BoxContext {
                     shortcut: first.and_then(|index| state.shortcut_of(index)),
-                    selected: true,
+                    emphasis: Emphasis::Focused,
                     now,
-                    warning: Some(ENLARGE_WARNING),
+                    warning: Some(&warning),
                 };
                 render_widget_box(frame, entry, to_rect(area, placement.area), &context);
             }
         }
         GridLayout::Empty => {}
     }
+}
+
+fn enlarge_warning() -> String {
+    format!("Amplie o terminal (mínimo {MINIMUM_FULL_WIDTH}x{MINIMUM_FULL_HEIGHT})")
 }
 
 fn render_focus_mode(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
@@ -188,7 +202,12 @@ fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, conten
     let Some(entry) = state.entries().get(index) else {
         return;
     };
-    let block = box_block(entry, state.shortcut_of(index), true, content.width);
+    let block = box_block(
+        entry,
+        state.shortcut_of(index),
+        Emphasis::Focused,
+        content.width,
+    );
     let inner = block.inner(content);
     let width = usize::from(inner.width);
     let (lines, selected_row) = detail_lines(entry, state.selected_item(), width, now);
@@ -206,7 +225,7 @@ fn detail_lines(
     width: usize,
     now: NaiveDateTime,
 ) -> (Vec<Line<'static>>, usize) {
-    let header = box_body(entry, width, now, true).header;
+    let header = box_body(entry, width, now, FailureDetail::Shown).header;
     let header_height = header.len();
     let Some(sections) = entry
         .record
@@ -230,52 +249,72 @@ fn section_lines(
     let mut item_index = 0;
     let mut selected_row = 0;
     for section in sections {
-        lines.push(Line::styled(
-            truncate_to_width(&section.heading, width),
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+        lines.push(section_heading_line(section, width));
         lines.extend(render_blocks(&section.display_blocks(), width));
         for item in &section.items {
             let is_selected = item_index == selected;
             if is_selected {
                 selected_row = lines.len();
             }
-            let marker = if is_selected {
-                SELECTION_MARKER
-            } else {
-                NO_SELECTION_MARKER
-            };
-            let style = if is_selected {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default()
-            };
-            let wrap_width = width.saturating_sub(WRAP_CONTINUATION_INDENT.width());
-            for (position, piece) in wrap_to_width(&flagged(item.flag, &item.text), wrap_width)
-                .into_iter()
-                .enumerate()
-            {
-                let prefix = if position == 0 {
-                    marker
-                } else {
-                    WRAP_CONTINUATION_INDENT
-                };
-                lines.push(Line::styled(format!("{prefix}{piece}"), style));
-            }
+            lines.extend(item_lines(item, is_selected, width));
             item_index += 1;
         }
     }
     (lines, selected_row)
 }
 
+fn section_heading_line(section: &DetailSection, width: usize) -> Line<'static> {
+    Line::styled(
+        truncate_to_width(&section.heading, width),
+        Style::default().add_modifier(Modifier::BOLD),
+    )
+}
+
+struct ItemAppearance {
+    marker: &'static str,
+    style: Style,
+}
+
+impl ItemAppearance {
+    fn for_selection(is_selected: bool) -> Self {
+        if is_selected {
+            Self {
+                marker: SELECTION_MARKER,
+                style: Style::default().fg(Color::Cyan),
+            }
+        } else {
+            Self {
+                marker: NO_SELECTION_MARKER,
+                style: Style::default(),
+            }
+        }
+    }
+}
+
+fn item_lines(item: &DetailItem, is_selected: bool, width: usize) -> Vec<Line<'static>> {
+    let appearance = ItemAppearance::for_selection(is_selected);
+    let wrap_width = width.saturating_sub(WRAP_CONTINUATION_INDENT.width());
+    wrap_to_width(&flagged(item.flag, &item.text), wrap_width)
+        .into_iter()
+        .enumerate()
+        .map(|(position, piece)| {
+            let prefix = if position == 0 {
+                appearance.marker
+            } else {
+                WRAP_CONTINUATION_INDENT
+            };
+            Line::styled(format!("{prefix}{piece}"), appearance.style)
+        })
+        .collect()
+}
+
 fn render_notice(frame: &mut Frame, state: &AppState, area: Rect) {
     let Some(notice) = state.notice() else {
         return;
     };
-    if area.height < 2 {
+    let Some(row) = notice_row(area) else {
         return;
-    }
-    let row = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
+    };
     frame.render_widget(Clear, row);
     frame.render_widget(
         Paragraph::new(Line::styled(
@@ -286,16 +325,24 @@ fn render_notice(frame: &mut Frame, state: &AppState, area: Rect) {
     );
 }
 
+fn notice_row(area: Rect) -> Option<Rect> {
+    if area.height < MINIMUM_HEIGHT_FOR_NOTICE {
+        return None;
+    }
+    Some(Rect::new(
+        area.x,
+        area.y + area.height - NOTICE_ROW_HEIGHT,
+        area.width,
+        NOTICE_ROW_HEIGHT,
+    ))
+}
+
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
     let (title, lines) = match state.mode() {
         Mode::Browsing => return,
         Mode::ConfirmingSend { text, .. } => (
             "Enviar à IA",
-            vec![
-                text.clone(),
-                String::new(),
-                "[s] confirma  [n] cancela".to_string(),
-            ],
+            vec![text.clone(), String::new(), CONFIRMATION_HINT.to_string()],
         ),
         Mode::ChoosingAction { selected } => ("Ações", action_menu_lines(state, *selected)),
         Mode::Confirming(proposed) => {
@@ -304,7 +351,7 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
                 lines.push(format!("Item: {item_id}"));
             }
             lines.push(String::new());
-            lines.push("[s] confirma  [n] cancela".to_string());
+            lines.push(CONFIRMATION_HINT.to_string());
             ("Confirmar ação", lines)
         }
     };
@@ -412,6 +459,57 @@ mod tests {
             .unwrap()
             .and_hms_opt(9, 41, 0)
             .unwrap()
+    }
+
+    fn plain(line: &Line) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn detail_item(text: &str) -> DetailItem {
+        DetailItem {
+            id: None,
+            text: text.to_string(),
+            flag: None,
+            meta: vec![],
+        }
+    }
+
+    #[test]
+    fn item_lines_mark_the_selected_item_and_indent_continuations() {
+        let item = detail_item("abcdefghij");
+
+        let selected: Vec<String> = item_lines(&item, true, 8).iter().map(plain).collect();
+        let normal: Vec<String> = item_lines(&item, false, 8).iter().map(plain).collect();
+
+        assert_eq!(selected, vec!["> abcdef", "  ghij"]);
+        assert_eq!(normal, vec!["  abcdef", "  ghij"]);
+    }
+
+    #[test]
+    fn section_heading_line_is_truncated_to_the_width() {
+        let section = DetailSection {
+            heading: "cabeçalho muito longo".to_string(),
+            items: vec![],
+            blocks: vec![],
+        };
+        assert!(plain(&section_heading_line(&section, 8)).chars().count() <= 8);
+    }
+
+    #[test]
+    fn enlarge_warning_is_built_from_the_layout_minimums() {
+        assert_eq!(enlarge_warning(), "Amplie o terminal (mínimo 60x20)");
+    }
+
+    #[test]
+    fn notice_row_is_the_last_row_and_absent_in_a_one_row_terminal() {
+        assert_eq!(
+            notice_row(Rect::new(2, 3, 40, 10)),
+            Some(Rect::new(2, 12, 40, 1))
+        );
+        assert_eq!(notice_row(Rect::new(0, 0, 40, 1)), None);
     }
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {
@@ -775,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn ia_failure_after_idle_snapshot_is_shown_in_focus_mode() {
+    fn recommendation_failure_after_idle_snapshot_is_shown_in_focus_mode() {
         let mut record = ready(snapshot("IA", vec![plain_line("Sem recomendação ainda")]));
         record.apply(
             Err::<WidgetSnapshot, _>("modelo indisponível".to_string()),

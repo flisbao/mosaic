@@ -13,7 +13,7 @@ use mosaic::application::recommendation::{build_plan, LlmSelection, WidgetContex
 use mosaic::application::recommendation_view::recommendation_snapshot;
 use mosaic::application::refresh::refresh_widget;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
-use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::llm_cli::ClaudeCli;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::recommendation_file::FileRecommendationStore;
@@ -50,9 +50,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         timeout_seconds: 10,
         span: 1,
         max_items: None,
-        llm_sections: vec!["inbox".to_string()],
-        llm_max_items: 20,
-        llm_max_characters_per_item: 120,
+        llm_selection: default_llm_selection(vec!["inbox".to_string()]),
     };
     PluginRunner::new(settings, root.to_path_buf())
 }
@@ -126,7 +124,7 @@ fn run_plan(
 }
 
 #[test]
-fn recommendation_is_generated_saved_and_shown_in_the_ia_box() {
+fn recommendation_is_generated_saved_and_shown_in_the_recommendation_box() {
     let directory = private_tempdir();
     let (result, store) = run_plan(
         directory.path(),

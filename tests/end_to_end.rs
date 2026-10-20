@@ -6,7 +6,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use mosaic::application::execute_action::{execute_confirmed, ActionNotice};
 use mosaic::application::refresh::refresh_widget;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
-use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::presentation::app_state::{AppState, Command, Mode, TabView, WidgetEntry};
 use mosaic::presentation::key_input::KeyInput;
@@ -26,9 +26,7 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         timeout_seconds: 10,
         span: 1,
         max_items: None,
-        llm_sections: vec![],
-        llm_max_items: 20,
-        llm_max_characters_per_item: 120,
+        llm_selection: default_llm_selection(vec![]),
     };
     PluginRunner::new(settings, root.to_path_buf())
 }

@@ -15,12 +15,14 @@ impl BlockParser for StatParser {
         "stat"
     }
 
-    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Block {
-        let items = parse_items(reader, object, path);
-        Block::Stat {
-            items,
-            hint: reader.optional_text(object, "hint", path),
-        }
+    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block> {
+        reader.accepting_no_errors(|reader| {
+            let items = parse_items(reader, object, path);
+            Block::Stat {
+                items,
+                hint: reader.optional_text(object, "hint", path),
+            }
+        })
     }
 }
 

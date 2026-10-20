@@ -1,15 +1,15 @@
 use std::collections::HashMap;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{SendError, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::application::ports::{Cancellable, SourceError, WidgetRunner};
+use crate::application::ports::{Cancellable, WidgetRunner};
 use crate::application::refresh::refresh_widget;
-use crate::application::reload::WidgetLifecycle;
+use crate::application::reload::{Generation, WidgetLifecycle, WidgetUpdate};
 use crate::application::shutdown::ShutdownCoordinator;
 use crate::application::widget_notices::with_interval_notice;
-use crate::domain::widget::{WidgetId, WidgetSnapshot};
+use crate::domain::widget::WidgetId;
 use crate::infrastructure::config::WidgetSettings;
 use crate::infrastructure::refresh_signal::{refresh_channel, RefreshSignal, RefreshWake};
 
@@ -17,16 +17,29 @@ const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
 
 pub type RunnerFactory = Box<dyn Fn(&WidgetSettings) -> Arc<dyn WidgetRunner> + Send + Sync>;
 
-pub struct WidgetUpdate {
-    pub id: WidgetId,
-    pub generation: u64,
-    pub result: Result<WidgetSnapshot, SourceError>,
+struct UpdateSink<E> {
+    sender: Sender<E>,
+    into_event: fn(WidgetUpdate) -> E,
+}
+
+impl<E> Clone for UpdateSink<E> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            into_event: self.into_event,
+        }
+    }
+}
+
+impl<E> UpdateSink<E> {
+    fn deliver(&self, update: WidgetUpdate) -> Result<(), SendError<E>> {
+        self.sender.send((self.into_event)(update))
+    }
 }
 
 pub struct WidgetRuntime<E> {
     factory: RunnerFactory,
-    sender: Sender<E>,
-    into_event: fn(WidgetUpdate) -> E,
+    sink: UpdateSink<E>,
     shutdown: Arc<ShutdownCoordinator>,
     runners: HashMap<WidgetId, Arc<dyn WidgetRunner>>,
     refresh_signals: HashMap<WidgetId, RefreshSignal>,
@@ -41,8 +54,7 @@ impl<E: Send + 'static> WidgetRuntime<E> {
     ) -> Self {
         Self {
             factory,
-            sender,
-            into_event,
+            sink: UpdateSink { sender, into_event },
             shutdown,
             runners: HashMap::new(),
             refresh_signals: HashMap::new(),
@@ -67,26 +79,14 @@ fn shutdown_key(id: &WidgetId) -> String {
 impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
     type Spec = WidgetSettings;
 
-    fn start(&mut self, settings: &WidgetSettings, generation: u64) {
+    fn start(&mut self, settings: &WidgetSettings, generation: Generation) {
         let id = settings.id.clone();
-        let interval = Duration::from_secs(settings.interval_seconds);
-        let interval_notice = settings
-            .interval_adjusted
-            .then_some(settings.interval_seconds);
         let runner = (self.factory)(settings);
         self.shutdown.register(
             &shutdown_key(&id),
             Arc::clone(&runner) as Arc<dyn Cancellable>,
         );
-        let signal = spawn_refresher(
-            id.clone(),
-            generation,
-            Arc::clone(&runner),
-            interval,
-            interval_notice,
-            self.sender.clone(),
-            self.into_event,
-        );
+        let signal = spawn_refresher(settings, generation, Arc::clone(&runner), self.sink.clone());
         self.runners.insert(id.clone(), runner);
         self.refresh_signals.insert(id, signal);
     }
@@ -99,14 +99,16 @@ impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
 }
 
 fn spawn_refresher<E: Send + 'static>(
-    id: WidgetId,
-    generation: u64,
+    settings: &WidgetSettings,
+    generation: Generation,
     runner: Arc<dyn WidgetRunner>,
-    interval: Duration,
-    interval_notice: Option<u64>,
-    sender: Sender<E>,
-    into_event: fn(WidgetUpdate) -> E,
+    sink: UpdateSink<E>,
 ) -> RefreshSignal {
+    let id = settings.id.clone();
+    let interval = Duration::from_secs(settings.interval_seconds);
+    let interval_notice = settings
+        .interval_adjusted
+        .then_some(settings.interval_seconds);
     let (signal, waiter) = refresh_channel();
     thread::spawn(move || loop {
         let refreshed = refresh_widget(runner.as_ref());
@@ -119,7 +121,7 @@ fn spawn_refresher<E: Send + 'static>(
             generation,
             result,
         };
-        if sender.send(into_event(update)).is_err() {
+        if sink.deliver(update).is_err() {
             break;
         }
         if waiter.wait(interval) == RefreshWake::Closed {
@@ -136,10 +138,12 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::application::ports::{ActionExecutor, WidgetSource};
+    use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
     use crate::application::refresh::fakes::snapshot_titled;
+    use crate::application::reload::WidgetGenerations;
     use crate::domain::action::{ActionOutcome, ConfirmedAction};
     use crate::domain::widget::WidgetSnapshot;
+    use crate::infrastructure::config::default_llm_selection;
 
     const RECEIVE_LIMIT: Duration = Duration::from_secs(2);
 
@@ -184,10 +188,12 @@ mod tests {
             timeout_seconds: 5,
             span: 1,
             max_items: None,
-            llm_sections: vec![],
-            llm_max_items: 20,
-            llm_max_characters_per_item: 120,
+            llm_selection: default_llm_selection(vec![]),
         }
+    }
+
+    fn generation() -> Generation {
+        WidgetGenerations::default().advance(&WidgetId::new("a"))
     }
 
     fn runtime_with(
@@ -211,11 +217,12 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         let (mut runtime, receiver, _shutdown) = runtime_with(&fake);
 
-        runtime.start(&settings("a"), 7);
+        let generation = generation();
+        runtime.start(&settings("a"), generation);
 
         let update = receiver.recv_timeout(RECEIVE_LIMIT).unwrap();
         assert_eq!(update.id.as_str(), "a");
-        assert_eq!(update.generation, 7);
+        assert_eq!(update.generation, generation);
         assert!(update.result.is_ok());
         assert!(runtime.runner(&WidgetId::new("a")).is_some());
     }
@@ -224,7 +231,7 @@ mod tests {
     fn start_registers_the_runner_for_shutdown() {
         let fake = Arc::new(FakeRunner::default());
         let (mut runtime, _receiver, shutdown) = runtime_with(&fake);
-        runtime.start(&settings("a"), 1);
+        runtime.start(&settings("a"), generation());
 
         shutdown.shutdown();
 
@@ -235,7 +242,7 @@ mod tests {
     fn retire_requests_cancel_and_forgets_the_runner() {
         let fake = Arc::new(FakeRunner::default());
         let (mut runtime, _receiver, _shutdown) = runtime_with(&fake);
-        runtime.start(&settings("a"), 1);
+        runtime.start(&settings("a"), generation());
 
         runtime.retire(&WidgetId::new("a"));
 

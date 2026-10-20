@@ -6,7 +6,7 @@ use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
 use crate::application::ports::Cancellable;
 use crate::domain::widget_content::clean_text_limited;
 use crate::infrastructure::private_directory::prepare_private_directory;
-use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
+use crate::infrastructure::process::{run_process, CancelFlag, ProcessError, ProcessLimits};
 use crate::infrastructure::protocol_report::MAXIMUM_TEXT_CHARACTERS;
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
@@ -18,31 +18,26 @@ const OPENCODE_STDIN_INSTRUCTION: &str = "Responda ao pedido recebido pela entra
 const OPENCODE_CONFIG_HOME_VARIABLE: &str = "XDG_CONFIG_HOME";
 const OPENCODE_ISOLATED_CONFIG_DIRECTORY: &str = "xdg-config";
 
-pub struct ClaudeCli {
-    program: String,
-    working_directory: PathBuf,
-    max_budget_usd: Option<f64>,
-    timeout: Duration,
-    cancel_flag: CancelFlag,
+pub trait HarnessCommand: Send + Sync {
+    fn arguments(&self, request: &LlmRequest, working_directory: &Path) -> Vec<String>;
+
+    fn environment(&self, _working_directory: &Path) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
-impl ClaudeCli {
-    pub fn new(
-        program: String,
-        working_directory: PathBuf,
-        max_budget_usd: Option<f64>,
-        timeout: Duration,
-    ) -> Self {
-        Self {
-            program,
-            working_directory,
-            max_budget_usd,
-            timeout,
-            cancel_flag: CancelFlag::default(),
-        }
-    }
+pub struct ClaudeHarness {
+    max_budget_usd: Option<f64>,
+}
 
-    pub fn arguments(&self, request: &LlmRequest) -> Vec<String> {
+impl ClaudeHarness {
+    pub fn new(max_budget_usd: Option<f64>) -> Self {
+        Self { max_budget_usd }
+    }
+}
+
+impl HarnessCommand for ClaudeHarness {
+    fn arguments(&self, request: &LlmRequest, _working_directory: &Path) -> Vec<String> {
         let mut arguments: Vec<String> = [
             "-p",
             "--tools",
@@ -66,58 +61,14 @@ impl ClaudeCli {
     }
 }
 
-impl ClaudeCli {
-    pub fn environment(&self) -> Vec<(String, String)> {
-        Vec::new()
-    }
-}
+pub struct OpenCodeHarness;
 
-impl LlmRunner for ClaudeCli {
-    fn run(&self, request: &LlmRequest) -> Result<String, LlmError> {
-        run_cli(
-            &self.program,
-            &self.working_directory,
-            &self.arguments(request),
-            &self.environment(),
-            Some(&request.prompt),
-            self.timeout,
-            &self.cancel_flag,
-        )
-    }
-}
-
-impl Cancellable for ClaudeCli {
-    fn cancel(&self) {
-        self.cancel_flag.cancel();
-    }
-
-    fn request_cancel(&self) {
-        self.cancel_flag.request_cancel();
-    }
-}
-
-pub struct OpenCodeCli {
-    program: String,
-    working_directory: PathBuf,
-    timeout: Duration,
-    cancel_flag: CancelFlag,
-}
-
-impl OpenCodeCli {
-    pub fn new(program: String, working_directory: PathBuf, timeout: Duration) -> Self {
-        Self {
-            program,
-            working_directory,
-            timeout,
-            cancel_flag: CancelFlag::default(),
-        }
-    }
-
-    pub fn arguments(&self, request: &LlmRequest) -> Vec<String> {
+impl HarnessCommand for OpenCodeHarness {
+    fn arguments(&self, request: &LlmRequest, working_directory: &Path) -> Vec<String> {
         let mut arguments = vec![
             "run".to_string(),
             "--dir".to_string(),
-            self.working_directory.to_string_lossy().to_string(),
+            working_directory.to_string_lossy().to_string(),
         ];
         if let Some(model) = &request.model {
             arguments.extend(["-m".to_string(), model.clone()]);
@@ -126,10 +77,8 @@ impl OpenCodeCli {
         arguments.push(OPENCODE_STDIN_INSTRUCTION.to_string());
         arguments
     }
-}
 
-impl OpenCodeCli {
-    pub fn environment(&self) -> Vec<(String, String)> {
+    fn environment(&self, working_directory: &Path) -> Vec<(String, String)> {
         vec![
             (
                 OPENCODE_CONFIG_VARIABLE.to_string(),
@@ -137,7 +86,7 @@ impl OpenCodeCli {
             ),
             (
                 OPENCODE_CONFIG_HOME_VARIABLE.to_string(),
-                self.working_directory
+                working_directory
                     .join(OPENCODE_ISOLATED_CONFIG_DIRECTORY)
                     .to_string_lossy()
                     .to_string(),
@@ -146,21 +95,80 @@ impl OpenCodeCli {
     }
 }
 
-impl LlmRunner for OpenCodeCli {
-    fn run(&self, request: &LlmRequest) -> Result<String, LlmError> {
-        run_cli(
-            &self.program,
-            &self.working_directory,
-            &self.arguments(request),
-            &self.environment(),
-            Some(&request.prompt),
-            self.timeout,
-            &self.cancel_flag,
+pub struct LlmCli<H: HarnessCommand> {
+    harness: H,
+    program: String,
+    working_directory: PathBuf,
+    timeout: Duration,
+    cancel_flag: CancelFlag,
+}
+
+pub type ClaudeCli = LlmCli<ClaudeHarness>;
+pub type OpenCodeCli = LlmCli<OpenCodeHarness>;
+
+impl<H: HarnessCommand> LlmCli<H> {
+    fn with_harness(
+        harness: H,
+        program: String,
+        working_directory: PathBuf,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            harness,
+            program,
+            working_directory,
+            timeout,
+            cancel_flag: CancelFlag::default(),
+        }
+    }
+
+    pub fn arguments(&self, request: &LlmRequest) -> Vec<String> {
+        self.harness.arguments(request, &self.working_directory)
+    }
+
+    pub fn environment(&self) -> Vec<(String, String)> {
+        self.harness.environment(&self.working_directory)
+    }
+}
+
+impl LlmCli<ClaudeHarness> {
+    pub fn new(
+        program: String,
+        working_directory: PathBuf,
+        max_budget_usd: Option<f64>,
+        timeout: Duration,
+    ) -> Self {
+        Self::with_harness(
+            ClaudeHarness::new(max_budget_usd),
+            program,
+            working_directory,
+            timeout,
         )
     }
 }
 
-impl Cancellable for OpenCodeCli {
+impl LlmCli<OpenCodeHarness> {
+    pub fn new(program: String, working_directory: PathBuf, timeout: Duration) -> Self {
+        Self::with_harness(OpenCodeHarness, program, working_directory, timeout)
+    }
+}
+
+impl<H: HarnessCommand> LlmRunner for LlmCli<H> {
+    fn run(&self, request: &LlmRequest) -> Result<String, LlmError> {
+        let arguments = self.arguments(request);
+        let environment = self.environment();
+        let invocation = CliInvocation {
+            program: &self.program,
+            working_directory: &self.working_directory,
+            arguments: &arguments,
+            environment: &environment,
+            stdin_text: Some(&request.prompt),
+        };
+        run_cli(&invocation, self.timeout, &self.cancel_flag)
+    }
+}
+
+impl<H: HarnessCommand> Cancellable for LlmCli<H> {
     fn cancel(&self) {
         self.cancel_flag.cancel();
     }
@@ -170,35 +178,43 @@ impl Cancellable for OpenCodeCli {
     }
 }
 
+struct CliInvocation<'a> {
+    program: &'a str,
+    working_directory: &'a Path,
+    arguments: &'a [String],
+    environment: &'a [(String, String)],
+    stdin_text: Option<&'a str>,
+}
+
 fn run_cli(
-    program: &str,
-    working_directory: &Path,
-    arguments: &[String],
-    environment: &[(String, String)],
-    stdin_text: Option<&str>,
+    invocation: &CliInvocation,
     timeout: Duration,
     cancel: &CancelFlag,
 ) -> Result<String, LlmError> {
-    prepare_private_directory(working_directory)
+    prepare_private_directory(invocation.working_directory)
         .map_err(|error| LlmError::Failed(error.to_string()))?;
-    let mut command = Command::new(program);
+    let mut command = Command::new(invocation.program);
     command
-        .args(arguments)
-        .envs(environment.iter().map(|(name, value)| (name, value)))
-        .current_dir(working_directory);
+        .args(invocation.arguments)
+        .envs(
+            invocation
+                .environment
+                .iter()
+                .map(|(name, value)| (name, value)),
+        )
+        .current_dir(invocation.working_directory);
     let limits = ProcessLimits {
         timeout,
         maximum_output_bytes: MAXIMUM_LLM_OUTPUT_BYTES,
     };
-    run_process(command, stdin_text, &limits, cancel).map_err(|error| {
-        if error.program_not_found() {
-            LlmError::Unavailable(format!("`{program}` não encontrado no PATH"))
-        } else {
-            LlmError::Failed(clean_text_limited(
-                &error.to_string(),
-                MAXIMUM_TEXT_CHARACTERS,
-            ))
+    run_process(command, invocation.stdin_text, &limits, cancel).map_err(|error| match error {
+        ProcessError::ProgramNotFound { .. } => {
+            LlmError::Unavailable(format!("`{}` não encontrado no PATH", invocation.program))
         }
+        other => LlmError::Failed(clean_text_limited(
+            &other.to_string(),
+            MAXIMUM_TEXT_CHARACTERS,
+        )),
     })
 }
 
@@ -263,6 +279,23 @@ mod tests {
             directory.join("neutro"),
             Duration::from_secs(timeout_seconds),
         )
+    }
+
+    #[test]
+    fn claude_harness_adds_no_environment_variables() {
+        let harness = ClaudeHarness::new(None);
+        assert!(harness.environment(Path::new("/tmp")).is_empty());
+    }
+
+    #[test]
+    fn opencode_harness_takes_the_working_directory_as_an_argument() {
+        let arguments = OpenCodeHarness.arguments(&request("p", None), Path::new("/tmp/outro"));
+        assert!(arguments.join(" ").contains("--dir /tmp/outro"));
+        let environment = OpenCodeHarness.environment(Path::new("/tmp/outro"));
+        assert!(environment.contains(&(
+            "XDG_CONFIG_HOME".to_string(),
+            "/tmp/outro/xdg-config".to_string()
+        )));
     }
 
     #[test]

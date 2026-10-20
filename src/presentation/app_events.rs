@@ -6,9 +6,9 @@ use crate::application::llm::{LlmError, RecommendationOutcome, RecommendationSto
 use crate::application::pomodoro_notifications::{AlertMessage, Notifier};
 use crate::application::ports::SourceError;
 use crate::application::recommendation_view::{
-    idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
+    idle_snapshot, recommendation_snapshot, RECOMMENDATION_WIDGET_ID,
 };
-use crate::application::reload::{apply_if_current, WidgetGenerations};
+use crate::application::reload::{apply_if_current, WidgetGenerations, WidgetUpdate};
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 use crate::domain::widget_content::AlertLevel;
 use crate::presentation::app_state::AppState;
@@ -17,13 +17,11 @@ const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 
 pub enum AppEvent {
-    WidgetUpdated(WidgetId, u64, Result<WidgetSnapshot, SourceError>),
-    ActionFinished(
-        WidgetId,
-        u64,
-        ActionNotice,
-        Result<WidgetSnapshot, SourceError>,
-    ),
+    WidgetUpdated(WidgetUpdate),
+    ActionFinished {
+        update: WidgetUpdate,
+        notice: ActionNotice,
+    },
     RecommendationFinished(Result<RecommendationOutcome, LlmError>),
 }
 
@@ -63,18 +61,12 @@ pub fn apply_event(
     now: NaiveDateTime,
 ) {
     match app_event {
-        AppEvent::WidgetUpdated(id, generation, result) => {
-            apply_if_current(context.generations, &id, generation, result, |result| {
-                announce_widget_alerts(state, context, tracker, &id, &result);
-                state.update_widget(&id, result, now);
-            });
+        AppEvent::WidgetUpdated(update) => {
+            apply_widget_update(state, context, tracker, update, now)
         }
-        AppEvent::ActionFinished(id, generation, notice, result) => {
-            state.finish_action(&id);
-            apply_if_current(context.generations, &id, generation, result, |result| {
-                announce_widget_alerts(state, context, tracker, &id, &result);
-                state.update_widget(&id, result, now);
-            });
+        AppEvent::ActionFinished { update, notice } => {
+            state.finish_action(&update.id);
+            apply_widget_update(state, context, tracker, update, now);
             state.show_notice(describe_notice(notice));
         }
         AppEvent::RecommendationFinished(result) => {
@@ -83,17 +75,35 @@ pub fn apply_event(
     }
 }
 
+fn apply_widget_update(
+    state: &mut AppState,
+    context: &EventContext,
+    tracker: &mut AlertTracker,
+    update: WidgetUpdate,
+    now: NaiveDateTime,
+) {
+    let WidgetUpdate {
+        id,
+        generation,
+        result,
+    } = update;
+    apply_if_current(context.generations, &id, generation, result, |result| {
+        announce_widget_alerts(state, context, tracker, &id, &result);
+        state.update_widget(&id, result, now);
+    });
+}
+
 fn apply_recommendation_result(
     state: &mut AppState,
     context: &EventContext,
     result: Result<RecommendationOutcome, LlmError>,
     now: NaiveDateTime,
 ) {
-    let ia = WidgetId::new(IA_WIDGET_ID);
+    let recommendation_widget = WidgetId::new(RECOMMENDATION_WIDGET_ID);
     match result {
         Ok(outcome) => {
             state.update_widget(
-                &ia,
+                &recommendation_widget,
                 Ok(recommendation_snapshot(&outcome.recommendation)),
                 now,
             );
@@ -106,17 +116,25 @@ fn apply_recommendation_result(
         }
         Err(LlmError::Unavailable(message)) => {
             if let Some(store) = context.recommendation_store {
-                state.update_widget(&ia, stored_ia_result(store), now);
+                state.update_widget(
+                    &recommendation_widget,
+                    stored_recommendation_result(store),
+                    now,
+                );
             }
             state.show_notice(message);
         }
-        Err(LlmError::Failed(message)) => {
-            state.update_widget(&ia, Err(SourceError::Failed(message)), now)
-        }
+        Err(LlmError::Failed(message)) => state.update_widget(
+            &recommendation_widget,
+            Err(SourceError::Failed(message)),
+            now,
+        ),
     }
 }
 
-pub fn stored_ia_result(store: &dyn RecommendationStore) -> Result<WidgetSnapshot, SourceError> {
+pub fn stored_recommendation_result(
+    store: &dyn RecommendationStore,
+) -> Result<WidgetSnapshot, SourceError> {
     Ok(match store.load() {
         Some(stored) => recommendation_snapshot(&stored),
         None => idle_snapshot(),

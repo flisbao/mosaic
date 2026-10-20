@@ -17,10 +17,12 @@ impl BlockParser for TableParser {
         "table"
     }
 
-    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Block {
-        let columns = parse_columns(reader, object, path);
-        let rows = parse_rows(reader, object, path, columns.len());
-        Block::Table { columns, rows }
+    fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block> {
+        reader.accepting_no_errors(|reader| {
+            let columns = parse_columns(reader, object, path);
+            let rows = parse_rows(reader, object, path, columns.len());
+            Block::Table { columns, rows }
+        })
     }
 }
 
