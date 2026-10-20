@@ -16,34 +16,42 @@ const MAXIMUM_ERROR_BYTES: usize = 16_384;
 const CANCEL_RELEASE_LIMIT: Duration = Duration::from_secs(2);
 #[derive(Debug, Error)]
 pub enum ProcessError {
-    #[error("tempo limite inválido")]
-    InvalidTimeout,
-    #[error("não foi possível iniciar '{program}': {source}")]
-    ProgramNotFound {
-        program: String,
-        source: std::io::Error,
-    },
     #[error("não foi possível iniciar '{program}': {source}")]
     Spawn {
         program: String,
+        #[source]
         source: std::io::Error,
     },
     #[error("falha ao aguardar o processo: {0}")]
-    WaitFailed(std::io::Error),
-    #[error("falha ao ler a saída do processo")]
-    OutputReadFailed,
+    Wait(#[source] std::io::Error),
+    #[error("processo excedeu o tempo limite de {limit_seconds}s")]
+    TimedOut { limit_seconds: u64 },
+    #[error("saída excedeu o limite de {limit_bytes} bytes")]
+    OutputTooLarge { limit_bytes: usize },
     #[error("processo cancelado")]
     Cancelled,
-    #[error("processo excedeu o tempo limite de {seconds}s")]
-    TimedOut { seconds: u64 },
-    #[error("saída excedeu o limite de {maximum_bytes} bytes")]
-    OutputTooLarge { maximum_bytes: usize },
-    #[error("processo terminou com falha ({status})")]
-    ExitedWithFailure { status: ExitStatus },
-    #[error("{0}")]
-    FailedWithMessage(String),
+    #[error("tempo limite inválido")]
+    InvalidTimeout,
+    #[error("falha ao ler a saída do processo")]
+    OutputUnreadable,
+    #[error("{}", failure_description(.status, .stderr))]
+    ExitedWithFailure { status: ExitStatus, stderr: String },
     #[error("saída do processo não é UTF-8 válido")]
     InvalidUtf8,
+}
+
+impl ProcessError {
+    pub fn program_not_found(&self) -> bool {
+        matches!(self, Self::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+    }
+}
+
+fn failure_description(status: &ExitStatus, stderr: &str) -> String {
+    if stderr.is_empty() {
+        format!("processo terminou com falha ({status})")
+    } else {
+        stderr.to_string()
+    }
 }
 
 #[cfg(unix)]
@@ -149,7 +157,7 @@ pub fn run_process(
     cancel: &CancelFlag,
 ) -> Result<String, ProcessError> {
     if cancel.is_cancelled() {
-        return Err(cancelled_error());
+        return Err(ProcessError::Cancelled);
     }
     let deadline = deadline_after(limits.timeout)?;
     let mut child = spawn_isolated(command, stdin_text.is_some())?;
@@ -196,19 +204,7 @@ fn spawn_isolated(mut command: Command, has_stdin: bool) -> Result<Child, Proces
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                ProcessError::ProgramNotFound {
-                    program,
-                    source: error,
-                }
-            } else {
-                ProcessError::Spawn {
-                    program,
-                    source: error,
-                }
-            }
-        })
+        .map_err(|source| ProcessError::Spawn { program, source })
 }
 
 fn feed_stdin(child: &mut Child, stdin_text: Option<&str>) {
@@ -220,12 +216,8 @@ fn feed_stdin(child: &mut Child, stdin_text: Option<&str>) {
 }
 
 fn failure_error(status: ExitStatus, stderr_bytes: &[u8]) -> ProcessError {
-    let message = String::from_utf8_lossy(stderr_bytes).trim().to_string();
-    if message.is_empty() {
-        ProcessError::ExitedWithFailure { status }
-    } else {
-        ProcessError::FailedWithMessage(message)
-    }
+    let stderr = String::from_utf8_lossy(stderr_bytes).trim().to_string();
+    ProcessError::ExitedWithFailure { status, stderr }
 }
 
 fn wait_for_exit(
@@ -242,10 +234,10 @@ fn wait_for_exit(
         }
         match cancel.try_reap(child) {
             Ok(Some(status)) if status.success() || !cancel.is_cancelled() => return Ok(status),
-            Ok(Some(_)) => return Err(cancelled_error()),
+            Ok(Some(_)) => return Err(ProcessError::Cancelled),
             Ok(None) if cancel.is_cancelled() => {
                 cancel.terminate(child);
-                return Err(cancelled_error());
+                return Err(ProcessError::Cancelled);
             }
             Ok(None) if Instant::now() >= deadline => {
                 cancel.terminate(child);
@@ -254,7 +246,7 @@ fn wait_for_exit(
             Ok(None) => thread::sleep(POLL_INTERVAL),
             Err(error) => {
                 cancel.terminate(child);
-                return Err(ProcessError::WaitFailed(error));
+                return Err(ProcessError::Wait(error));
             }
         }
     }
@@ -262,17 +254,13 @@ fn wait_for_exit(
 
 fn overflow_error(limits: &ProcessLimits) -> ProcessError {
     ProcessError::OutputTooLarge {
-        maximum_bytes: limits.maximum_output_bytes,
+        limit_bytes: limits.maximum_output_bytes,
     }
-}
-
-fn cancelled_error() -> ProcessError {
-    ProcessError::Cancelled
 }
 
 fn timeout_error(limits: &ProcessLimits) -> ProcessError {
     ProcessError::TimedOut {
-        seconds: limits.timeout.as_secs(),
+        limit_seconds: limits.timeout.as_secs(),
     }
 }
 
@@ -355,7 +343,7 @@ fn join_output(
 ) -> Result<Vec<u8>, ProcessError> {
     let bytes = loop {
         if cancel.is_cancelled() {
-            return Err(cancelled_error());
+            return Err(ProcessError::Cancelled);
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -365,7 +353,7 @@ fn join_output(
             Ok(bytes) => break bytes,
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => {
-                return Err(ProcessError::OutputReadFailed);
+                return Err(ProcessError::OutputUnreadable);
             }
         }
     };
@@ -842,10 +830,7 @@ mod tests {
             &limits(5, 1024),
         )
         .unwrap_err();
-        assert!(
-            matches!(error, ProcessError::ProgramNotFound { .. }),
-            "{error}"
-        );
+        assert!(error.program_not_found(), "{error}");
         let failure = run(shell("exit 3"), None, &limits(5, 1024)).unwrap_err();
         assert!(
             matches!(failure, ProcessError::ExitedWithFailure { .. }),
@@ -883,5 +868,44 @@ mod tests {
             error.to_string().contains("tempo limite inválido"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn failures_are_classified_by_variant() {
+        let timed_out = run(shell("exec sleep 30"), None, &limits(1, 1024)).unwrap_err();
+        assert!(matches!(
+            timed_out,
+            ProcessError::TimedOut { limit_seconds: 1 }
+        ));
+
+        let too_large = run(
+            shell("head -c 1000 /dev/zero | tr '\\0' 'a'"),
+            None,
+            &limits(5, 100),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            too_large,
+            ProcessError::OutputTooLarge { limit_bytes: 100 }
+        ));
+
+        let failed = run(shell("echo boom >&2; exit 3"), None, &limits(5, 1024)).unwrap_err();
+        assert!(matches!(failed, ProcessError::ExitedWithFailure { .. }));
+
+        let invalid = run(shell("printf '\\377\\376'"), None, &limits(5, 1024)).unwrap_err();
+        assert!(matches!(invalid, ProcessError::InvalidUtf8));
+    }
+
+    #[test]
+    fn spawn_failure_keeps_the_io_error_as_source() {
+        use std::error::Error;
+        let error = run(
+            Command::new("programa-que-nao-existe-xyz"),
+            None,
+            &limits(5, 1024),
+        )
+        .unwrap_err();
+        assert!(error.source().is_some());
+        assert!(error.program_not_found());
     }
 }

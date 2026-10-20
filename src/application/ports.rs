@@ -8,6 +8,14 @@ use crate::domain::widget::WidgetSnapshot;
 pub enum SourceError {
     #[error("{0}")]
     Failed(String),
+    #[error("{0}")]
+    TimedOut(String),
+    #[error("{0}")]
+    OutputTooLarge(String),
+    #[error("processo cancelado")]
+    Cancelled,
+    #[error("{0}")]
+    InvalidSnapshot(String),
 }
 
 pub trait Cancellable: Send + Sync {

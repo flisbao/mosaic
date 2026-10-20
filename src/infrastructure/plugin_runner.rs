@@ -7,7 +7,9 @@ use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::plugin_protocol::parse_snapshot;
-use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
+use crate::infrastructure::process::{
+    run_process, CancelFlag, HasCancelFlag, ProcessError, ProcessLimits,
+};
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 
@@ -39,8 +41,7 @@ impl PluginRunner {
             timeout: self.command.timeout,
             maximum_output_bytes: MAXIMUM_PLUGIN_OUTPUT_BYTES,
         };
-        run_process(command, stdin_text, &limits, &self.cancel_flag)
-            .map_err(|error| SourceError::Failed(bounded_message(&error.to_string())))
+        run_process(command, stdin_text, &limits, &self.cancel_flag).map_err(SourceError::from)
     }
 
     pub fn raw_snapshot_output(&self) -> Result<String, SourceError> {
@@ -51,7 +52,7 @@ impl PluginRunner {
 impl WidgetSource for PluginRunner {
     fn snapshot(&self) -> Result<WidgetSnapshot, SourceError> {
         let output = self.raw_snapshot_output()?;
-        parse_snapshot(&output).map_err(|error| SourceError::Failed(error.to_string()))
+        parse_snapshot(&output).map_err(|error| SourceError::InvalidSnapshot(error.to_string()))
     }
 }
 
@@ -73,6 +74,18 @@ impl ActionExecutor for PluginRunner {
 
 fn bounded_message(text: &str) -> String {
     clean_text_limited(text, MAXIMUM_TEXT_CHARACTERS)
+}
+
+impl From<ProcessError> for SourceError {
+    fn from(error: ProcessError) -> Self {
+        let message = bounded_message(&error.to_string());
+        match error {
+            ProcessError::TimedOut { .. } => Self::TimedOut(message),
+            ProcessError::OutputTooLarge { .. } => Self::OutputTooLarge(message),
+            ProcessError::Cancelled => Self::Cancelled,
+            _ => Self::Failed(message),
+        }
+    }
 }
 
 fn action_parameters(action: &ConfirmedAction) -> String {
@@ -351,5 +364,33 @@ mod tests {
         let mut runner = runner(directory.path(), "", 5);
         runner.command.program = "comando-que-nao-existe-xyz".to_string();
         assert!(snapshot_error(&runner).contains("comando-que-nao-existe-xyz"));
+    }
+
+    #[test]
+    fn timeout_maps_to_the_timed_out_source_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = runner(directory.path(), "exec sleep 30", 1);
+        assert!(matches!(
+            runner.snapshot().unwrap_err(),
+            SourceError::TimedOut(_)
+        ));
+    }
+
+    #[test]
+    fn malformed_json_maps_to_the_invalid_snapshot_source_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = runner(directory.path(), "printf 'isto não é json'", 5);
+        assert!(matches!(
+            runner.snapshot().unwrap_err(),
+            SourceError::InvalidSnapshot(_)
+        ));
+    }
+
+    #[test]
+    fn cancel_maps_to_the_cancelled_source_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = runner(directory.path(), "exec sleep 30", 60);
+        runner.cancel();
+        assert_eq!(runner.snapshot().unwrap_err(), SourceError::Cancelled);
     }
 }

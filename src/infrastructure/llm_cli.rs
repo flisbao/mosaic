@@ -7,9 +7,7 @@ use crate::application::llm::{CancellableLlmRunner, LlmError, LlmRequest, LlmRun
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::config::{Harness, LlmConfig};
 use crate::infrastructure::private_directory::prepare_private_directory;
-use crate::infrastructure::process::{
-    run_process, CancelFlag, HasCancelFlag, ProcessError, ProcessLimits,
-};
+use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
@@ -222,14 +220,15 @@ fn run_cli(
         timeout,
         maximum_output_bytes: MAXIMUM_LLM_OUTPUT_BYTES,
     };
-    run_process(command, invocation.stdin_text, &limits, cancel).map_err(|error| match error {
-        ProcessError::ProgramNotFound { .. } => {
+    run_process(command, invocation.stdin_text, &limits, cancel).map_err(|error| {
+        if error.program_not_found() {
             LlmError::Unavailable(format!("`{}` não encontrado no PATH", invocation.program))
+        } else {
+            LlmError::Failed(clean_text_limited(
+                &error.to_string(),
+                MAXIMUM_TEXT_CHARACTERS,
+            ))
         }
-        other => LlmError::Failed(clean_text_limited(
-            &other.to_string(),
-            MAXIMUM_TEXT_CHARACTERS,
-        )),
     })
 }
 

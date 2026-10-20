@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use mosaic::application::launch_spec::ProviderCommand;
-use mosaic::application::ports::{ActionExecutor, SourceError, WidgetSource};
+use mosaic::application::ports::{ActionExecutor, WidgetSource};
 use mosaic::domain::action::ProposedAction;
 use mosaic::domain::widget::{ActionScope, ActionSpec, WidgetId, WidgetSnapshot};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
@@ -144,7 +144,7 @@ fn wrong_token_shows_the_auth_message_in_the_error() {
 
     let error = runner.snapshot().unwrap_err();
 
-    let SourceError::Failed(message) = error;
+    let message = error.to_string();
     assert!(message.contains("credenciais inválidas"), "{message}");
     assert!(!message.contains("token-errado"));
 }
