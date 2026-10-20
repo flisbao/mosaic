@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use chrono::NaiveDateTime;
 
-use crate::application::pomodoro_notifications::{alert_for, AlertMessage};
+use crate::application::pomodoro_notifications::AlertMessage;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
 use crate::application::recommendation_view::IA_WIDGET_ID;
@@ -17,13 +17,14 @@ use crate::presentation::key_input::KeyInput;
 
 mod alert_queue;
 mod focus_navigation;
+mod pomodoro_control;
 
 use alert_queue::AlertQueue;
+use pomodoro_control::PomodoroControl;
 
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
 pub const PAGE_JUMP_ITEMS: usize = 10;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
-const POMODORO_DISABLED_NOTICE: &str = "Pomodoro desligado na configuração";
 const IA_BUSY_NOTICE: &str = "A IA já está processando um pedido";
 const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
@@ -74,7 +75,7 @@ pub struct AppState {
     selected_item: usize,
     mode: Mode,
     notice: Option<String>,
-    pomodoro: Option<PomodoroTimer>,
+    pomodoro: PomodoroControl,
     alerts: AlertQueue,
     pending_actions: HashSet<WidgetId>,
 }
@@ -90,7 +91,7 @@ impl AppState {
             selected_item: 0,
             mode: Mode::Browsing,
             notice: None,
-            pomodoro: None,
+            pomodoro: PomodoroControl::default(),
             alerts: AlertQueue::default(),
             pending_actions: HashSet::new(),
         }
@@ -113,12 +114,12 @@ impl AppState {
     }
 
     pub fn with_pomodoro(mut self, timer: PomodoroTimer) -> Self {
-        self.pomodoro = Some(timer);
+        self.pomodoro = PomodoroControl::enabled(timer);
         self
     }
 
     pub fn pomodoro(&self) -> Option<&PomodoroTimer> {
-        self.pomodoro.as_ref()
+        self.pomodoro.timer()
     }
 
     pub fn alert(&self) -> Option<&AlertMessage> {
@@ -134,8 +135,7 @@ impl AppState {
     }
 
     pub fn advance_pomodoro(&mut self, elapsed: Duration) -> Option<AlertMessage> {
-        let ended = self.pomodoro.as_mut()?.advance(elapsed)?;
-        let alert = alert_for(&ended);
+        let alert = self.pomodoro.advance(elapsed)?;
         self.show_alert(alert.clone());
         Some(alert)
     }
@@ -399,16 +399,14 @@ impl AppState {
     }
 
     fn toggle_pomodoro(&mut self) {
-        match self.pomodoro.as_mut() {
-            Some(timer) => timer.toggle(),
-            None => self.notice = Some(POMODORO_DISABLED_NOTICE.to_string()),
+        if let Err(error) = self.pomodoro.toggle() {
+            self.notice = Some(error.to_string());
         }
     }
 
     fn reset_pomodoro(&mut self) {
-        match self.pomodoro.as_mut() {
-            Some(timer) => timer.reset(),
-            None => self.notice = Some(POMODORO_DISABLED_NOTICE.to_string()),
+        if let Err(error) = self.pomodoro.reset() {
+            self.notice = Some(error.to_string());
         }
     }
 
