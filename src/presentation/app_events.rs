@@ -8,7 +8,7 @@ use crate::application::ports::SourceError;
 use crate::application::recommendation_view::{
     idle_snapshot, recommendation_snapshot, IA_WIDGET_ID,
 };
-use crate::application::reload::{apply_if_current, WidgetGenerations};
+use crate::application::reload::{apply_if_current, WidgetGenerations, WidgetUpdate};
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 use crate::domain::widget_content::AlertLevel;
 use crate::presentation::app_state::AppState;
@@ -17,13 +17,11 @@ const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 
 pub enum AppEvent {
-    WidgetUpdated(WidgetId, u64, Result<WidgetSnapshot, SourceError>),
-    ActionFinished(
-        WidgetId,
-        u64,
-        ActionNotice,
-        Result<WidgetSnapshot, SourceError>,
-    ),
+    WidgetUpdated(WidgetUpdate),
+    ActionFinished {
+        update: WidgetUpdate,
+        notice: ActionNotice,
+    },
     RecommendationFinished(Result<RecommendationOutcome, LlmError>),
 }
 
@@ -63,24 +61,36 @@ pub fn apply_event(
     now: NaiveDateTime,
 ) {
     match app_event {
-        AppEvent::WidgetUpdated(id, generation, result) => {
-            apply_if_current(context.generations, &id, generation, result, |result| {
-                announce_widget_alerts(state, context, tracker, &id, &result);
-                state.update_widget(&id, result, now);
-            });
+        AppEvent::WidgetUpdated(update) => {
+            apply_widget_update(state, context, tracker, update, now)
         }
-        AppEvent::ActionFinished(id, generation, notice, result) => {
-            state.finish_action(&id);
-            apply_if_current(context.generations, &id, generation, result, |result| {
-                announce_widget_alerts(state, context, tracker, &id, &result);
-                state.update_widget(&id, result, now);
-            });
+        AppEvent::ActionFinished { update, notice } => {
+            state.finish_action(&update.id);
+            apply_widget_update(state, context, tracker, update, now);
             state.show_notice(describe_notice(notice));
         }
         AppEvent::RecommendationFinished(result) => {
             apply_recommendation_result(state, context, result, now)
         }
     }
+}
+
+fn apply_widget_update(
+    state: &mut AppState,
+    context: &EventContext,
+    tracker: &mut AlertTracker,
+    update: WidgetUpdate,
+    now: NaiveDateTime,
+) {
+    let WidgetUpdate {
+        id,
+        generation,
+        result,
+    } = update;
+    apply_if_current(context.generations, &id, generation, result, |result| {
+        announce_widget_alerts(state, context, tracker, &id, &result);
+        state.update_widget(&id, result, now);
+    });
 }
 
 fn apply_recommendation_result(

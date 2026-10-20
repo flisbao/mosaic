@@ -1,7 +1,17 @@
 use std::collections::HashMap;
 
+use crate::application::ports::SourceError;
 use crate::application::reload_plan::{ReloadPlan, WidgetChange};
-use crate::domain::widget::WidgetId;
+use crate::domain::widget::{WidgetId, WidgetSnapshot};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Generation(u64);
+
+pub struct WidgetUpdate {
+    pub id: WidgetId,
+    pub generation: Generation,
+    pub result: Result<WidgetSnapshot, SourceError>,
+}
 
 pub trait WidgetSpec {
     fn widget_id(&self) -> &WidgetId;
@@ -10,7 +20,7 @@ pub trait WidgetSpec {
 pub trait WidgetLifecycle {
     type Spec: WidgetSpec;
 
-    fn start(&mut self, spec: &Self::Spec, generation: u64);
+    fn start(&mut self, spec: &Self::Spec, generation: Generation);
     fn retire(&mut self, id: &WidgetId);
 }
 
@@ -24,25 +34,26 @@ pub struct PreparedWidgets<S, C> {
 #[derive(Debug, Default)]
 pub struct WidgetGenerations {
     last_issued: u64,
-    current: HashMap<WidgetId, u64>,
+    current: HashMap<WidgetId, Generation>,
 }
 
 impl WidgetGenerations {
-    pub fn advance(&mut self, id: &WidgetId) -> u64 {
+    pub fn advance(&mut self, id: &WidgetId) -> Generation {
         self.last_issued = self.last_issued.saturating_add(1);
-        self.current.insert(id.clone(), self.last_issued);
-        self.last_issued
+        let generation = Generation(self.last_issued);
+        self.current.insert(id.clone(), generation);
+        generation
     }
 
     pub fn forget(&mut self, id: &WidgetId) {
         self.current.remove(id);
     }
 
-    pub fn accepts(&self, id: &WidgetId, generation: u64) -> bool {
+    pub fn accepts(&self, id: &WidgetId, generation: Generation) -> bool {
         self.current(id) == Some(generation)
     }
 
-    pub fn current(&self, id: &WidgetId) -> Option<u64> {
+    pub fn current(&self, id: &WidgetId) -> Option<Generation> {
         self.current.get(id).copied()
     }
 }
@@ -50,15 +61,13 @@ impl WidgetGenerations {
 pub fn apply_if_current<T>(
     generations: &WidgetGenerations,
     id: &WidgetId,
-    generation: u64,
+    generation: Generation,
     result: T,
     apply: impl FnOnce(T),
-) -> bool {
-    if !generations.accepts(id, generation) {
-        return false;
+) {
+    if generations.accepts(id, generation) {
+        apply(result);
     }
-    apply(result);
-    true
 }
 
 pub fn apply_plan<L: WidgetLifecycle>(
@@ -139,9 +148,9 @@ mod tests {
     impl WidgetLifecycle for RecordingLifecycle {
         type Spec = FakeSpec;
 
-        fn start(&mut self, spec: &FakeSpec, generation: u64) {
+        fn start(&mut self, spec: &FakeSpec, generation: Generation) {
             self.calls
-                .push(format!("start {} {generation}", spec.id.as_str()));
+                .push(format!("start {} {generation:?}", spec.id.as_str()));
         }
 
         fn retire(&mut self, id: &WidgetId) {
@@ -176,6 +185,16 @@ mod tests {
         record
             .snapshot()
             .map(|snapshot: &WidgetSnapshot| snapshot.summary.title.clone())
+    }
+
+    #[test]
+    fn advance_returns_a_generation_that_current_reports_back() {
+        let mut generations = WidgetGenerations::default();
+
+        let issued: Generation = generations.advance(&widget("jira"));
+
+        assert_eq!(generations.current(&widget("jira")), Some(issued));
+        assert!(generations.accepts(&widget("jira"), issued));
     }
 
     #[test]
@@ -277,7 +296,7 @@ mod tests {
                 .apply(result, now());
         };
 
-        let applied_stale = apply_if_current(
+        apply_if_current(
             &generations,
             &widget("jira"),
             old,
@@ -285,7 +304,6 @@ mod tests {
             &mut write,
         );
 
-        assert!(!applied_stale);
         assert_eq!(title_of(&records[&widget("jira")]), None);
     }
 
@@ -303,7 +321,7 @@ mod tests {
                 .apply(result, now());
         };
 
-        let applied = apply_if_current(
+        apply_if_current(
             &generations,
             &widget("jira"),
             current,
@@ -311,7 +329,6 @@ mod tests {
             &mut write,
         );
 
-        assert!(applied);
         assert_eq!(
             title_of(&records[&widget("jira")]),
             Some("novo".to_string())

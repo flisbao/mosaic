@@ -21,7 +21,7 @@ use mosaic::application::recommendation::{
     build_plan, LlmSelection, RecommendationPlan, WidgetContext,
 };
 use mosaic::application::recommendation_view::IA_WIDGET_ID;
-use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations};
+use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetUpdate};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::domain::action::ConfirmedAction;
@@ -41,7 +41,7 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
-use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime, WidgetUpdate};
+use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime};
 use mosaic::presentation::app_events::{apply_event, stored_ia_result, AppEvent, EventContext};
 use mosaic::presentation::app_state::{AppState, Command};
 use mosaic::presentation::key_input::{from_crossterm, KeyInput};
@@ -218,7 +218,7 @@ fn build_services(
     let mut runtime = WidgetRuntime::new(
         factory,
         sender.clone(),
-        widget_updated,
+        AppEvent::WidgetUpdated,
         Arc::clone(&shutdown),
     );
     let mut generations = WidgetGenerations::default();
@@ -249,10 +249,6 @@ fn build_services(
         config_directory: directory.to_path_buf(),
         config: config.clone(),
     }
-}
-
-fn widget_updated(update: WidgetUpdate) -> AppEvent {
-    AppEvent::WidgetUpdated(update.id, update.generation, update.result)
 }
 
 fn startup_plan(widgets: &[WidgetSettings]) -> ReloadPlan {
@@ -491,7 +487,12 @@ fn spawn_action(
     let sender = sender.clone();
     thread::spawn(move || {
         let (notice, result) = execute_confirmed(runner.as_ref(), runner.as_ref(), action);
-        let _ = sender.send(AppEvent::ActionFinished(widget, generation, notice, result));
+        let update = WidgetUpdate {
+            id: widget,
+            generation,
+            result,
+        };
+        let _ = sender.send(AppEvent::ActionFinished { update, notice });
     });
 }
 

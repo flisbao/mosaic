@@ -4,24 +4,18 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::application::ports::{Cancellable, SourceError, WidgetRunner};
+use crate::application::ports::{Cancellable, WidgetRunner};
 use crate::application::refresh::refresh_widget;
-use crate::application::reload::WidgetLifecycle;
+use crate::application::reload::{Generation, WidgetLifecycle, WidgetUpdate};
 use crate::application::shutdown::ShutdownCoordinator;
 use crate::application::widget_notices::with_interval_notice;
-use crate::domain::widget::{WidgetId, WidgetSnapshot};
+use crate::domain::widget::WidgetId;
 use crate::infrastructure::config::WidgetSettings;
 use crate::infrastructure::refresh_signal::{refresh_channel, RefreshSignal, RefreshWake};
 
 const WIDGET_SHUTDOWN_KEY_PREFIX: &str = "widget:";
 
 pub type RunnerFactory = Box<dyn Fn(&WidgetSettings) -> Arc<dyn WidgetRunner> + Send + Sync>;
-
-pub struct WidgetUpdate {
-    pub id: WidgetId,
-    pub generation: u64,
-    pub result: Result<WidgetSnapshot, SourceError>,
-}
 
 struct UpdateSink<E> {
     sender: Sender<E>,
@@ -85,7 +79,7 @@ fn shutdown_key(id: &WidgetId) -> String {
 impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
     type Spec = WidgetSettings;
 
-    fn start(&mut self, settings: &WidgetSettings, generation: u64) {
+    fn start(&mut self, settings: &WidgetSettings, generation: Generation) {
         let id = settings.id.clone();
         let runner = (self.factory)(settings);
         self.shutdown.register(
@@ -106,7 +100,7 @@ impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
 
 fn spawn_refresher<E: Send + 'static>(
     settings: &WidgetSettings,
-    generation: u64,
+    generation: Generation,
     runner: Arc<dyn WidgetRunner>,
     sink: UpdateSink<E>,
 ) -> RefreshSignal {
@@ -144,8 +138,9 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::application::ports::{ActionExecutor, WidgetSource};
+    use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
     use crate::application::refresh::fakes::snapshot_titled;
+    use crate::application::reload::WidgetGenerations;
     use crate::domain::action::{ActionOutcome, ConfirmedAction};
     use crate::domain::widget::WidgetSnapshot;
     use crate::infrastructure::config::default_llm_selection;
@@ -197,6 +192,10 @@ mod tests {
         }
     }
 
+    fn generation() -> Generation {
+        WidgetGenerations::default().advance(&WidgetId::new("a"))
+    }
+
     fn runtime_with(
         fake: &Arc<FakeRunner>,
     ) -> (
@@ -218,11 +217,12 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         let (mut runtime, receiver, _shutdown) = runtime_with(&fake);
 
-        runtime.start(&settings("a"), 7);
+        let generation = generation();
+        runtime.start(&settings("a"), generation);
 
         let update = receiver.recv_timeout(RECEIVE_LIMIT).unwrap();
         assert_eq!(update.id.as_str(), "a");
-        assert_eq!(update.generation, 7);
+        assert_eq!(update.generation, generation);
         assert!(update.result.is_ok());
         assert!(runtime.runner(&WidgetId::new("a")).is_some());
     }
@@ -231,7 +231,7 @@ mod tests {
     fn start_registers_the_runner_for_shutdown() {
         let fake = Arc::new(FakeRunner::default());
         let (mut runtime, _receiver, shutdown) = runtime_with(&fake);
-        runtime.start(&settings("a"), 1);
+        runtime.start(&settings("a"), generation());
 
         shutdown.shutdown();
 
@@ -242,7 +242,7 @@ mod tests {
     fn retire_requests_cancel_and_forgets_the_runner() {
         let fake = Arc::new(FakeRunner::default());
         let (mut runtime, _receiver, _shutdown) = runtime_with(&fake);
-        runtime.start(&settings("a"), 1);
+        runtime.start(&settings("a"), generation());
 
         runtime.retire(&WidgetId::new("a"));
 
