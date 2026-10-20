@@ -377,6 +377,7 @@ mod tests {
     const DESCENDANT_EXIT_LIMIT: Duration = Duration::from_secs(5);
     const GRANDCHILD_PIPE_HOLD_SECONDS: u64 = 3;
     const PIPE_HOLD_CANCEL_BUDGET: Duration = Duration::from_secs(1);
+    const LEADER_REAP_MARGIN: Duration = Duration::from_millis(200);
     const IDLE_CANCEL_BUDGET: Duration = Duration::from_millis(100);
 
     #[test]
@@ -761,6 +762,67 @@ mod tests {
         signal_process_group(leader.id());
         leader.wait().unwrap();
         assert!(wait_until_gone(&read_grandchild_pid(&pid_file)));
+    }
+
+    fn orphan_script(pid_file: &Path, tail: &str) -> String {
+        format!("sleep 30 & echo $! > '{}'; {tail}", pid_file.display())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancel_kills_descendants_that_outlive_the_leader() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let leader_file = directory.path().join("leader.txt");
+        let script = format!(
+            "echo $$ > '{}'; {}",
+            leader_file.display(),
+            orphan_script(&pid_file, "echo pronto")
+        );
+        let flag = CancelFlag::default();
+        let ready_pid_file = pid_file.clone();
+        let ready_leader_file = leader_file.clone();
+        let cancel_thread = cancel_when_ready(&flag, move || {
+            let leader_exited = pid_file_is_written(&ready_pid_file)
+                && pid_file_is_written(&ready_leader_file)
+                && !process_is_running(&read_grandchild_pid(&ready_leader_file));
+            if leader_exited {
+                thread::sleep(LEADER_REAP_MARGIN);
+            }
+            leader_exited
+        });
+        let error = run_process(shell(&script), None, &limits(60, 1024), &flag).unwrap_err();
+        cancel_thread.join().unwrap();
+        assert!(error.to_string().contains("cancelado"), "{error}");
+        assert!(wait_until_gone(&read_grandchild_pid(&pid_file)));
+    }
+
+    #[test]
+    fn overflow_kills_descendants_that_outlive_the_leader() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let script = orphan_script(&pid_file, "head -c 2000 /dev/zero | tr '\\0' a");
+        let error = run(shell(&script), None, &limits(5, 100)).unwrap_err();
+        assert!(error.to_string().contains("excedeu o limite"), "{error}");
+        assert!(wait_until_gone(&read_grandchild_pid(&pid_file)));
+    }
+
+    #[test]
+    fn successful_run_does_not_kill_detached_descendants() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let script = format!(
+            "sleep 30 >/dev/null 2>&1 </dev/null & echo $! > '{}'; echo pronto",
+            pid_file.display()
+        );
+        let output = run(shell(&script), None, &limits(5, 1024)).unwrap();
+        assert_eq!(output.trim(), "pronto");
+        let detached = read_grandchild_pid(&pid_file);
+        assert!(
+            !is_gone(&detached),
+            "o descendente foi morto no caminho de sucesso"
+        );
+        let _ = Command::new("kill").args(["-KILL", &detached]).output();
     }
 
     #[test]
