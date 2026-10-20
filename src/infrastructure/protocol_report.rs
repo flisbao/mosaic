@@ -784,6 +784,30 @@ mod tests {
     }
 
     #[test]
+    fn action_label_and_alert_title_are_truncated() {
+        let long_text = "x".repeat(MAXIMUM_TEXT_CHARACTERS + 1);
+        let json = format!(
+            r#"{{"summary":{{"title":"K"}},
+                "actions":[{{"id":"a","label":"{long_text}"}}],
+                "alerts":[{{"id":"b","title":"{long_text}"}}]}}"#
+        );
+        let parsed = report(&json);
+        assert_eq!(
+            parsed.snapshot.actions[0].label.chars().count(),
+            MAXIMUM_TEXT_CHARACTERS
+        );
+        assert_eq!(
+            parsed.snapshot.alerts[0].title.chars().count(),
+            MAXIMUM_TEXT_CHARACTERS
+        );
+        assert_eq!(
+            paths(&parsed, Severity::Warning),
+            vec!["actions[0].label", "alerts[0].title"]
+        );
+        assert!(paths(&parsed, Severity::Error).is_empty());
+    }
+
+    #[test]
     fn missing_summary_title_is_a_protocol_error() {
         assert!(parse_snapshot_report(r#"{"summary":{"blocks":[]}}"#).is_err());
         assert!(parse_snapshot_report(r#"{"summary":{"title":3}}"#).is_err());

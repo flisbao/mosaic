@@ -1,6 +1,6 @@
 # Protocolo de widgets do Mosaic (v1)
 
-Um widget é qualquer programa que o Mosaic executa: Python, Node, shell, o que você preferir. Ele responde ao argumento `snapshot` imprimindo um JSON, e o Mosaic desenha o resultado como um widget. Este documento é o contrato; o [esquema JSON](schema/protocol.schema.json) é equivalente e os testes garantem que os dois não divergem do código.
+Um widget é qualquer programa que o Mosaic executa: Python, Node, shell, o que você preferir. Ele responde ao argumento `snapshot` imprimindo um JSON, e o Mosaic desenha o resultado como um widget. Este documento é o contrato; o [esquema JSON](schema/protocol.schema.json) é equivalente e os testes garantem que os dois não divergem do código (tipos de bloco, tons, flags e limites numéricos).
 
 Um widget completo, em Python:
 
@@ -40,6 +40,7 @@ O processo recebe o ambiente do Mosaic mais `[widgets.env]`; se o widget declara
 - **`protocol`** (opcional, padrão 1): número inteiro positivo. Se for maior que a versão suportada, o widget pede para atualizar o Mosaic; outro valor é erro.
 - **`summary.title`** (obrigatório) e **`summary.blocks`**: o conteúdo da caixa na Home (seção 3).
 - **`detail`**: a aba do widget, uma lista de seções. A configuração decide a aba e o atalho para ela, com `[[tabs]]` e `tab = "Nome"`. Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`. O `id` precisa ter de 1 a 200 caracteres, sem caracteres de controle nem de formatação; um `id` inválido é ignorado com um aviso (o item continua, mas sem ações por item).
+  - **`meta`** (mapa de texto para texto): o Mosaic não desenha. Serve de contexto para o widget de IA (priorização) e é ignorado por todo o resto. Valores que não são texto são descartados.
 - **`actions`**: `{ "id", "label", "description"?, "applies_to"?: "widget" | "item", "params"? }`. `params` é um objeto JSON enviado na entrada padrão da ação (seção 1); `item_id` é uma chave reservada.
 - **`alerts`**: seção 5.
 - **`mini`** (opcional): a coluna do modo foco, `{ "value", "text", "tone"? }`. `value` e `text` são obrigatórios; `tone` tem o padrão `normal`. Um `mini` inválido é descartado sem afetar o resto do widget. O `mosaic check` mostra a linha `mini: <value> <text>`.
@@ -84,7 +85,7 @@ Um bloco é um objeto com `type`, empilhado na ordem em que aparece.
 | caracteres de `mini.text` | 24 |
 | avisos novos por leitura | 5 |
 
-O excesso é cortado e o `mosaic check` avisa.
+O excesso é cortado (não rejeitado) e o `mosaic check` avisa; por isso o esquema JSON não declara `maxLength` para texto.
 
 **Texto:** antes de ser usado, todo texto do widget perde os caracteres de controle e de formatação do Unicode (escape, NUL, direção de texto), quebras de linha e tabulações viram um espaço e os espaços repetidos são colapsados.
 

@@ -3,13 +3,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use mosaic::domain::blocks::lines::MAXIMUM_LINES_PER_BLOCK;
+use mosaic::domain::blocks::rows::MAXIMUM_TAGS_PER_ROW;
+use mosaic::domain::blocks::stat::MAXIMUM_STAT_ITEMS;
+use mosaic::domain::blocks::table::MAXIMUM_TABLE_COLUMNS;
 use mosaic::domain::blocks::BLOCK_TYPE_NAMES;
 use mosaic::domain::snapshot_report::Severity;
 use mosaic::domain::widget::{
     FLAG_NAMES, MAXIMUM_MINI_TEXT_CHARACTERS, MAXIMUM_MINI_VALUE_CHARACTERS,
 };
 use mosaic::domain::widget_content::TONE_NAMES;
-use mosaic::infrastructure::protocol_report::parse_snapshot_report;
+use mosaic::infrastructure::protocol_report::{
+    parse_snapshot_report, MAXIMUM_ALERT_ID_CHARACTERS, MAXIMUM_BLOCKS_PER_WIDGET,
+    MAXIMUM_ITEM_ID_CHARACTERS,
+};
 use serde_json::Value;
 
 const ERROR_PREFIX: &str = "ERRO ";
@@ -116,4 +123,68 @@ fn schema_matches_the_code() {
     );
     assert_eq!(mini["properties"]["value"]["minLength"].as_u64(), Some(1));
     assert_eq!(mini["properties"]["text"]["minLength"].as_u64(), Some(1));
+}
+
+fn limit(constant: usize) -> Option<u64> {
+    u64::try_from(constant).ok()
+}
+
+fn block_variant<'a>(definitions: &'a Value, block_type: &str) -> &'a Value {
+    definitions["block"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == block_type)
+        .unwrap()
+}
+
+#[test]
+fn schema_limits_match_the_code() {
+    let schema = schema();
+    let definitions = &schema["$defs"];
+    assert_eq!(
+        definitions["blocks"]["maxItems"].as_u64(),
+        limit(MAXIMUM_BLOCKS_PER_WIDGET)
+    );
+    let lines = block_variant(definitions, "lines");
+    assert_eq!(
+        lines["properties"]["lines"]["maxItems"].as_u64(),
+        limit(MAXIMUM_LINES_PER_BLOCK)
+    );
+    let rows = block_variant(definitions, "rows");
+    assert_eq!(
+        rows["properties"]["rows"]["maxItems"].as_u64(),
+        limit(MAXIMUM_LINES_PER_BLOCK)
+    );
+    let stat = block_variant(definitions, "stat");
+    assert_eq!(
+        stat["properties"]["items"]["maxItems"].as_u64(),
+        limit(MAXIMUM_STAT_ITEMS)
+    );
+    let table = block_variant(definitions, "table");
+    assert_eq!(
+        table["properties"]["columns"]["maxItems"].as_u64(),
+        limit(MAXIMUM_TABLE_COLUMNS)
+    );
+    assert_eq!(
+        table["properties"]["rows"]["maxItems"].as_u64(),
+        limit(MAXIMUM_LINES_PER_BLOCK)
+    );
+    assert_eq!(
+        definitions["row"]["properties"]["tags"]["maxItems"].as_u64(),
+        limit(MAXIMUM_TAGS_PER_ROW)
+    );
+    let alert_id = &definitions["alert"]["properties"]["id"];
+    assert_eq!(alert_id["minLength"].as_u64(), Some(1));
+    assert_eq!(
+        alert_id["maxLength"].as_u64(),
+        limit(MAXIMUM_ALERT_ID_CHARACTERS)
+    );
+    let item_id = &definitions["detailItem"]["properties"]["id"];
+    assert_eq!(item_id["minLength"].as_u64(), Some(1));
+    assert_eq!(
+        item_id["maxLength"].as_u64(),
+        limit(MAXIMUM_ITEM_ID_CHARACTERS)
+    );
+    assert!(definitions["text"].get("maxLength").is_none());
 }
