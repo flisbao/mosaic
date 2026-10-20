@@ -48,44 +48,38 @@ confirm_before_send = true
 priority_prompt = "prompts/prioridade.md"
 
 # --- Jira (descomente e ajuste) ---
+# Cada widget define o próprio JQL em args; o Mosaic acrescenta `snapshot`.
 # Guarde o token numa variável de ambiente, por exemplo:
 #   export JIRA_TOKEN_EMPRESA="seu-token-de-api"
 #
-# Gerente: acompanha o time.
+# Minhas tarefas abertas.
 # [[widgets]]
-# id = "jira-empresa-time"
+# id = "jira-minhas-tarefas"
 # command = "python3"
-# args = ["plugins/jira.py"]
+# args = ["plugins/jira.py", "--jql", "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC", "--title", "Minhas tarefas", "--view", "lines"]
 # interval_seconds = 120
 # timeout_seconds = 45
-# llm_sections = ["Sem dono", "Em andamento"]
+# llm_sections = ["Minhas tarefas"]
 # inherit_env = ["JIRA_TOKEN_EMPRESA"]
 #
 # [widgets.env]
 # JIRA_SITE = "empresa.atlassian.net"
 # JIRA_EMAIL = "voce@empresa.com"
 # JIRA_TOKEN_ENV = "JIRA_TOKEN_EMPRESA"
-# JIRA_MODE = "manager"
-# JIRA_PROJECT = "VHPJ"
-# JIRA_BOARD = "42"
-# JIRA_TEAM = "ana@empresa.com, bruno@empresa.com"
 #
-# Pessoa do projeto: só os seus tickets.
+# O que cada pessoa do time está pegando agora.
 # [[widgets]]
-# id = "jira-cliente-meus"
+# id = "jira-time-em-andamento"
 # command = "python3"
-# args = ["plugins/jira.py"]
+# args = ["plugins/jira.py", "--jql", "project = VHPJ AND statusCategory = \"In Progress\"", "--title", "Time em andamento", "--group-by", "assignee", "--view", "table", "--columns", "key,summary,status"]
 # interval_seconds = 120
 # timeout_seconds = 45
-# llm_sections = ["Meus tickets"]
-# inherit_env = ["JIRA_TOKEN_CLIENTE"]
+# inherit_env = ["JIRA_TOKEN_EMPRESA"]
 #
 # [widgets.env]
-# JIRA_SITE = "cliente.atlassian.net"
-# JIRA_EMAIL = "voce@consultoria.com"
-# JIRA_TOKEN_ENV = "JIRA_TOKEN_CLIENTE"
-# JIRA_MODE = "personal"
-# JIRA_PROJECT = "CLI"
+# JIRA_SITE = "empresa.atlassian.net"
+# JIRA_EMAIL = "voce@empresa.com"
+# JIRA_TOKEN_ENV = "JIRA_TOKEN_EMPRESA"
 
 # --- Galeria de blocos (descomente para ver todos os blocos; veja PROTOCOL.md) ---
 # [[widgets]]
@@ -263,8 +257,10 @@ mod tests {
     fn default_config_documents_jira_examples() {
         let text = default_config_text();
         assert!(text.contains("JIRA_SITE"));
-        assert!(text.contains("JIRA_MODE = \"manager\""));
-        assert!(text.contains("JIRA_MODE = \"personal\""));
+        assert!(text.contains("--jql"));
+        assert!(text.contains("currentUser()"));
+        assert!(text.contains("\"--group-by\", \"assignee\""));
+        assert!(!text.contains("JIRA_MODE"));
     }
 
     #[test]
