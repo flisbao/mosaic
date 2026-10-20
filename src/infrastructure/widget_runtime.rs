@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{SendError, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -23,10 +23,29 @@ pub struct WidgetUpdate {
     pub result: Result<WidgetSnapshot, SourceError>,
 }
 
-pub struct WidgetRuntime<E> {
-    factory: RunnerFactory,
+struct UpdateSink<E> {
     sender: Sender<E>,
     into_event: fn(WidgetUpdate) -> E,
+}
+
+impl<E> Clone for UpdateSink<E> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            into_event: self.into_event,
+        }
+    }
+}
+
+impl<E> UpdateSink<E> {
+    fn deliver(&self, update: WidgetUpdate) -> Result<(), SendError<E>> {
+        self.sender.send((self.into_event)(update))
+    }
+}
+
+pub struct WidgetRuntime<E> {
+    factory: RunnerFactory,
+    sink: UpdateSink<E>,
     shutdown: Arc<ShutdownCoordinator>,
     runners: HashMap<WidgetId, Arc<dyn WidgetRunner>>,
     refresh_signals: HashMap<WidgetId, RefreshSignal>,
@@ -41,8 +60,7 @@ impl<E: Send + 'static> WidgetRuntime<E> {
     ) -> Self {
         Self {
             factory,
-            sender,
-            into_event,
+            sink: UpdateSink { sender, into_event },
             shutdown,
             runners: HashMap::new(),
             refresh_signals: HashMap::new(),
@@ -69,24 +87,12 @@ impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
 
     fn start(&mut self, settings: &WidgetSettings, generation: u64) {
         let id = settings.id.clone();
-        let interval = Duration::from_secs(settings.interval_seconds);
-        let interval_notice = settings
-            .interval_adjusted
-            .then_some(settings.interval_seconds);
         let runner = (self.factory)(settings);
         self.shutdown.register(
             &shutdown_key(&id),
             Arc::clone(&runner) as Arc<dyn Cancellable>,
         );
-        let signal = spawn_refresher(
-            id.clone(),
-            generation,
-            Arc::clone(&runner),
-            interval,
-            interval_notice,
-            self.sender.clone(),
-            self.into_event,
-        );
+        let signal = spawn_refresher(settings, generation, Arc::clone(&runner), self.sink.clone());
         self.runners.insert(id.clone(), runner);
         self.refresh_signals.insert(id, signal);
     }
@@ -99,14 +105,16 @@ impl<E: Send + 'static> WidgetLifecycle for WidgetRuntime<E> {
 }
 
 fn spawn_refresher<E: Send + 'static>(
-    id: WidgetId,
+    settings: &WidgetSettings,
     generation: u64,
     runner: Arc<dyn WidgetRunner>,
-    interval: Duration,
-    interval_notice: Option<u64>,
-    sender: Sender<E>,
-    into_event: fn(WidgetUpdate) -> E,
+    sink: UpdateSink<E>,
 ) -> RefreshSignal {
+    let id = settings.id.clone();
+    let interval = Duration::from_secs(settings.interval_seconds);
+    let interval_notice = settings
+        .interval_adjusted
+        .then_some(settings.interval_seconds);
     let (signal, waiter) = refresh_channel();
     thread::spawn(move || loop {
         let refreshed = refresh_widget(runner.as_ref());
@@ -119,7 +127,7 @@ fn spawn_refresher<E: Send + 'static>(
             generation,
             result,
         };
-        if sender.send(into_event(update)).is_err() {
+        if sink.deliver(update).is_err() {
             break;
         }
         if waiter.wait(interval) == RefreshWake::Closed {
