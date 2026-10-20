@@ -1,6 +1,8 @@
 use crate::domain::error::DomainError;
 use crate::domain::widget::{ActionScope, ActionSpec, WidgetId};
 
+pub const ACTION_ITEM_ID_KEY: &str = "item_id";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProposedAction {
     widget: WidgetId,

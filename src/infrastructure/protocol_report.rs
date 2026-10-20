@@ -1,5 +1,6 @@
 use serde_json::{Map, Value};
 
+use crate::domain::action::ACTION_ITEM_ID_KEY;
 use crate::domain::blocks::Block;
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, Flag, Mini, Summary, WidgetSnapshot,
@@ -497,7 +498,15 @@ impl Reader {
     fn action_params(&mut self, object: &Map<String, Value>, path: &str) -> String {
         match object.get("params") {
             None => EMPTY_PARAMS_JSON.to_string(),
-            Some(params @ Value::Object(_)) => params.to_string(),
+            Some(params @ Value::Object(map)) => {
+                if map.contains_key(ACTION_ITEM_ID_KEY) {
+                    self.warning(
+                        &key_path(&key_path(path, "params"), ACTION_ITEM_ID_KEY),
+                        "chave reservada; o Mosaic envia o id do item selecionado",
+                    );
+                }
+                params.to_string()
+            }
             Some(_) => {
                 self.warning(
                     &key_path(path, "params"),
@@ -649,6 +658,25 @@ mod tests {
         );
         assert_eq!(parsed.snapshot.actions[0].params_json, "{}");
         assert_eq!(paths(&parsed, Severity::Warning), vec!["actions[0].params"]);
+    }
+
+    #[test]
+    fn reserved_item_id_key_in_action_params_warns() {
+        let parsed = report(
+            r#"{"summary":{"title":"T"},"actions":[{"id":"mover","label":"Mover","params":{"item_id":"x","to":"done"}}]}"#,
+        );
+        assert_eq!(
+            parsed.snapshot.actions[0].params_json,
+            r#"{"item_id":"x","to":"done"}"#
+        );
+        assert_eq!(parsed.problems.len(), 1, "{:?}", parsed.problems);
+        let problem = &parsed.problems[0];
+        assert_eq!(problem.severity, Severity::Warning);
+        assert_eq!(problem.path, "actions[0].params.item_id");
+        assert_eq!(
+            problem.message,
+            "chave reservada; o Mosaic envia o id do item selecionado"
+        );
     }
 
     #[test]

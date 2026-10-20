@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::application::launch_spec::ProviderCommand;
 use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
-use crate::domain::action::{ActionOutcome, ConfirmedAction};
+use crate::domain::action::{ActionOutcome, ConfirmedAction, ACTION_ITEM_ID_KEY};
 use crate::domain::widget::WidgetSnapshot;
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::child_environment::restrict_inherited_environment;
@@ -16,8 +16,6 @@ use crate::infrastructure::process::{
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 pub const MAXIMUM_CONCURRENT_PARSES: usize = 3;
-
-const ITEM_ID_KEY: &str = "item_id";
 
 pub struct PluginRunner {
     command: ProviderCommand,
@@ -114,7 +112,7 @@ fn action_parameters(action: &ConfirmedAction) -> String {
     };
     if let Some(item_id) = action.item_id() {
         parameters.insert(
-            ITEM_ID_KEY.to_string(),
+            ACTION_ITEM_ID_KEY.to_string(),
             serde_json::Value::String(item_id.to_string()),
         );
     }

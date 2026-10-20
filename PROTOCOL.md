@@ -20,6 +20,8 @@ O Mosaic roda `command` + `args` do widget com um argumento a mais:
 | `<comando> snapshot` | a cada `interval_seconds` e quando o usuário aperta `r` | um JSON na saída padrão |
 | `<comando> action <id>` | quando o usuário confirma uma ação (parâmetros em JSON na entrada padrão) | uma mensagem curta de texto |
 
+Na entrada padrão de `<comando> action <id>` chega um objeto JSON com os `params` da ação. Nas ações `applies_to: "item"`, o Mosaic acrescenta a chave reservada `item_id`, com o `id` do item selecionado; se `params` já trouxer `item_id`, o valor do Mosaic prevalece. `params` que não seja um objeto chega como `{}`. O `mosaic check` avisa nos dois casos.
+
 O processo recebe o ambiente do Mosaic mais `[widgets.env]`; se o widget declarar `inherit_env = ["NOME", ...]`, recebe só `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `TZ`, `LANG`, `LANGUAGE`, `TMPDIR`, `LC_*`, `XDG_*`, as variáveis listadas e `[widgets.env]` (mais `GIT_TERMINAL_PROMPT=0` e `SSH_ASKPASS_REQUIRE=never`), de modo que um widget não enxerga os tokens de outro e roda no diretório de configuração do Mosaic (a pasta que contém o `config.toml`). A saída vai até **1 MiB** e o widget tem `timeout_seconds` (padrão 5 s) para responder; código de saída diferente de zero, tempo esgotado ou saída grande demais viram um erro no widget. `interval_seconds` abaixo de **30** sobe para 30 (o widget avisa); a tecla `r` não tem esse limite.
 
 ## 2. Snapshot
@@ -38,7 +40,7 @@ O processo recebe o ambiente do Mosaic mais `[widgets.env]`; se o widget declara
 - **`protocol`** (opcional, padrão 1): número inteiro positivo. Se for maior que a versão suportada, o widget pede para atualizar o Mosaic; outro valor é erro.
 - **`summary.title`** (obrigatório) e **`summary.blocks`**: o conteúdo da caixa na Home (seção 3).
 - **`detail`**: a aba do widget, uma lista de seções. A configuração decide a aba e o atalho para ela, com `[[tabs]]` e `tab = "Nome"`. Cada seção tem `heading`, e opcionalmente `blocks` (desenhados primeiro) e `items`, a lista selecionável de `{ "id"?, "text", "flag"?, "meta"? }`. O `id` precisa ter de 1 a 200 caracteres, sem caracteres de controle nem de formatação; um `id` inválido é ignorado com um aviso (o item continua, mas sem ações por item).
-- **`actions`**: `{ "id", "label", "description"?, "applies_to"?: "widget" | "item", "params"? }`.
+- **`actions`**: `{ "id", "label", "description"?, "applies_to"?: "widget" | "item", "params"? }`. `params` é um objeto JSON enviado na entrada padrão da ação (seção 1); `item_id` é uma chave reservada.
 - **`alerts`**: seção 5.
 - **`mini`** (opcional): a coluna do modo foco, `{ "value", "text", "tone"? }`. `value` e `text` são obrigatórios; `tone` tem o padrão `normal`. Um `mini` inválido é descartado sem afetar o resto do widget. O `mosaic check` mostra a linha `mini: <value> <text>`.
 
