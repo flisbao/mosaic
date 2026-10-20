@@ -67,6 +67,23 @@ pub enum Harness {
     OpenCode,
 }
 
+const ALL_HARNESSES: [Harness; 2] = [Harness::Claude, Harness::OpenCode];
+
+impl Harness {
+    pub const fn program_name(self) -> &'static str {
+        match self {
+            Harness::Claude => "claude",
+            Harness::OpenCode => "opencode",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        ALL_HARNESSES
+            .into_iter()
+            .find(|harness| harness.program_name() == name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PomodoroConfig {
     pub enabled: bool,
@@ -431,9 +448,10 @@ fn convert_notify_command(
 
 fn convert_llm(raw: RawLlm) -> Result<LlmConfig, ConfigError> {
     let harness = match raw.harness.as_deref() {
-        None | Some("claude") => Harness::Claude,
-        Some("opencode") => Harness::OpenCode,
-        Some(other) => return Err(ConfigError::UnknownHarness(other.to_string())),
+        None => Harness::Claude,
+        Some(name) => {
+            Harness::from_name(name).ok_or_else(|| ConfigError::UnknownHarness(name.to_string()))?
+        }
     };
     let location = SettingLocation::Section(LLM_SECTION);
     if raw.max_budget_usd.is_some_and(|budget| budget <= 0.0) {
@@ -800,6 +818,16 @@ mod tests {
             too_large.to_string(),
             format!("[llm]: 'timeout_seconds' não pode passar de {MAXIMUM_TIMEOUT_SECONDS}")
         );
+    }
+
+    #[test]
+    fn harness_names_round_trip_and_unknown_names_are_rejected() {
+        for harness in [Harness::Claude, Harness::OpenCode] {
+            assert_eq!(Harness::from_name(harness.program_name()), Some(harness));
+        }
+        assert_eq!(Harness::Claude.program_name(), "claude");
+        assert_eq!(Harness::OpenCode.program_name(), "opencode");
+        assert_eq!(Harness::from_name("outro"), None);
     }
 
     #[test]

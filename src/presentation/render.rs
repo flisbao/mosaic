@@ -7,7 +7,10 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::application::pomodoro_notifications::AlertMessage;
-use crate::domain::layout::{arrange, CellRect, GridLayout, TerminalSize, TOP_BAR_HEIGHT};
+use crate::domain::layout::{
+    arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
+    TOP_BAR_HEIGHT,
+};
 use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
 use crate::domain::widget::DetailSection;
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
@@ -19,7 +22,9 @@ use crate::presentation::widget_box::{
 use crate::presentation::widget_view::render_blocks;
 
 const FALLBACK_SPAN: u16 = 1;
-const ENLARGE_WARNING: &str = "Amplie o terminal (mínimo 60x20)";
+const CONFIRMATION_HINT: &str = "[s] confirma  [n] cancela";
+const NOTICE_ROW_HEIGHT: u16 = 1;
+const MINIMUM_HEIGHT_FOR_NOTICE: u16 = 2;
 const FOCUS_COLUMN_WIDTH: u16 = 22;
 const FOCUS_MINIMUM_WIDTH: u16 = FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWABLE_SIDE);
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
@@ -124,17 +129,22 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
         GridLayout::Compact(placement) => {
             let first = entry_indexes.first().copied();
             if let Some(entry) = first.and_then(|index| state.entries().get(index)) {
+                let warning = enlarge_warning();
                 let context = BoxContext {
                     shortcut: first.and_then(|index| state.shortcut_of(index)),
                     selected: true,
                     now,
-                    warning: Some(ENLARGE_WARNING),
+                    warning: Some(&warning),
                 };
                 render_widget_box(frame, entry, to_rect(area, placement.area), &context);
             }
         }
         GridLayout::Empty => {}
     }
+}
+
+fn enlarge_warning() -> String {
+    format!("Amplie o terminal (mínimo {MINIMUM_FULL_WIDTH}x{MINIMUM_FULL_HEIGHT})")
 }
 
 fn render_focus_mode(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
@@ -272,10 +282,9 @@ fn render_notice(frame: &mut Frame, state: &AppState, area: Rect) {
     let Some(notice) = state.notice() else {
         return;
     };
-    if area.height < 2 {
+    let Some(row) = notice_row(area) else {
         return;
-    }
-    let row = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
+    };
     frame.render_widget(Clear, row);
     frame.render_widget(
         Paragraph::new(Line::styled(
@@ -286,16 +295,24 @@ fn render_notice(frame: &mut Frame, state: &AppState, area: Rect) {
     );
 }
 
+fn notice_row(area: Rect) -> Option<Rect> {
+    if area.height < MINIMUM_HEIGHT_FOR_NOTICE {
+        return None;
+    }
+    Some(Rect::new(
+        area.x,
+        area.y + area.height - NOTICE_ROW_HEIGHT,
+        area.width,
+        NOTICE_ROW_HEIGHT,
+    ))
+}
+
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
     let (title, lines) = match state.mode() {
         Mode::Browsing => return,
         Mode::ConfirmingSend { text, .. } => (
             "Enviar à IA",
-            vec![
-                text.clone(),
-                String::new(),
-                "[s] confirma  [n] cancela".to_string(),
-            ],
+            vec![text.clone(), String::new(), CONFIRMATION_HINT.to_string()],
         ),
         Mode::ChoosingAction { selected } => ("Ações", action_menu_lines(state, *selected)),
         Mode::Confirming(proposed) => {
@@ -304,7 +321,7 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
                 lines.push(format!("Item: {item_id}"));
             }
             lines.push(String::new());
-            lines.push("[s] confirma  [n] cancela".to_string());
+            lines.push(CONFIRMATION_HINT.to_string());
             ("Confirmar ação", lines)
         }
     };
@@ -412,6 +429,20 @@ mod tests {
             .unwrap()
             .and_hms_opt(9, 41, 0)
             .unwrap()
+    }
+
+    #[test]
+    fn enlarge_warning_is_built_from_the_layout_minimums() {
+        assert_eq!(enlarge_warning(), "Amplie o terminal (mínimo 60x20)");
+    }
+
+    #[test]
+    fn notice_row_is_the_last_row_and_absent_in_a_one_row_terminal() {
+        assert_eq!(
+            notice_row(Rect::new(2, 3, 40, 10)),
+            Some(Rect::new(2, 12, 40, 1))
+        );
+        assert_eq!(notice_row(Rect::new(0, 0, 40, 1)), None);
     }
 
     fn snapshot(title: &str, lines: Vec<SummaryLine>) -> WidgetSnapshot {

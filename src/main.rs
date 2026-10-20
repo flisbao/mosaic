@@ -262,13 +262,13 @@ fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<
     let timeout = Duration::from_secs(config.llm.timeout_seconds);
     let (runner, cancellable) = match config.llm.harness {
         Harness::Claude => share_llm_runner(ClaudeCli::new(
-            "claude".to_string(),
+            Harness::Claude.program_name().to_string(),
             working_directory,
             config.llm.max_budget_usd,
             timeout,
         )),
         Harness::OpenCode => share_llm_runner(OpenCodeCli::new(
-            "opencode".to_string(),
+            Harness::OpenCode.program_name().to_string(),
             working_directory,
             timeout,
         )),
@@ -536,10 +536,7 @@ fn start_recommendation(
 }
 
 fn describe_target(config: &LlmConfig) -> String {
-    let harness = match config.harness {
-        Harness::Claude => "claude",
-        Harness::OpenCode => "opencode",
-    };
+    let harness = config.harness.program_name();
     match &config.model {
         Some(model) => format!("{harness}/{model}"),
         None => harness.to_string(),
