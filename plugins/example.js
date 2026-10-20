@@ -9,9 +9,14 @@ function main(argumentsList) {
   const snapshot = {
     summary: {
       title: "Exemplo Node",
-      lines: [
-        { text: "olá do plugin em Node", flag: "updated" },
-        { text: "troque este script pelo seu" },
+      blocks: [
+        {
+          type: "lines",
+          lines: [
+            { text: "olá do plugin em Node", flag: "updated" },
+            { text: "troque este script pelo seu" },
+          ],
+        },
       ],
     },
   };

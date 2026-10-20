@@ -12,6 +12,8 @@ use mosaic::domain::action::ProposedAction;
 use mosaic::domain::widget::{ActionScope, ActionSpec, WidgetId, WidgetSnapshot};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 
+mod common;
+
 const TOKEN: &str = "TOKEN-E2E-XYZ";
 const EMAIL: &str = "eu@empresa.com";
 
@@ -75,12 +77,7 @@ fn jira_runner(server: &FakeJira, state_dir: &Path, mode: &str, token: &str) -> 
 }
 
 fn summary_texts(snapshot: &WidgetSnapshot) -> Vec<String> {
-    snapshot
-        .summary
-        .lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect()
+    common::summary_line_texts(snapshot)
 }
 
 fn all_files(directory: &Path) -> Vec<PathBuf> {

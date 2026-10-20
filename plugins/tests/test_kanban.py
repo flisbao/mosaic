@@ -26,7 +26,7 @@ class KanbanTestCase(unittest.TestCase):
         return path
 
     def summary_lines(self, snapshot):
-        return {line["text"] for line in snapshot["summary"]["lines"]}
+        return {line["text"] for line in snapshot["summary"]["blocks"][0]["lines"]}
 
 
 class SnapshotTests(KanbanTestCase):

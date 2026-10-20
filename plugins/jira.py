@@ -679,6 +679,10 @@ def _line(text, flagged=False):
     return line
 
 
+def _summary_blocks(lines):
+    return [{"type": "lines", "lines": lines}]
+
+
 def _item(issue, config, now, last_seen, prefix=None):
     summary = flatten_text(issue.summary, SUMMARY_TEXT_LIMIT)
     text = f"{prefix} — {issue.key} {summary}" if prefix else f"{issue.key} {summary}"
@@ -755,7 +759,7 @@ def build_manager_snapshot(issues, config, team, last_seen, now, offline_at=None
     ]
     summary_lines += [_line(warning) for warning in team.warnings]
     return {
-        "summary": {"title": snapshot_title(config), "lines": summary_lines},
+        "summary": {"title": snapshot_title(config), "blocks": _summary_blocks(summary_lines)},
         "detail": {
             "sections": [
                 {
@@ -816,7 +820,7 @@ def build_personal_snapshot(issues, history, config, last_seen, now, offline_at=
         _line(f"atualizados: {len(updated)}", flagged=bool(updated)),
     ]
     return {
-        "summary": {"title": snapshot_title(config), "lines": summary_lines},
+        "summary": {"title": snapshot_title(config), "blocks": _summary_blocks(summary_lines)},
         "detail": {
             "sections": [
                 {

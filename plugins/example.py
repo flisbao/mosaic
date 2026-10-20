@@ -12,9 +12,14 @@ def main(arguments):
     snapshot = {
         "summary": {
             "title": "Exemplo Python",
-            "lines": [
-                {"text": "olá do plugin em Python", "flag": "updated"},
-                {"text": "troque este script pelo seu"},
+            "blocks": [
+                {
+                    "type": "lines",
+                    "lines": [
+                        {"text": "olá do plugin em Python", "flag": "updated"},
+                        {"text": "troque este script pelo seu"},
+                    ],
+                }
             ],
         }
     }

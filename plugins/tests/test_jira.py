@@ -808,7 +808,7 @@ def sections_by_name(snapshot):
 
 
 def summary_texts(snapshot):
-    return [line["text"] for line in snapshot["summary"]["lines"]]
+    return [line["text"] for line in snapshot["summary"]["blocks"][0]["lines"]]
 
 
 class ManagerSnapshotTests(unittest.TestCase):
@@ -825,14 +825,14 @@ class ManagerSnapshotTests(unittest.TestCase):
         ]
         snapshot = self.build(issues)
         self.assertEqual(summary_texts(snapshot), ["sem dono: 1", "em andamento: 2", "atualizados: 1"])
-        flagged = [line for line in snapshot["summary"]["lines"] if line.get("flag")]
+        flagged = [line for line in snapshot["summary"]["blocks"][0]["lines"] if line.get("flag")]
         self.assertEqual([line["text"] for line in flagged], ["atualizados: 1"])
         self.assertEqual(flagged[0]["flag"], "updated")
         self.assertIn("Jira", snapshot["summary"]["title"])
 
     def test_no_updates_means_no_flag_on_the_summary(self):
         snapshot = self.build([issue_of("VHPJ-1", "indeterminate", updated="2026-10-17T08:00:00.000+0000")])
-        self.assertTrue(all("flag" not in line for line in snapshot["summary"]["lines"]))
+        self.assertTrue(all("flag" not in line for line in snapshot["summary"]["blocks"][0]["lines"]))
 
     def test_unassigned_requires_new_category_no_assignee_and_older_than_threshold(self):
         issues = [
@@ -997,7 +997,7 @@ class PersonalSnapshotTests(unittest.TestCase):
         items = {item["id"]: item for item in sections_by_name(snapshot)["Meus tickets"]}
         self.assertEqual(items["VHPJ-1"]["flag"], "updated")
         self.assertNotIn("flag", items["VHPJ-2"])
-        flagged = [line for line in snapshot["summary"]["lines"] if line.get("flag")]
+        flagged = [line for line in snapshot["summary"]["blocks"][0]["lines"] if line.get("flag")]
         self.assertEqual([line["text"] for line in flagged], ["atualizados: 1"])
 
     def test_offline_adds_first_summary_line_and_actions_exist(self):
@@ -1201,7 +1201,7 @@ class MainTests(unittest.TestCase):
             _, out, _ = self.run_main(["snapshot"], self.search_ok(), JIRA_MODE=mode)
             snapshot = json.loads(out)
             self.assertIsInstance(snapshot["summary"]["title"], str)
-            for line in snapshot["summary"]["lines"]:
+            for line in snapshot["summary"]["blocks"][0]["lines"]:
                 self.assertIsInstance(line["text"], str)
                 self.assertIn(line.get("flag"), (None, "updated", "attention"))
             for section in snapshot["detail"]["sections"]:

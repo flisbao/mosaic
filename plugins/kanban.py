@@ -80,8 +80,14 @@ def build_snapshot(root):
     return {
         "summary": {
             "title": "Kanban",
-            "lines": [
-                {"text": f"{column} {len(cards_by_column[column])}"} for column in COLUMNS
+            "blocks": [
+                {
+                    "type": "lines",
+                    "lines": [
+                        {"text": f"{column} {len(cards_by_column[column])}"}
+                        for column in COLUMNS
+                    ],
+                }
             ],
         },
         "detail": {

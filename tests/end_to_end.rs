@@ -89,12 +89,7 @@ fn confirmed_move_renames_the_item_and_refreshes_the_widget() {
     let Ok(snapshot) = state else {
         panic!("esperava snapshot");
     };
-    let lines: Vec<String> = snapshot
-        .summary
-        .lines
-        .iter()
-        .map(|l| l.text.clone())
-        .collect();
+    let lines = common::summary_line_texts(&snapshot);
     assert!(lines.contains(&"done 1".to_string()), "{lines:?}");
     assert!(lines.contains(&"inbox 0".to_string()), "{lines:?}");
 }
