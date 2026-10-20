@@ -11,6 +11,7 @@ use crate::application::ports::Cancellable;
 use thiserror::Error;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const EXIT_POLL_FIRST_DELAY: Duration = Duration::from_millis(1);
 const READ_CHUNK_BYTES: usize = 8192;
 const MAXIMUM_ERROR_BYTES: usize = 16_384;
 const CANCEL_RELEASE_LIMIT: Duration = Duration::from_secs(2);
@@ -227,6 +228,7 @@ fn wait_for_exit(
     deadline: Instant,
     cancel: &CancelFlag,
 ) -> Result<ExitStatus, ProcessError> {
+    let mut delay = EXIT_POLL_FIRST_DELAY;
     loop {
         if stdout.overflowed.load(Ordering::SeqCst) {
             cancel.terminate(child);
@@ -243,7 +245,10 @@ fn wait_for_exit(
                 cancel.terminate(child);
                 return Err(timeout_error(limits));
             }
-            Ok(None) => thread::sleep(POLL_INTERVAL),
+            Ok(None) => {
+                thread::sleep(delay);
+                delay = (delay * 2).min(POLL_INTERVAL);
+            }
             Err(error) => {
                 cancel.terminate(child);
                 return Err(ProcessError::Wait(error));
