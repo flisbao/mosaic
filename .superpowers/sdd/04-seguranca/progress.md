@@ -8,3 +8,14 @@ Pre-flight: SEC-02 and SEC-08 both change config.rs imports; sequence SEC-02 bef
 
 Task SEC-02: Ruling: Adapt WidgetSettings/WidgetIdentity to WidgetLaunchSpec/ProviderCommand and split config modules — repository architecture already moved these contracts; cost if wrong: environment policy may be carried at an unintended boundary.
 Task SEC-02: Ruling: Add ConfigError::InvalidValue — the plan assumes this variant exists but current code has no equivalent generic invalid value; use a clear validation message. Cost if wrong: downstream callers may expect a different configuration error variant.
+
+Task SEC-02: complete (commit 57ad0c3; tests cargo test + cargo clippy --all-targets -- -D warnings passed; an initial suite run exposed malformed JSON in the new shell test, corrected before the green run).
+Task SEC-08: complete (commit bd35d64; cargo test and clippy passed).
+Task SEC-04: implementation complete (commit 035f45c; cargo test and clippy passed; repository now uses modular config and WidgetLaunchSpec, so the specified insertion points were adapted).
+Task SEC-05: complete (commit 91661f4; cargo test and clippy passed).
+Task SEC-03: complete (commit 8f1413d; cargo test and clippy passed).
+Task SEC-09: complete (commit 0021e30; Python suite 150 tests, cargo test, and clippy passed).
+Delta SEC-07: complete (commit 5b84b27; real process group test passed).
+Delta SEC-10: complete (commit cf6f704; global Rust verification passed).
+Delta SEC-01: not applied; the plan labels its three additional tests optional, while AR-01 already provides the correction. Cost if omitted: those extra regression cases are not locked into the suite.
+Final review: self-review (no subagent tool allowed by collaboration policy). Global verification passed: cargo fmt --check, cargo clippy --all-targets -- -D warnings, cargo test, plugins Python suite (150 tests). `unsafe` grep only matches the existing test function name `safe_process_group_never_targets_unsafe_ids`.
