@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import itertools
 import json
 import math
@@ -11,6 +12,7 @@ import os
 import re
 import sys
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -96,6 +98,13 @@ ICS_PERIOD_SEPARATOR = "/"
 ICS_ESCAPE_PATTERN = re.compile(r"\\([\\;,nN])")
 ICS_ESCAPES = {"\\": "\\", ";": ";", ",": ",", "n": ICS_LINE_FEED, "N": ICS_LINE_FEED}
 ICS_CANCELLED_STATUS = "CANCELLED"
+ICS_CALENDAR_BEGIN = "BEGIN:VCALENDAR"
+ICS_CALENDAR_NAME_FALLBACK = "ICS {number}"
+REQUEST_TIMEOUT_SECONDS = 15
+MAXIMUM_ICS_BYTES = 8 * 1024 * 1024
+LINK_UNAVAILABLE_WARNING = "agenda ICS {number} indisponível"
+ALL_LINKS_FAILED_MESSAGE = "nenhuma agenda ICS respondeu; confira o link (seção ICS do README)"
+OVERSIZED_RESPONSE_MESSAGE = "o calendário excede o tamanho máximo permitido"
 
 MAXIMUM_RECURRENCE_ITERATIONS = 100_000
 MAXIMUM_ITEM_ID_LENGTH = 200
@@ -921,8 +930,54 @@ def _item_id(uid, moment):
     return f"{identifier[:prefix_length]}{ITEM_ID_DIGEST_SEPARATOR}{digest}"
 
 
-def ics_source(config, now, window_end, zone):
-    raise SourceError(NOT_IMPLEMENTED_MESSAGE)
+class FetchError(Exception):
+    pass
+
+
+class _LinkFailure(Exception):
+    pass
+
+
+def fetch_url(url):
+    with urllib.request.urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        body = response.read(MAXIMUM_ICS_BYTES + 1)
+    if len(body) > MAXIMUM_ICS_BYTES:
+        raise FetchError(OVERSIZED_RESPONSE_MESSAGE)
+    return body.decode("utf-8", errors="replace")
+
+
+def ics_source(config, window_start, window_end, zone, fetch=fetch_url):
+    events, warnings = [], []
+    failures = 0
+    for number, url in enumerate(config.ics_urls, start=1):
+        try:
+            text = _download(url, fetch)
+        except _LinkFailure:
+            warnings.append(LINK_UNAVAILABLE_WARNING.format(number=number))
+            failures += 1
+            continue
+        result = _link_result(text, number, window_start, window_end, zone)
+        events += result.events
+        warnings += result.warnings
+    if config.ics_urls and failures == len(config.ics_urls):
+        raise SourceError(ALL_LINKS_FAILED_MESSAGE)
+    return SourceResult(events=events, warnings=warnings)
+
+
+def _download(url, fetch):
+    try:
+        text = fetch(url)
+    except (OSError, http.client.HTTPException, ValueError, FetchError):
+        raise _LinkFailure from None
+    if ICS_CALENDAR_BEGIN not in text.upper():
+        raise _LinkFailure
+    return text
+
+
+def _link_result(text, number, window_start, window_end, zone):
+    events, calendar_name = parse_ics(text, zone)
+    calendar = calendar_name or ICS_CALENDAR_NAME_FALLBACK.format(number=number)
+    return ics_events_in_window(events, calendar, window_start, window_end, zone)
 
 
 def goa_source(config, now, window_end, zone):

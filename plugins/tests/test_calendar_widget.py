@@ -2,7 +2,9 @@ import io
 import json
 import sys
 import tempfile
+import traceback
 import unittest
+import urllib.error
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from unittest import mock
@@ -613,6 +615,129 @@ class RecurrenceTests(unittest.TestCase):
         self.assertTrue(item.cancelled)
 
 
+def ics_document(*lines, calendar_name=None):
+    header = [f"X-WR-CALNAME:{calendar_name}"] if calendar_name is not None else []
+    return "\r\n".join(["BEGIN:VCALENDAR", *header, "VERSION:2.0", "BEGIN:VEVENT", *lines, "END:VEVENT", "END:VCALENDAR"])
+
+
+def meeting(uid, summary, hour):
+    return [f"UID:{uid}", f"SUMMARY:{summary}", f"DTSTART:20261020T{hour:02d}0000", f"DTEND:20261020T{hour + 1:02d}0000"]
+
+
+def ics_config(*urls):
+    return calendar_widget.Config(source="ics", title="Agenda", ics_urls=list(urls), goa_account=None, calendars=[])
+
+
+def fake_fetch(responses):
+    def fetch(url):
+        value = responses[url]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    return fetch
+
+
+def run_ics_source(config, fetch=None):
+    if fetch is None:
+        return calendar_widget.ics_source(config, NOW, WINDOW_END, ZONE)
+    return calendar_widget.ics_source(config, NOW, WINDOW_END, ZONE, fetch=fetch)
+
+
+def http_error(code):
+    error = urllib.error.HTTPError("https://segredo.example.com/a.ics", code, "erro", None, io.BytesIO(b""))
+    error.close()
+    return error
+
+
+class IcsSourceTests(unittest.TestCase):
+    def test_default_sources_point_to_ics_source(self):
+        self.assertIs(calendar_widget.DEFAULT_SOURCES[calendar_widget.SOURCE_ICS], calendar_widget.ics_source)
+
+    def test_merges_several_links_in_link_order(self):
+        responses = {
+            "https://a.example/a.ics": ics_document(*meeting("a", "Primeira", 14), calendar_name="Trabalho"),
+            "https://b.example/b.ics": ics_document(*meeting("b", "Segunda", 15), calendar_name="Família"),
+        }
+        result = run_ics_source(ics_config(*responses), fake_fetch(responses))
+        self.assertEqual([item.title for item in result.events], ["Primeira", "Segunda"])
+        self.assertEqual([item.calendar for item in result.events], ["Trabalho", "Família"])
+        self.assertEqual(result.warnings, [])
+
+    def test_link_without_calendar_name_uses_its_number(self):
+        responses = {
+            "https://a.example/a.ics": ics_document(*meeting("a", "Sem nome", 14)),
+            "https://b.example/b.ics": ics_document(*meeting("b", "Sem nome", 15), calendar_name=""),
+        }
+        result = run_ics_source(ics_config(*responses), fake_fetch(responses))
+        self.assertEqual([item.calendar for item in result.events], ["ICS 1", "ICS 2"])
+
+    def test_partial_failure_warns_without_leaking_url(self):
+        responses = {
+            "https://a.example/a.ics": ics_document(*meeting("a", "Ok", 14)),
+            "https://segredo.example.com/b.ics": urllib.error.URLError("segredo.example.com"),
+        }
+        result = run_ics_source(ics_config(*responses), fake_fetch(responses))
+        self.assertEqual([item.title for item in result.events], ["Ok"])
+        self.assertEqual(result.warnings, ["agenda ICS 2 indisponível"])
+        rendered = repr(result)
+        self.assertNotIn("segredo", rendered)
+        self.assertNotIn("example.com", rendered)
+
+    def test_all_links_failing_raises_source_error_without_leaking(self):
+        responses = {
+            "https://segredo.example.com/a.ics": urllib.error.URLError("segredo.example.com"),
+            "https://segredo.example.com/b.ics": http_error(500),
+        }
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_ics_source(ics_config(*responses), fake_fetch(responses))
+        message = str(context.exception)
+        self.assertEqual(message, "nenhuma agenda ICS respondeu; confira o link (seção ICS do README)")
+        rendered = "".join(traceback.format_exception(context.exception))
+        self.assertNotIn("segredo", rendered)
+        self.assertIsNone(context.exception.__cause__)
+
+    def test_http_error_and_oversized_body_count_as_failure(self):
+        oversized = io.BytesIO(b"x" * (calendar_widget.MAXIMUM_ICS_BYTES + 1))
+        valid = io.BytesIO(ics_document(*meeting("a", "Ok", 14)).encode("utf-8"))
+        with mock.patch.object(calendar_widget.urllib.request, "urlopen", side_effect=[http_error(404), oversized]):
+            with self.assertRaises(calendar_widget.SourceError):
+                run_ics_source(ics_config("https://a.example/a.ics", "https://b.example/b.ics"))
+        with mock.patch.object(calendar_widget.urllib.request, "urlopen", side_effect=[oversized, valid]):
+            result = run_ics_source(ics_config("https://a.example/a.ics", "https://b.example/b.ics"))
+        self.assertEqual([item.title for item in result.events], ["Ok"])
+        self.assertEqual(result.warnings, ["agenda ICS 1 indisponível"])
+
+    def test_invalid_ics_counts_as_failure(self):
+        responses = {
+            "https://a.example/a.ics": "<html>não é um calendário</html>",
+            "https://b.example/b.ics": ics_document(*meeting("b", "Ok", 15)),
+        }
+        result = run_ics_source(ics_config(*responses), fake_fetch(responses))
+        self.assertEqual([item.title for item in result.events], ["Ok"])
+        self.assertEqual(result.warnings, ["agenda ICS 1 indisponível"])
+
+    def test_invalid_ics_on_every_link_raises_source_error(self):
+        responses = {"https://a.example/a.ics": "lixo"}
+        with self.assertRaises(calendar_widget.SourceError):
+            run_ics_source(ics_config(*responses), fake_fetch(responses))
+
+
+class FetchUrlTests(unittest.TestCase):
+    def test_decodes_utf8_and_replaces_invalid_bytes(self):
+        body = "Reunião".encode("utf-8") + b"\xff"
+        with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=io.BytesIO(body)) as urlopen:
+            text = calendar_widget.fetch_url("https://a.example/a.ics")
+        self.assertEqual(text, "Reunião�")
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], calendar_widget.REQUEST_TIMEOUT_SECONDS)
+
+    def test_body_over_the_limit_is_rejected(self):
+        body = io.BytesIO(b"x" * (calendar_widget.MAXIMUM_ICS_BYTES + 1))
+        with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=body):
+            with self.assertRaises(calendar_widget.FetchError):
+                calendar_widget.fetch_url("https://a.example/a.ics")
+
+
 class MainTests(unittest.TestCase):
     def test_usage_error_returns_2(self):
         stderr = io.StringIO()
@@ -646,7 +771,7 @@ class MainTests(unittest.TestCase):
         stderr = io.StringIO()
         code = calendar_widget.main(
             ["snapshot"],
-            environ={"CALENDAR_SOURCE": "ics", "CALENDAR_ICS_URL_ENV": "A", "A": "https://x/a.ics"},
+            environ={"CALENDAR_SOURCE": "goa", "CALENDAR_GOA_ACCOUNT": "conta"},
             now=NOW,
             stdout=io.StringIO(),
             stderr=stderr,
