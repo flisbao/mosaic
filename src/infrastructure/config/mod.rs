@@ -201,6 +201,8 @@ pub enum ConfigError {
     Parse(String),
     #[error("widget duplicado na configuração: '{0}'")]
     DuplicateWidgetId(String),
+    #[error("widget '{widget}': '{field}' não pode ser vazio")]
+    EmptyValue { widget: String, field: &'static str },
     #[error("widget '{0}': id reservado pelo mosaic")]
     ReservedWidgetId(String),
     #[error("{location}: '{field}' precisa ser maior que zero")]
@@ -242,6 +244,8 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
     let mut tab_assignments = Vec::new();
     let mut warnings = Vec::new();
     for mut widget in raw.widgets {
+        require_text(&widget.id, &widget.id, "id")?;
+        require_text(&widget.command, &widget.id, "command")?;
         if WidgetId::new(widget.id.clone()).is_recommendation() {
             return Err(ConfigError::ReservedWidgetId(widget.id));
         }
@@ -262,6 +266,16 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         llm: convert_llm(raw.llm)?,
         warnings,
     })
+}
+
+fn require_text(value: &str, widget: &str, field: &'static str) -> Result<(), ConfigError> {
+    if value.trim().is_empty() {
+        return Err(ConfigError::EmptyValue {
+            widget: widget.to_string(),
+            field,
+        });
+    }
+    Ok(())
 }
 
 pub fn restart_sections(current: &AppConfig, next: &AppConfig) -> RestartSections {
@@ -416,6 +430,30 @@ mod tests {
             result.unwrap_err(),
             ConfigError::DuplicateWidgetId("kanban".to_string())
         );
+    }
+
+    #[test]
+    fn blank_widget_id_and_command_are_rejected() {
+        let cases = [
+            ("", "sh", "id"),
+            ("  ", "sh", "id"),
+            ("agenda", "", "command"),
+            ("agenda", "  ", "command"),
+        ];
+        for (id, command, field) in cases {
+            let text = format!("[[widgets]]\nid = \"{id}\"\ncommand = \"{command}\"\n");
+
+            let error = parse_config(&text).unwrap_err();
+
+            assert_eq!(
+                error,
+                ConfigError::EmptyValue {
+                    widget: id.to_string(),
+                    field,
+                },
+                "{text}"
+            );
+        }
     }
 
     fn interval_settings(interval: i64) -> WidgetSettings {
