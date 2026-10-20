@@ -95,7 +95,8 @@ impl Drop for ShutdownCoordinator {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{Arc, Barrier, Mutex, PoisonError};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -105,31 +106,35 @@ mod tests {
     use crate::application::refresh::fakes::snapshot_titled;
     use crate::application::refresh::fakes::FakeSource;
 
-    const SLOW_CANCEL_DURATION: Duration = Duration::from_millis(100);
-    const SLOW_SOURCE_COUNT: usize = 8;
-    const PARALLEL_SHUTDOWN_BUDGET: Duration = Duration::from_millis(400);
-    const SLOW_RETIRE_CANCEL_DURATION: Duration = Duration::from_millis(400);
-    const RETIRE_RETURN_BUDGET: Duration = Duration::from_millis(50);
+    const PARALLEL_SOURCE_COUNT: usize = 8;
     const BACKGROUND_CANCEL_LIMIT: Duration = Duration::from_secs(3);
     const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-    struct SlowRetireCancellable {
+    struct GatedCancellable {
         request_calls: AtomicUsize,
         cancel_calls: AtomicUsize,
+        cancel_gate: Mutex<Receiver<()>>,
     }
 
-    impl SlowRetireCancellable {
-        fn new() -> Self {
-            Self {
+    impl GatedCancellable {
+        fn new() -> (Self, Sender<()>) {
+            let (release, gate) = mpsc::channel();
+            let cancellable = Self {
                 request_calls: AtomicUsize::new(0),
                 cancel_calls: AtomicUsize::new(0),
-            }
+                cancel_gate: Mutex::new(gate),
+            };
+            (cancellable, release)
         }
     }
 
-    impl Cancellable for SlowRetireCancellable {
+    impl Cancellable for GatedCancellable {
         fn cancel(&self) {
-            thread::sleep(SLOW_RETIRE_CANCEL_DURATION);
+            let gate = self
+                .cancel_gate
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let _ = gate.recv();
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -147,51 +152,52 @@ mod tests {
     }
 
     #[test]
-    fn retire_returns_before_a_slow_cancel_finishes() {
-        let slow = Arc::new(SlowRetireCancellable::new());
-        let coordinator = ShutdownCoordinator::new();
+    fn retire_returns_while_a_slow_cancel_is_still_blocked() {
+        let (slow, release) = GatedCancellable::new();
+        let slow = Arc::new(slow);
+        let coordinator = Arc::new(ShutdownCoordinator::new());
         coordinator.register("slow", slow.clone());
+        let (returned, returned_signal) = mpsc::channel();
+        let retiring = Arc::clone(&coordinator);
+        thread::spawn(move || {
+            retiring.retire("slow");
+            let _ = returned.send(());
+        });
 
-        let started = Instant::now();
-        coordinator.retire("slow");
-        let elapsed = started.elapsed();
+        let retire_returned = returned_signal
+            .recv_timeout(BACKGROUND_CANCEL_LIMIT)
+            .is_ok();
 
-        assert!(
-            elapsed < RETIRE_RETURN_BUDGET,
-            "retire bloqueou por {elapsed:?}"
-        );
+        assert!(retire_returned, "retire ficou bloqueado esperando o cancel");
         assert_eq!(slow.request_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(slow.cancel_calls.load(Ordering::SeqCst), 0);
+        drop(release);
     }
 
     #[test]
     fn retire_cancels_a_slow_source_exactly_once_in_background() {
-        let slow = Arc::new(SlowRetireCancellable::new());
+        let (slow, release) = GatedCancellable::new();
+        let slow = Arc::new(slow);
         let coordinator = ShutdownCoordinator::new();
         coordinator.register("slow", slow.clone());
 
         coordinator.retire("slow");
+        release.send(()).unwrap();
+        drop(release);
 
         assert!(wait_until(|| slow.cancel_calls.load(Ordering::SeqCst) == 1));
         coordinator.shutdown();
-        thread::sleep(SLOW_RETIRE_CANCEL_DURATION);
         assert_eq!(slow.cancel_calls.load(Ordering::SeqCst), 1);
     }
 
-    struct SlowCancellable {
+    struct RendezvousCancellable {
+        rendezvous: Arc<Barrier>,
         cancel_calls: AtomicUsize,
     }
 
-    impl SlowCancellable {
-        fn new() -> Self {
-            Self {
-                cancel_calls: AtomicUsize::new(0),
-            }
-        }
-    }
-
-    impl Cancellable for SlowCancellable {
+    impl Cancellable for RendezvousCancellable {
         fn cancel(&self) {
-            thread::sleep(SLOW_CANCEL_DURATION);
+            self.rendezvous.wait();
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
         fn request_cancel(&self) {}
@@ -240,22 +246,34 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_cancels_slow_sources_in_parallel() {
-        let sources: Vec<Arc<SlowCancellable>> = (0..SLOW_SOURCE_COUNT)
-            .map(|_| Arc::new(SlowCancellable::new()))
+    fn shutdown_cancels_sources_in_parallel() {
+        let rendezvous = Arc::new(Barrier::new(PARALLEL_SOURCE_COUNT));
+        let sources: Vec<Arc<RendezvousCancellable>> = (0..PARALLEL_SOURCE_COUNT)
+            .map(|_| {
+                Arc::new(RendezvousCancellable {
+                    rendezvous: Arc::clone(&rendezvous),
+                    cancel_calls: AtomicUsize::new(0),
+                })
+            })
             .collect();
-        let coordinator = ShutdownCoordinator::new();
+        let coordinator = Arc::new(ShutdownCoordinator::new());
         for (index, source) in sources.iter().enumerate() {
             coordinator.register(&index.to_string(), source.clone());
         }
+        let (finished, finished_signal) = mpsc::channel();
+        let shutting_down = Arc::clone(&coordinator);
+        thread::spawn(move || {
+            shutting_down.shutdown();
+            let _ = finished.send(());
+        });
 
-        let started = Instant::now();
-        coordinator.shutdown();
-        let elapsed = started.elapsed();
+        let completed = finished_signal
+            .recv_timeout(BACKGROUND_CANCEL_LIMIT)
+            .is_ok();
 
         assert!(
-            elapsed < PARALLEL_SHUTDOWN_BUDGET,
-            "shutdown levou {elapsed:?}, esperado paralelo"
+            completed,
+            "shutdown deveria cancelar todas as fontes em paralelo"
         );
         for source in &sources {
             assert_eq!(source.cancel_calls.load(Ordering::SeqCst), 1);
