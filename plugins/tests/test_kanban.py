@@ -42,31 +42,31 @@ class SnapshotTests(KanbanTestCase):
     def test_title_comes_from_first_heading(self):
         self.write_card("inbox", "a.md", "texto solto\n# Corrigir login\n")
         snapshot = kanban.build_snapshot(self.root)
-        item = snapshot["detail"]["sections"][0]["items"][0]
+        item = snapshot["detail"][0]["items"][0]
         self.assertEqual(item["text"], "Corrigir login")
         self.assertEqual(item["id"], "inbox/a.md")
 
     def test_title_falls_back_to_file_name(self):
         self.write_card("inbox", "sem-titulo.md", "so texto\n")
-        item = kanban.build_snapshot(self.root)["detail"]["sections"][0]["items"][0]
+        item = kanban.build_snapshot(self.root)["detail"][0]["items"][0]
         self.assertEqual(item["text"], "sem-titulo")
 
     def test_front_matter_fields_do_not_break_title(self):
         self.write_card(
             "inbox", "a.md", "---\njira: PAY-1\nprioridade: alta\n---\n# Com metadados\n"
         )
-        item = kanban.build_snapshot(self.root)["detail"]["sections"][0]["items"][0]
+        item = kanban.build_snapshot(self.root)["detail"][0]["items"][0]
         self.assertEqual(item["text"], "Com metadados")
 
     def test_malformed_front_matter_does_not_break_snapshot(self):
         self.write_card("inbox", "a.md", "---\njira: PAY-1\n# Sem fechamento\n")
         (self.root / "inbox" / "b.md").write_bytes(b"\xff\xfe nao eh utf8 \n")
-        items = kanban.build_snapshot(self.root)["detail"]["sections"][0]["items"]
+        items = kanban.build_snapshot(self.root)["detail"][0]["items"]
         self.assertEqual(len(items), 2)
 
     def test_missing_column_folder_counts_zero(self):
         snapshot = kanban.build_snapshot(self.root)
-        self.assertEqual(len(snapshot["detail"]["sections"]), len(kanban.COLUMNS))
+        self.assertEqual(len(snapshot["detail"]), len(kanban.COLUMNS))
         self.assertIn("in progress 0", self.summary_lines(snapshot))
 
     def test_missing_root_does_not_break_snapshot(self):
@@ -82,7 +82,7 @@ class SnapshotTests(KanbanTestCase):
 
 class MetaTests(KanbanTestCase):
     def first_item(self):
-        return kanban.build_snapshot(self.root)["detail"]["sections"][0]["items"][0]
+        return kanban.build_snapshot(self.root)["detail"][0]["items"][0]
 
     def test_meta_comes_from_front_matter(self):
         self.write_card(

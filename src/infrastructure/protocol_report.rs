@@ -30,7 +30,6 @@ const NOT_A_LIST_MESSAGE: &str = "precisa ser uma lista";
 const MISSING_FIELD_MESSAGE: &str = "campo obrigatório ausente";
 const ROOT_KEYS: [&str; 6] = ["protocol", "summary", "detail", "actions", "alerts", "mini"];
 const SUMMARY_KEYS: [&str; 2] = ["title", "blocks"];
-const DETAIL_KEYS: [&str; 1] = ["sections"];
 const SECTION_KEYS: [&str; 3] = ["heading", "items", "blocks"];
 const ITEM_KEYS: [&str; 4] = ["id", "text", "flag", "meta"];
 const ACTION_KEYS: [&str; 5] = ["id", "label", "description", "applies_to", "params"];
@@ -395,13 +394,8 @@ impl Reader {
     }
 
     fn detail(&mut self, root: &Map<String, Value>) -> Option<Vec<DetailSection>> {
-        let detail = match root.get("detail") {
-            Some(Value::Null) | None => return None,
-            Some(value) => self.object_entry(value, "detail")?,
-        };
-        self.unknown_fields(detail, &DETAIL_KEYS, "detail");
-        let entries = self.list(detail, "sections", "detail")?;
-        Some(self.parse_each(entries, MAXIMUM_SECTIONS, "detail.sections", Self::section))
+        let entries = self.list(root, "detail", "")?;
+        Some(self.parse_each(entries, MAXIMUM_SECTIONS, "detail", Self::section))
     }
 
     fn section(&mut self, entry: &Value, path: &str) -> Option<DetailSection> {
@@ -636,8 +630,8 @@ mod tests {
     fn snapshot_with_detail_and_actions_is_valid_without_problems() {
         let parsed = report(
             r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x","flag":"updated"}]}]},
-                "detail":{"sections":[{"heading":"h","items":[
-                    {"id":"a","text":"A","flag":"attention","meta":{"p":"alta"}}]}]},
+                "detail":[{"heading":"h","items":[
+                    {"id":"a","text":"A","flag":"attention","meta":{"p":"alta"}}]}],
                 "actions":[{"id":"move","label":"Mover","applies_to":"item","params":{"to":"done"}}]}"#,
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
@@ -699,7 +693,7 @@ mod tests {
     fn unknown_fields_are_warnings_with_paths() {
         let parsed = report(
             r#"{"extra":1,"summary":{"title":"K","extra":1},
-                "detail":{"zz":1,"sections":[{"heading":"h","yy":1,"items":[{"text":"x","zzz":1}]}]},
+                "detail":[{"heading":"h","yy":1,"items":[{"text":"x","zzz":1}]}],
                 "actions":[{"id":"a","label":"A","qq":1}]}"#,
         );
         let mut found = paths(&parsed, Severity::Warning);
@@ -707,9 +701,8 @@ mod tests {
         let mut expected = vec![
             "extra",
             "summary.extra",
-            "detail.zz",
-            "detail.sections[0].yy",
-            "detail.sections[0].items[0].zzz",
+            "detail[0].yy",
+            "detail[0].items[0].zzz",
             "actions[0].qq",
         ];
         expected.sort();
@@ -722,7 +715,7 @@ mod tests {
     fn texts_are_cleaned() {
         let parsed = report(
             "{\"summary\":{\"title\":\"A\\u001b[0m\\n B\",\"blocks\":[{\"type\":\"lines\",\"lines\":[{\"text\":\"x\\u202ey\\u0000\"}]}]},\
-              \"detail\":{\"sections\":[{\"heading\":\"h\\tz\",\"items\":[{\"text\":\"\\u001bT\"}]}]},\
+              \"detail\":[{\"heading\":\"h\\tz\",\"items\":[{\"text\":\"\\u001bT\"}]}],\
               \"alerts\":[{\"id\":\"1\",\"title\":\"t\\u001b\",\"body\":\"b\\n\\nc\"}]}",
         );
         assert_eq!(parsed.snapshot.summary.title, "A[0m B");
@@ -787,7 +780,7 @@ mod tests {
     fn malformed_entries_are_errors_with_paths() {
         let parsed = report(
             r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"ok"},{"flag":"updated"},3]}]},
-                "detail":{"sections":[{"heading":"h","items":[{"id":"a"}]}, 7]},
+                "detail":[{"heading":"h","items":[{"id":"a"}]}, 7],
                 "actions":[{"id":"a"}]}"#,
         );
         assert_eq!(
@@ -795,8 +788,8 @@ mod tests {
             vec![
                 "summary.blocks[0].lines[1].text",
                 "summary.blocks[0].lines[2]",
-                "detail.sections[0].items[0].text",
-                "detail.sections[1]",
+                "detail[0].items[0].text",
+                "detail[1]",
                 "actions[0].label"
             ]
         );
@@ -1155,10 +1148,31 @@ mod tests {
     }
 
     #[test]
+    fn detail_is_a_list_of_sections() {
+        let parsed = report(
+            r#"{"summary":{"title":"K"},"detail":[{"heading":"a"},
+                {"heading":"b","items":[{"id":"x","text":"X"}]}]}"#,
+        );
+        assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
+        let sections = parsed.snapshot.detail.unwrap();
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].heading, "a");
+        assert_eq!(sections[1].items[0].id.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn detail_as_an_object_is_a_type_error() {
+        let parsed = report(r#"{"summary":{"title":"K"},"detail":{"sections":[]}}"#);
+        assert!(parsed.snapshot.detail.is_none());
+        assert_eq!(paths(&parsed, Severity::Error), vec!["detail"]);
+        assert_eq!(parsed.problems[0].message, "precisa ser uma lista");
+    }
+
+    #[test]
     fn blocks_in_detail_sections_are_parsed() {
         let parsed = report(
-            r#"{"summary":{"title":"K"},"detail":{"sections":[{"heading":"h",
-                "blocks":[{"type":"lines","lines":[{"text":"x"}]}]}]}}"#,
+            r#"{"summary":{"title":"K"},"detail":[{"heading":"h",
+                "blocks":[{"type":"lines","lines":[{"text":"x"}]}]}]}"#,
         );
         assert!(parsed.problems.is_empty(), "{:?}", parsed.problems);
         let section = &parsed.snapshot.detail.unwrap()[0];
@@ -1168,9 +1182,9 @@ mod tests {
     #[test]
     fn blocks_and_items_coexist_in_a_section() {
         let parsed = report(
-            r#"{"summary":{"title":"K"},"detail":{"sections":[{"heading":"h",
+            r#"{"summary":{"title":"K"},"detail":[{"heading":"h",
                 "blocks":[{"type":"lines","lines":[{"text":"x"}]}],
-                "items":[{"text":"i"}]}]}}"#,
+                "items":[{"text":"i"}]}]}"#,
         );
         let section = &parsed.snapshot.detail.unwrap()[0];
         assert_eq!(section.blocks.len(), 1);
@@ -1391,8 +1405,8 @@ mod tests {
         let long_key = "k".repeat(300);
         let json = format!(
             "{{\"summary\":{{\"title\":\"t\",\"x\\u001b[31mRED\\u202e\":1,\"{long_key}\":2}},\
-              \"detail\":{{\"sections\":[{{\"heading\":\"h\",\"items\":[{{\"text\":\"a\",\
-              \"meta\":{{\"m\\u001b]0;pwn\\u0007\":3}}}}]}}]}}}}"
+              \"detail\":[{{\"heading\":\"h\",\"items\":[{{\"text\":\"a\",\
+              \"meta\":{{\"m\\u001b]0;pwn\\u0007\":3}}}}]}}]}}"
         );
         let parsed = report(&json);
         assert!(!parsed.problems.is_empty());
@@ -1413,7 +1427,7 @@ mod tests {
         let actions = vec![r#"{"id":"a","label":"A"}"#; MAXIMUM_ACTIONS + 1].join(",");
         let parsed = report(&format!(
             r#"{{"summary":{{"title":"t"}},
-                "detail":{{"sections":[{sections},{{"heading":"x","items":[{items}]}}]}},
+                "detail":[{sections},{{"heading":"x","items":[{items}]}}],
                 "actions":[{actions}]}}"#
         ));
         let sections = parsed.snapshot.detail.as_ref().unwrap();
@@ -1421,10 +1435,7 @@ mod tests {
         assert_eq!(parsed.snapshot.actions.len(), MAXIMUM_ACTIONS);
         let mut warned = paths(&parsed, Severity::Warning);
         warned.sort();
-        assert!(
-            warned.contains(&"detail.sections".to_string()),
-            "{warned:?}"
-        );
+        assert!(warned.contains(&"detail".to_string()), "{warned:?}");
         assert!(warned.contains(&"actions".to_string()), "{warned:?}");
     }
 

@@ -760,25 +760,23 @@ def build_manager_snapshot(issues, config, team, last_seen, now, offline_at=None
     summary_lines += [_line(warning) for warning in team.warnings]
     return {
         "summary": {"title": snapshot_title(config), "blocks": _summary_blocks(summary_lines)},
-        "detail": {
-            "sections": [
-                {
-                    "heading": "Sem dono",
-                    "items": [_item(issue, config, now, last_seen) for issue in unassigned],
-                },
-                {
-                    "heading": "Em andamento",
-                    "items": [
-                        _item(issue, config, now, last_seen, prefix=_person_label(issue, team))
-                        for issue in in_progress
-                    ],
-                },
-                {
-                    "heading": "Atualizados",
-                    "items": [_item(issue, config, now, last_seen) for issue in updated],
-                },
-            ]
-        },
+        "detail": [
+            {
+                "heading": "Sem dono",
+                "items": [_item(issue, config, now, last_seen) for issue in unassigned],
+            },
+            {
+                "heading": "Em andamento",
+                "items": [
+                    _item(issue, config, now, last_seen, prefix=_person_label(issue, team))
+                    for issue in in_progress
+                ],
+            },
+            {
+                "heading": "Atualizados",
+                "items": [_item(issue, config, now, last_seen) for issue in updated],
+            },
+        ],
         "actions": _actions(config),
     }
 
@@ -821,18 +819,16 @@ def build_personal_snapshot(issues, history, config, last_seen, now, offline_at=
     ]
     return {
         "summary": {"title": snapshot_title(config), "blocks": _summary_blocks(summary_lines)},
-        "detail": {
-            "sections": [
-                {
-                    "heading": "Meus tickets",
-                    "items": [_item(issue, config, now, last_seen) for issue in open_issues],
-                },
-                {
-                    "heading": f"Concluídos ({PERSONAL_WINDOW_DAYS} dias)",
-                    "items": [_item(issue, config, now, last_seen) for issue in done_issues],
-                },
-            ]
-        },
+        "detail": [
+            {
+                "heading": "Meus tickets",
+                "items": [_item(issue, config, now, last_seen) for issue in open_issues],
+            },
+            {
+                "heading": f"Concluídos ({PERSONAL_WINDOW_DAYS} dias)",
+                "items": [_item(issue, config, now, last_seen) for issue in done_issues],
+            },
+        ],
         "actions": _actions(config),
     }
 

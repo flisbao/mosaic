@@ -18,7 +18,7 @@ fn json_with_blocks_per_section(blocks_per_section: usize) -> String {
     let items = vec![item; ITEMS_PER_SECTION].join(",");
     let section = format!(r#"{{"heading":"s","blocks":[{blocks}],"items":[{items}]}}"#);
     let sections = vec![section; SECTIONS].join(",");
-    format!(r#"{{"protocol":1,"summary":{{"title":"t"}},"detail":{{"sections":[{sections}]}}}}"#)
+    format!(r#"{{"protocol":1,"summary":{{"title":"t"}},"detail":[{sections}]}}"#)
 }
 
 fn milliseconds_per_parse(json: &str) -> f64 {

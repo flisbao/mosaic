@@ -90,15 +90,13 @@ def build_snapshot(root):
                 }
             ],
         },
-        "detail": {
-            "sections": [
-                {
-                    "heading": column,
-                    "items": [card_item(column, card) for card in cards_by_column[column]],
-                }
-                for column in COLUMNS
-            ]
-        },
+        "detail": [
+            {
+                "heading": column,
+                "items": [card_item(column, card) for card in cards_by_column[column]],
+            }
+            for column in COLUMNS
+        ],
         "actions": [
             {
                 "id": "move",

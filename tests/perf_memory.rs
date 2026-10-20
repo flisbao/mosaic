@@ -24,7 +24,7 @@ fn large_json() -> String {
     let items = vec![item; ITEMS_PER_SECTION].join(",");
     let section = format!(r#"{{"heading":"secao","items":[{items}]}}"#);
     let sections = vec![section; SECTIONS].join(",");
-    format!(r#"{{"protocol":1,"summary":{{"title":"t"}},"detail":{{"sections":[{sections}]}}}}"#)
+    format!(r#"{{"protocol":1,"summary":{{"title":"t"}},"detail":[{sections}]}}"#)
 }
 
 fn peak_mebibytes() -> f64 {

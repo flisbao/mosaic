@@ -163,12 +163,7 @@
         "items": { "type": "array", "items": { "$ref": "#/$defs/detailItem" } }
       }
     },
-    "detail": {
-      "type": "object",
-      "properties": {
-        "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } }
-      }
-    },
+    "detail": { "type": "array", "items": { "$ref": "#/$defs/section" } },
     "action": {
       "type": "object",
       "required": ["id", "label"],

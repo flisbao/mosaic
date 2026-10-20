@@ -804,7 +804,7 @@ def everyone(issues):
 
 
 def sections_by_name(snapshot):
-    return {section["heading"]: section["items"] for section in snapshot["detail"]["sections"]}
+    return {section["heading"]: section["items"] for section in snapshot["detail"]}
 
 
 def summary_texts(snapshot):
@@ -931,7 +931,7 @@ class ManagerSnapshotTests(unittest.TestCase):
     def test_empty_scope_still_returns_valid_sections(self):
         snapshot = self.build([])
         self.assertEqual(
-            [section["heading"] for section in snapshot["detail"]["sections"]],
+            [section["heading"] for section in snapshot["detail"]],
             ["Sem dono", "Em andamento", "Atualizados"],
         )
         self.assertEqual(summary_texts(snapshot), ["sem dono: 0", "em andamento: 0", "atualizados: 0"])
@@ -1204,7 +1204,7 @@ class MainTests(unittest.TestCase):
             for line in snapshot["summary"]["blocks"][0]["lines"]:
                 self.assertIsInstance(line["text"], str)
                 self.assertIn(line.get("flag"), (None, "updated", "attention"))
-            for section in snapshot["detail"]["sections"]:
+            for section in snapshot["detail"]:
                 self.assertIsInstance(section["heading"], str)
                 for item in section["items"]:
                     self.assertIsInstance(item["text"], str)

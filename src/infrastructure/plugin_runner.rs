@@ -155,7 +155,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let runner = runner(
             directory.path(),
-            r#"printf '{"summary":{"title":"T","lines":[]}}'"#,
+            r#"printf '{"summary":{"title":"T","blocks":[]}}'"#,
             5,
         );
         assert_eq!(runner.snapshot().unwrap().summary.title, "T");
@@ -350,7 +350,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let runner = runner(
             directory.path(),
-            r#"printf '{"summary":{"title":"%s","lines":[]}}' "$(pwd -P)""#,
+            r#"printf '{"summary":{"title":"%s","blocks":[]}}' "$(pwd -P)""#,
             5,
         );
         let expected = fs::canonicalize(directory.path()).unwrap();
@@ -365,7 +365,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let runner = runner(
             directory.path(),
-            r#"printf '{"summary":{"title":"%s","lines":[]}}' "$KANBAN_DIR""#,
+            r#"printf '{"summary":{"title":"%s","blocks":[]}}' "$KANBAN_DIR""#,
             5,
         );
         assert_eq!(runner.snapshot().unwrap().summary.title, "/tmp/kanban");
@@ -376,7 +376,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut runner = runner(
             directory.path(),
-            r#"printf '{"summary":{"title":"%s","lines":[]}}' "${CARGO_MANIFEST_DIR:-vazio}""#,
+            r#"printf '{"summary":{"title":"%s","blocks":[]}}' "${CARGO_MANIFEST_DIR:-vazio}""#,
             5,
         );
         runner.command.inherit_env = Some(vec![]);
@@ -435,7 +435,7 @@ mod tests {
 sleep 0.3
 rmdir busy.lock 2>/dev/null
 case "$1" in
-  snapshot) printf '{"summary":{"title":"T","lines":[]} }';;
+  snapshot) printf '{"summary":{"title":"T","blocks":[]} }';;
   *) cat > /dev/null; echo feito;;
 esac"#;
         let runner = Arc::new(runner(directory.path(), script, 5));

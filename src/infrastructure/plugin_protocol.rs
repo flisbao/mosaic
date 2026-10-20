@@ -103,9 +103,9 @@ mod tests {
     fn parses_detail_items_with_ids_and_flags() {
         let snapshot = parse_snapshot(
             r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"x","flag":"updated"}]}]},
-                "detail":{"sections":[{"heading":"inbox","items":[
+                "detail":[{"heading":"inbox","items":[
                     {"id":"inbox/a.md","text":"Tarefa A","flag":"attention"},
-                    {"text":"sem id"}]}]}}"#,
+                    {"text":"sem id"}]}]}"#,
         )
         .unwrap();
         assert_eq!(summary_lines(&snapshot)[0].flag, Some(Flag::Updated));
@@ -114,6 +114,21 @@ mod tests {
         assert_eq!(sections[0].items[0].id.as_deref(), Some("inbox/a.md"));
         assert_eq!(sections[0].items[0].flag, Some(Flag::Attention));
         assert_eq!(sections[0].items[1].id, None);
+    }
+
+    #[test]
+    fn old_detail_object_shows_the_notice_and_keeps_the_rest() {
+        let snapshot = parse_snapshot(
+            r#"{"summary":{"title":"K","blocks":[{"type":"lines","lines":[{"text":"ok"}]}]},
+                "detail":{"sections":[]}}"#,
+        )
+        .unwrap();
+        let lines = summary_lines(&snapshot);
+        assert_eq!(
+            lines[0].text,
+            "bloco inválido: detail: precisa ser uma lista"
+        );
+        assert!(lines.iter().any(|line| line.text == "ok"));
     }
 
     #[test]
@@ -138,8 +153,8 @@ mod tests {
     fn parses_item_meta_in_order() {
         let snapshot = parse_snapshot(
             r#"{"summary":{"title":"K","blocks":[]},
-                "detail":{"sections":[{"heading":"h","items":[
-                    {"text":"x","meta":{"prioridade":"alta","parado_ha":"2h30"}}]}]}}"#,
+                "detail":[{"heading":"h","items":[
+                    {"text":"x","meta":{"prioridade":"alta","parado_ha":"2h30"}}]}]}"#,
         )
         .unwrap();
         let item = &snapshot.detail.unwrap()[0].items[0];
@@ -156,7 +171,7 @@ mod tests {
     fn missing_meta_is_empty() {
         let snapshot = parse_snapshot(
             r#"{"summary":{"title":"K","blocks":[]},
-                "detail":{"sections":[{"heading":"h","items":[{"text":"x"}]}]}}"#,
+                "detail":[{"heading":"h","items":[{"text":"x"}]}]}"#,
         )
         .unwrap();
         assert!(snapshot.detail.unwrap()[0].items[0].meta.is_empty());
@@ -166,8 +181,8 @@ mod tests {
     fn non_text_meta_values_are_ignored() {
         let snapshot = parse_snapshot(
             r#"{"summary":{"title":"K","blocks":[]},
-                "detail":{"sections":[{"heading":"h","items":[
-                    {"text":"x","meta":{"a":"x","b":3}}]}]}}"#,
+                "detail":[{"heading":"h","items":[
+                    {"text":"x","meta":{"a":"x","b":3}}]}]}"#,
         )
         .unwrap();
         let item = &snapshot.detail.unwrap()[0].items[0];
