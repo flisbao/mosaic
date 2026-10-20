@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -8,6 +9,7 @@ import urllib.error
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, quote, urlsplit
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "calendar"))
@@ -738,6 +740,490 @@ class FetchUrlTests(unittest.TestCase):
                 calendar_widget.fetch_url("https://a.example/a.ics")
 
 
+GOA_SERVICE = "org.gnome.OnlineAccounts"
+GOA_OBJECTS_PATH = "/org/gnome/OnlineAccounts"
+GOA_ACCOUNT_INTERFACE = "org.gnome.OnlineAccounts.Account"
+GOA_OAUTH2_INTERFACE = "org.gnome.OnlineAccounts.OAuth2Based"
+OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
+GOOGLE_API = "https://www.googleapis.com/calendar/v3"
+CALENDAR_LIST_URL = f"{GOOGLE_API}/users/me/calendarList"
+ACCOUNT_ONE = "/org/gnome/OnlineAccounts/Accounts/account_1"
+ACCOUNT_TWO = "/org/gnome/OnlineAccounts/Accounts/account_2"
+ACCOUNT_THREE = "/org/gnome/OnlineAccounts/Accounts/account_3"
+PERSONAL_ID = "pessoal@grupo.calendar.google.com"
+WORK_ID = "trabalho@grupo.calendar.google.com"
+HIDDEN_ID = "oculto@grupo.calendar.google.com"
+TOKEN = "TOKEN-GOA"
+MANAGED_ARGUMENTS = [GOA_SERVICE, GOA_OBJECTS_PATH, OBJECT_MANAGER_INTERFACE, "GetManagedObjects"]
+MANAGED_KEY = tuple(MANAGED_ARGUMENTS[1:])
+NO_GOOGLE_ACCOUNT_MESSAGE = "nenhuma conta Google com agenda no GNOME Online Accounts; veja a seção GOA do README"
+GOOGLE_UNAVAILABLE_MESSAGE = "não foi possível consultar a API do Google Agenda"
+ALL_ACCOUNTS_FAILED_MESSAGE = "nenhuma conta Google respondeu; veja a seção GOA do README"
+
+
+def goa_account_objects(path, email, provider="google", calendar_disabled=False, attention_needed=False):
+    properties = {
+        "ProviderType": {"type": "s", "data": provider},
+        "PresentationIdentity": {"type": "s", "data": email},
+        "CalendarDisabled": {"type": "b", "data": calendar_disabled},
+        "AttentionNeeded": {"type": "b", "data": attention_needed},
+    }
+    return {path: {GOA_ACCOUNT_INTERFACE: properties, GOA_OAUTH2_INTERFACE: {}}}
+
+
+GOOGLE_ACCOUNT = goa_account_objects(ACCOUNT_ONE, "eu@gmail.com")
+
+
+def managed_objects(*accounts):
+    objects = {}
+    for account in accounts:
+        objects.update(account)
+    return {"type": "a{oa{sa{sv}}}", "data": [objects]}
+
+
+def token_reply(token):
+    return {"type": "si", "data": [token, 3600]}
+
+
+def token_arguments(path):
+    return [GOA_SERVICE, path, GOA_OAUTH2_INTERFACE, "GetAccessToken"]
+
+
+def token_key(path):
+    return tuple(token_arguments(path)[1:])
+
+
+def ensure_arguments(path):
+    return [GOA_SERVICE, path, GOA_ACCOUNT_INTERFACE, "EnsureCredentials"]
+
+
+def ensure_key(path):
+    return tuple(ensure_arguments(path)[1:])
+
+
+def events_path(calendar_id):
+    return f"{GOOGLE_API}/calendars/{quote(calendar_id, safe='')}/events"
+
+
+def calendar_item(calendar_id, summary, selected=True, summary_override=None):
+    item = {"id": calendar_id, "summary": summary, "selected": selected}
+    if summary_override is not None:
+        item["summaryOverride"] = summary_override
+    return item
+
+
+def calendar_list(*items):
+    return {"items": list(items)}
+
+
+def google_event(event_id, summary, start, end, **fields):
+    return {"id": event_id, "summary": summary, "start": start, "end": end, **fields}
+
+
+def date_time(text):
+    return {"dateTime": text}
+
+
+def meeting_event(event_id="e1", summary="Reunião", **fields):
+    return google_event(
+        event_id,
+        summary,
+        date_time("2026-10-20T14:00:00-03:00"),
+        date_time("2026-10-20T15:00:00-03:00"),
+        **fields,
+    )
+
+
+def query_of(url):
+    return parse_qs(urlsplit(url).query)
+
+
+def titles(result):
+    return [item.title for item in result.events]
+
+
+def goa_config(goa_account=None, calendars=()):
+    return calendar_widget.Config(
+        source="goa", title="Agenda", ics_urls=[], goa_account=goa_account, calendars=list(calendars)
+    )
+
+
+def run_goa_source(config, busctl, http_get):
+    return calendar_widget.goa_source(config, NOW, WINDOW_END, ZONE, busctl=busctl, http_get=http_get)
+
+
+def single_calendar_fakes(events):
+    busctl = FakeBusctl({MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT), token_key(ACCOUNT_ONE): token_reply(TOKEN)})
+    google = FakeGoogle(
+        {
+            (CALENDAR_LIST_URL, TOKEN): calendar_list(calendar_item(PERSONAL_ID, "Pessoal")),
+            (events_path(PERSONAL_ID), TOKEN): {"items": events},
+        }
+    )
+    return busctl, google
+
+
+class FakeBusctl:
+    def __init__(self, replies):
+        self.replies = replies
+        self.calls = []
+
+    def __call__(self, arguments):
+        self.calls.append(list(arguments))
+        reply = self.replies[tuple(arguments[1:])]
+        if isinstance(reply, list):
+            reply = reply.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+class FakeGoogle:
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    def __call__(self, url, token):
+        self.calls.append((url, token))
+        reply = self.responses[(url.split("?")[0], token)]
+        if isinstance(reply, list):
+            reply = reply.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+class GoaSourceTests(unittest.TestCase):
+    def test_default_sources_point_to_goa_source(self):
+        self.assertIs(calendar_widget.DEFAULT_SOURCES[calendar_widget.SOURCE_GOA], calendar_widget.goa_source)
+
+    def test_reads_selected_calendars_and_events(self):
+        busctl = FakeBusctl({MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT), token_key(ACCOUNT_ONE): token_reply(TOKEN)})
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, TOKEN): calendar_list(
+                    calendar_item(PERSONAL_ID, "Pessoal"),
+                    calendar_item(WORK_ID, "Trabalho", summary_override="Work"),
+                    calendar_item(HIDDEN_ID, "Oculto", selected=False),
+                ),
+                (events_path(PERSONAL_ID), TOKEN): {"items": [meeting_event("e1", location="Sala 1")]},
+                (events_path(WORK_ID), TOKEN): {"items": [meeting_event("e2", "Revisão")]},
+            }
+        )
+        result = run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(busctl.calls, [MANAGED_ARGUMENTS, token_arguments(ACCOUNT_ONE)])
+        self.assertEqual(google.calls[0], (CALENDAR_LIST_URL, TOKEN))
+        self.assertEqual(
+            [(item.id, item.title, item.calendar, item.location) for item in result.events],
+            [("e1", "Reunião", "Pessoal", "Sala 1"), ("e2", "Revisão", "Work", "")],
+        )
+        self.assertEqual(result.warnings, [])
+
+    def test_events_query_uses_window_and_quoted_calendar_id(self):
+        busctl, google = single_calendar_fakes([meeting_event()])
+        run_goa_source(goa_config(), busctl, google)
+        events_url = google.calls[1][0]
+        self.assertIn(f"/calendars/{quote(PERSONAL_ID, safe='')}/events?", events_url)
+        self.assertEqual(
+            query_of(events_url),
+            {
+                "timeMin": [NOW.isoformat()],
+                "timeMax": [WINDOW_END.isoformat()],
+                "singleEvents": ["true"],
+                "orderBy": ["startTime"],
+                "maxResults": [str(calendar_widget.GOOGLE_PAGE_SIZE)],
+            },
+        )
+
+    def test_pagination_follows_next_page_token(self):
+        busctl = FakeBusctl({MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT), token_key(ACCOUNT_ONE): token_reply(TOKEN)})
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, TOKEN): [
+                    {"items": [calendar_item(PERSONAL_ID, "Pessoal")], "nextPageToken": "lista-2"},
+                    {"items": [calendar_item(WORK_ID, "Trabalho")]},
+                ],
+                (events_path(PERSONAL_ID), TOKEN): [
+                    {"items": [meeting_event("e1", "Primeira")], "nextPageToken": "eventos-2"},
+                    {"items": [meeting_event("e2", "Segunda")]},
+                ],
+                (events_path(WORK_ID), TOKEN): {"items": []},
+            }
+        )
+        result = run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(query_of(google.calls[1][0])["pageToken"], ["lista-2"])
+        self.assertEqual(query_of(google.calls[3][0])["pageToken"], ["eventos-2"])
+        self.assertEqual(titles(result), ["Primeira", "Segunda"])
+
+    def test_pagination_stops_at_maximum_pages(self):
+        busctl = FakeBusctl({MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT), token_key(ACCOUNT_ONE): token_reply(TOKEN)})
+        event_pages = []
+
+        def endless_google(url, token):
+            if url == CALENDAR_LIST_URL:
+                return calendar_list(calendar_item(PERSONAL_ID, "Pessoal"))
+            event_pages.append(url)
+            return {"items": [], "nextPageToken": f"pagina-{len(event_pages)}"}
+
+        run_goa_source(goa_config(), busctl, endless_google)
+        self.assertEqual(len(event_pages), calendar_widget.MAXIMUM_PAGES)
+
+    def test_maps_all_day_cancelled_and_declined(self):
+        busctl, google = single_calendar_fakes(
+            [
+                google_event("dia", "Férias", {"date": "2026-10-19"}, {"date": "2026-10-22"}),
+                meeting_event("cancelado", "Cancelada", status="cancelled"),
+                meeting_event(
+                    "recusado",
+                    "Recusada",
+                    attendees=[
+                        {"email": "outra@x.com", "responseStatus": "accepted"},
+                        {"self": True, "responseStatus": "declined"},
+                    ],
+                ),
+            ]
+        )
+        events = {item.id: item for item in run_goa_source(goa_config(), busctl, google).events}
+        self.assertEqual(events["dia"].start, datetime(2026, 10, 19, tzinfo=ZONE))
+        self.assertEqual(events["dia"].end, datetime(2026, 10, 22, tzinfo=ZONE))
+        self.assertTrue(events["dia"].all_day)
+        self.assertTrue(events["cancelado"].cancelled)
+        self.assertFalse(events["cancelado"].declined)
+        self.assertTrue(events["recusado"].declined)
+        self.assertFalse(events["recusado"].cancelled)
+
+    def test_filters_by_account_and_calendar_names(self):
+        busctl = FakeBusctl(
+            {
+                MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT, goa_account_objects(ACCOUNT_TWO, "trabalho@empresa.com")),
+                token_key(ACCOUNT_ONE): token_reply(TOKEN),
+            }
+        )
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, TOKEN): calendar_list(
+                    calendar_item(PERSONAL_ID, "Pessoal"),
+                    calendar_item(WORK_ID, "Trabalho", summary_override="Work"),
+                ),
+                (events_path(PERSONAL_ID), TOKEN): {"items": [meeting_event("p", "Pessoal")]},
+                (events_path(WORK_ID), TOKEN): {"items": [meeting_event("w", "Do trabalho")]},
+            }
+        )
+        result = run_goa_source(goa_config(goa_account="eu@gmail.com", calendars=["Work"]), busctl, google)
+        self.assertEqual(titles(result), ["Do trabalho"])
+        self.assertEqual(busctl.calls[1:], [token_arguments(ACCOUNT_ONE)])
+        self.assertEqual([url.split("?")[0] for url, _ in google.calls[1:]], [events_path(WORK_ID)])
+
+    def test_ignores_non_google_and_calendar_disabled(self):
+        busctl = FakeBusctl(
+            {
+                MANAGED_KEY: managed_objects(
+                    GOOGLE_ACCOUNT,
+                    goa_account_objects(ACCOUNT_TWO, "eu@nextcloud.example", provider="owncloud"),
+                    goa_account_objects(ACCOUNT_THREE, "desligada@gmail.com", calendar_disabled=True),
+                ),
+                token_key(ACCOUNT_ONE): token_reply(TOKEN),
+            }
+        )
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, TOKEN): calendar_list(calendar_item(PERSONAL_ID, "Pessoal")),
+                (events_path(PERSONAL_ID), TOKEN): {"items": [meeting_event()]},
+            }
+        )
+        result = run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(busctl.calls[1:], [token_arguments(ACCOUNT_ONE)])
+        self.assertEqual(titles(result), ["Reunião"])
+
+    def test_no_google_account_is_a_clear_error(self):
+        other_provider = managed_objects(goa_account_objects(ACCOUNT_TWO, "eu@nextcloud.example", provider="owncloud"))
+        for managed, goa_account in ((other_provider, None), (managed_objects(GOOGLE_ACCOUNT), "outra@gmail.com")):
+            with self.subTest(goa_account=goa_account):
+                busctl = FakeBusctl({MANAGED_KEY: managed})
+                with self.assertRaises(calendar_widget.SourceError) as context:
+                    run_goa_source(goa_config(goa_account=goa_account), busctl, FakeGoogle({}))
+                self.assertEqual(str(context.exception), NO_GOOGLE_ACCOUNT_MESSAGE)
+
+    def test_attention_needed_warns_and_skips_the_account(self):
+        busctl = FakeBusctl(
+            {
+                MANAGED_KEY: managed_objects(
+                    goa_account_objects(ACCOUNT_ONE, "eu@gmail.com", attention_needed=True),
+                    goa_account_objects(ACCOUNT_TWO, "trabalho@empresa.com"),
+                ),
+                token_key(ACCOUNT_TWO): token_reply("TOKEN-2"),
+            }
+        )
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, "TOKEN-2"): calendar_list(calendar_item(PERSONAL_ID, "Pessoal")),
+                (events_path(PERSONAL_ID), "TOKEN-2"): {"items": [meeting_event()]},
+            }
+        )
+        result = run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(
+            result.warnings,
+            ["conta eu@gmail.com precisa entrar de novo em Configurações → Contas Online"],
+        )
+        self.assertEqual(titles(result), ["Reunião"])
+        self.assertNotIn(token_arguments(ACCOUNT_ONE), busctl.calls)
+
+    def test_unauthorized_calls_ensure_credentials_and_retries_once(self):
+        busctl = FakeBusctl(
+            {
+                MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT),
+                token_key(ACCOUNT_ONE): [token_reply("TOKEN-1"), token_reply("TOKEN-2")],
+                ensure_key(ACCOUNT_ONE): {"type": "i", "data": 0},
+            }
+        )
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, "TOKEN-1"): calendar_widget.HttpUnauthorized(),
+                (CALENDAR_LIST_URL, "TOKEN-2"): calendar_list(calendar_item(PERSONAL_ID, "Pessoal")),
+                (events_path(PERSONAL_ID), "TOKEN-2"): {"items": [meeting_event()]},
+            }
+        )
+        result = run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(
+            busctl.calls,
+            [
+                MANAGED_ARGUMENTS,
+                token_arguments(ACCOUNT_ONE),
+                ensure_arguments(ACCOUNT_ONE),
+                token_arguments(ACCOUNT_ONE),
+            ],
+        )
+        self.assertEqual([token for _, token in google.calls], ["TOKEN-1", "TOKEN-2", "TOKEN-2"])
+        self.assertEqual(titles(result), ["Reunião"])
+        self.assertEqual(result.warnings, [])
+
+    def test_second_unauthorized_fails_only_that_account(self):
+        busctl = FakeBusctl(
+            {
+                MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT, goa_account_objects(ACCOUNT_TWO, "trabalho@empresa.com")),
+                token_key(ACCOUNT_ONE): [token_reply("TOKEN-1"), token_reply("TOKEN-2")],
+                ensure_key(ACCOUNT_ONE): {"type": "i", "data": 0},
+                token_key(ACCOUNT_TWO): token_reply("TOKEN-3"),
+            }
+        )
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, "TOKEN-1"): calendar_widget.HttpUnauthorized(),
+                (CALENDAR_LIST_URL, "TOKEN-2"): calendar_widget.HttpUnauthorized(),
+                (CALENDAR_LIST_URL, "TOKEN-3"): calendar_list(calendar_item(PERSONAL_ID, "Pessoal")),
+                (events_path(PERSONAL_ID), "TOKEN-3"): {"items": [meeting_event()]},
+            }
+        )
+        result = run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(result.warnings, ["conta eu@gmail.com indisponível"])
+        self.assertEqual(titles(result), ["Reunião"])
+
+    def test_one_account_failing_keeps_the_other(self):
+        busctl = FakeBusctl(
+            {
+                MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT, goa_account_objects(ACCOUNT_TWO, "trabalho@empresa.com")),
+                token_key(ACCOUNT_ONE): calendar_widget.SourceError("falha"),
+                token_key(ACCOUNT_TWO): token_reply("TOKEN-3"),
+            }
+        )
+        google = FakeGoogle(
+            {
+                (CALENDAR_LIST_URL, "TOKEN-3"): calendar_list(calendar_item(PERSONAL_ID, "Pessoal")),
+                (events_path(PERSONAL_ID), "TOKEN-3"): {"items": [meeting_event()]},
+            }
+        )
+        result = run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(result.warnings, ["conta eu@gmail.com indisponível"])
+        self.assertEqual(titles(result), ["Reunião"])
+        self.assertNotIn("TOKEN-3", repr(result.warnings))
+
+    def test_all_accounts_failing_raises_source_error(self):
+        busctl = FakeBusctl({MANAGED_KEY: managed_objects(GOOGLE_ACCOUNT), token_key(ACCOUNT_ONE): token_reply(TOKEN)})
+        google = FakeGoogle({(CALENDAR_LIST_URL, TOKEN): calendar_widget.SourceError("falha")})
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_goa_source(goa_config(), busctl, google)
+        self.assertEqual(str(context.exception), ALL_ACCOUNTS_FAILED_MESSAGE)
+
+    def test_busctl_failure_on_managed_objects_propagates(self):
+        busctl = FakeBusctl({MANAGED_KEY: calendar_widget.SourceError("sem barramento")})
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_goa_source(goa_config(), busctl, FakeGoogle({}))
+        self.assertEqual(str(context.exception), "sem barramento")
+
+
+class RunBusctlTests(unittest.TestCase):
+    ARGUMENTS = ["org.gnome.OnlineAccounts", "/org/gnome/OnlineAccounts/Accounts/account_1", "i", "m"]
+
+    def test_calls_busctl_on_the_user_bus_and_parses_json(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=b'{"type":"s","data":"x"}')
+        with mock.patch.object(calendar_widget.subprocess, "run", return_value=completed) as run:
+            reply = calendar_widget.run_busctl(self.ARGUMENTS)
+        self.assertEqual(reply, {"type": "s", "data": "x"})
+        self.assertEqual(run.call_args.args[0], ["busctl", "--user", "--json=short", "call", *self.ARGUMENTS])
+        self.assertEqual(run.call_args.kwargs["timeout"], calendar_widget.BUSCTL_TIMEOUT_SECONDS)
+        self.assertTrue(run.call_args.kwargs["capture_output"])
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_bus_failures_are_source_errors_hinting_inherit_env(self):
+        failures = [
+            FileNotFoundError("busctl"),
+            subprocess.CalledProcessError(1, "busctl", stderr=b"TOKEN-SECRETO"),
+            subprocess.TimeoutExpired("busctl", calendar_widget.BUSCTL_TIMEOUT_SECONDS),
+        ]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.object(calendar_widget.subprocess, "run", side_effect=failure):
+                    with self.assertRaises(calendar_widget.SourceError) as context:
+                        calendar_widget.run_busctl(self.ARGUMENTS)
+                message = str(context.exception)
+                self.assertIn("DBUS_SESSION_BUS_ADDRESS", message)
+                self.assertIn("inherit_env", message)
+                self.assertNotIn("TOKEN-SECRETO", message)
+
+    def test_invalid_json_is_a_source_error(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"lixo")
+        with mock.patch.object(calendar_widget.subprocess, "run", return_value=completed):
+            with self.assertRaises(calendar_widget.SourceError):
+                calendar_widget.run_busctl(self.ARGUMENTS)
+
+
+class GoogleGetTests(unittest.TestCase):
+    URL = f"{GOOGLE_API}/users/me/calendarList"
+
+    def test_sends_bearer_token_and_returns_json(self):
+        body = io.BytesIO(json.dumps({"items": []}).encode("utf-8"))
+        with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=body) as urlopen:
+            payload = calendar_widget.google_get(self.URL, TOKEN)
+        self.assertEqual(urlopen.call_args.args[0].get_header("Authorization"), f"Bearer {TOKEN}")
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], calendar_widget.REQUEST_TIMEOUT_SECONDS)
+        self.assertEqual(payload, {"items": []})
+
+    def test_unauthorized_raises_http_unauthorized(self):
+        with mock.patch.object(calendar_widget.urllib.request, "urlopen", side_effect=http_error(401)):
+            with self.assertRaises(calendar_widget.HttpUnauthorized):
+                calendar_widget.google_get(self.URL, TOKEN)
+
+    def test_failures_are_source_errors_without_secrets(self):
+        failures = [http_error(500), urllib.error.URLError("TOKEN-SECRETO"), TimeoutError("TOKEN-SECRETO")]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.object(calendar_widget.urllib.request, "urlopen", side_effect=failure):
+                    with self.assertRaises(calendar_widget.SourceError) as context:
+                        calendar_widget.google_get(self.URL, "TOKEN-SECRETO")
+                self.assertEqual(str(context.exception), GOOGLE_UNAVAILABLE_MESSAGE)
+                rendered = "".join(traceback.format_exception(context.exception))
+                self.assertNotIn("TOKEN-SECRETO", rendered)
+                self.assertIsNone(context.exception.__cause__)
+
+    def test_oversized_or_invalid_body_is_a_source_error(self):
+        oversized = io.BytesIO(b"x" * (calendar_widget.MAXIMUM_GOOGLE_RESPONSE_BYTES + 1))
+        for body in (oversized, io.BytesIO(b"nao e json")):
+            with self.subTest(size=body.getbuffer().nbytes):
+                with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=body):
+                    with self.assertRaises(calendar_widget.SourceError):
+                        calendar_widget.google_get(self.URL, TOKEN)
+
+
 class MainTests(unittest.TestCase):
     def test_usage_error_returns_2(self):
         stderr = io.StringIO()
@@ -771,7 +1257,7 @@ class MainTests(unittest.TestCase):
         stderr = io.StringIO()
         code = calendar_widget.main(
             ["snapshot"],
-            environ={"CALENDAR_SOURCE": "goa", "CALENDAR_GOA_ACCOUNT": "conta"},
+            environ={"CALENDAR_SOURCE": "gcalcli", "CALENDAR_GOA_ACCOUNT": "conta"},
             now=NOW,
             stdout=io.StringIO(),
             stderr=stderr,

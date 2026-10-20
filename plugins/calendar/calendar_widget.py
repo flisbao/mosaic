@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import urllib.parse
 import urllib.request
@@ -105,6 +106,44 @@ MAXIMUM_ICS_BYTES = 8 * 1024 * 1024
 LINK_UNAVAILABLE_WARNING = "agenda ICS {number} indisponível"
 ALL_LINKS_FAILED_MESSAGE = "nenhuma agenda ICS respondeu; confira o link (seção ICS do README)"
 OVERSIZED_RESPONSE_MESSAGE = "o calendário excede o tamanho máximo permitido"
+GOA_SERVICE = "org.gnome.OnlineAccounts"
+GOA_OBJECTS_PATH = "/org/gnome/OnlineAccounts"
+GOA_ACCOUNT_INTERFACE = "org.gnome.OnlineAccounts.Account"
+GOA_OAUTH2_INTERFACE = "org.gnome.OnlineAccounts.OAuth2Based"
+DBUS_OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
+GET_MANAGED_OBJECTS = "GetManagedObjects"
+GET_ACCESS_TOKEN = "GetAccessToken"
+ENSURE_CREDENTIALS = "EnsureCredentials"
+GOA_PROVIDER_TYPE = "ProviderType"
+GOA_PROVIDER_GOOGLE = "google"
+GOA_PRESENTATION_IDENTITY = "PresentationIdentity"
+GOA_CALENDAR_DISABLED = "CalendarDisabled"
+GOA_ATTENTION_NEEDED = "AttentionNeeded"
+BUSCTL_COMMAND = ("busctl", "--user", "--json=short", "call")
+BUSCTL_TIMEOUT_SECONDS = 10
+GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+GOOGLE_PAGE_SIZE = 250
+MAXIMUM_PAGES = 10
+MAXIMUM_GOOGLE_RESPONSE_BYTES = 8 * 1024 * 1024
+GOOGLE_DATE_TIME = "dateTime"
+GOOGLE_DATE = "date"
+GOOGLE_NEXT_PAGE_TOKEN = "nextPageToken"
+GOOGLE_PAGE_TOKEN = "pageToken"
+GOOGLE_CANCELLED_STATUS = "cancelled"
+GOOGLE_DECLINED_STATUS = "declined"
+GOOGLE_UNTITLED_TITLE = "sem título"
+HTTP_UNAUTHORIZED = 401
+AUTHORIZATION_HEADER = "Authorization"
+BEARER_TOKEN_FORMAT = "Bearer {token}"
+NO_GOOGLE_ACCOUNT_MESSAGE = "nenhuma conta Google com agenda no GNOME Online Accounts; veja a seção GOA do README"
+BUS_UNAVAILABLE_MESSAGE = (
+    "não foi possível consultar o GNOME Online Accounts pelo D-Bus; "
+    "adicione DBUS_SESSION_BUS_ADDRESS em inherit_env (seção GOA do README)"
+)
+GOOGLE_UNAVAILABLE_MESSAGE = "não foi possível consultar a API do Google Agenda"
+ALL_ACCOUNTS_FAILED_MESSAGE = "nenhuma conta Google respondeu; veja a seção GOA do README"
+ACCOUNT_UNAVAILABLE_WARNING = "conta {email} indisponível"
+ATTENTION_NEEDED_WARNING = "conta {email} precisa entrar de novo em Configurações → Contas Online"
 
 MAXIMUM_RECURRENCE_ITERATIONS = 100_000
 MAXIMUM_ITEM_ID_LENGTH = 200
@@ -938,12 +977,56 @@ class _LinkFailure(Exception):
     pass
 
 
-def fetch_url(url):
-    with urllib.request.urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-        body = response.read(MAXIMUM_ICS_BYTES + 1)
-    if len(body) > MAXIMUM_ICS_BYTES:
+class HttpUnauthorized(Exception):
+    pass
+
+
+ACCOUNT_FAILURES = (SourceError, HttpUnauthorized, KeyError, TypeError, ValueError, AttributeError)
+
+
+def _read_capped(request, limit):
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        body = response.read(limit + 1)
+    if len(body) > limit:
         raise FetchError(OVERSIZED_RESPONSE_MESSAGE)
-    return body.decode("utf-8", errors="replace")
+    return body
+
+
+def fetch_url(url):
+    return _read_capped(url, MAXIMUM_ICS_BYTES).decode("utf-8", errors="replace")
+
+
+def google_get(url, token):
+    request = urllib.request.Request(url, headers={AUTHORIZATION_HEADER: BEARER_TOKEN_FORMAT.format(token=token)})
+    try:
+        return _json_object(_read_capped(request, MAXIMUM_GOOGLE_RESPONSE_BYTES))
+    except urllib.error.HTTPError as error:
+        if error.code == HTTP_UNAUTHORIZED:
+            raise HttpUnauthorized from None
+        raise SourceError(GOOGLE_UNAVAILABLE_MESSAGE) from None
+    except (OSError, http.client.HTTPException, ValueError, FetchError):
+        raise SourceError(GOOGLE_UNAVAILABLE_MESSAGE) from None
+
+
+def _json_object(body):
+    value = json.loads(body)
+    if not isinstance(value, dict):
+        raise ValueError
+    return value
+
+
+def run_busctl(arguments):
+    try:
+        completed = subprocess.run(
+            [*BUSCTL_COMMAND, *arguments],
+            capture_output=True,
+            timeout=BUSCTL_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+            check=True,
+        )
+        return _json_object(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise SourceError(BUS_UNAVAILABLE_MESSAGE) from None
 
 
 def ics_source(config, window_start, window_end, zone, fetch=fetch_url):
@@ -980,8 +1063,162 @@ def _link_result(text, number, window_start, window_end, zone):
     return ics_events_in_window(events, calendar, window_start, window_end, zone)
 
 
-def goa_source(config, now, window_end, zone):
-    raise SourceError(NOT_IMPLEMENTED_MESSAGE)
+@dataclass(frozen=True)
+class GoaAccount:
+    path: str
+    email: str
+    attention_needed: bool
+
+
+def goa_source(config, window_start, window_end, zone, busctl=run_busctl, http_get=google_get):
+    accounts = _google_accounts(busctl, config.goa_account)
+    if not accounts:
+        raise SourceError(NO_GOOGLE_ACCOUNT_MESSAGE)
+    events, warnings = [], []
+    for account in accounts:
+        if account.attention_needed:
+            warnings.append(ATTENTION_NEEDED_WARNING.format(email=account.email))
+            continue
+        try:
+            events += _account_events(account, config.calendars, window_start, window_end, zone, busctl, http_get)
+        except ACCOUNT_FAILURES:
+            warnings.append(ACCOUNT_UNAVAILABLE_WARNING.format(email=account.email))
+    if len(warnings) == len(accounts):
+        raise SourceError(ALL_ACCOUNTS_FAILED_MESSAGE)
+    return SourceResult(events=events, warnings=warnings)
+
+
+def _goa_arguments(path, interface, method):
+    return [GOA_SERVICE, path, interface, method]
+
+
+def _google_accounts(busctl, goa_account):
+    objects = _managed_objects(busctl)
+    accounts = []
+    for path, interfaces in objects.items():
+        properties = interfaces.get(GOA_ACCOUNT_INTERFACE, {})
+        if not _is_enabled_google_account(properties):
+            continue
+        email = _variant(properties, GOA_PRESENTATION_IDENTITY)
+        if goa_account is not None and email != goa_account:
+            continue
+        attention_needed = bool(_variant(properties, GOA_ATTENTION_NEEDED))
+        accounts.append(GoaAccount(path=path, email=email, attention_needed=attention_needed))
+    return accounts
+
+
+def _managed_objects(busctl):
+    reply = busctl(_goa_arguments(GOA_OBJECTS_PATH, DBUS_OBJECT_MANAGER_INTERFACE, GET_MANAGED_OBJECTS))
+    try:
+        return reply["data"][0]
+    except (KeyError, IndexError, TypeError):
+        raise SourceError(BUS_UNAVAILABLE_MESSAGE) from None
+
+
+def _is_enabled_google_account(properties):
+    return _variant(properties, GOA_PROVIDER_TYPE) == GOA_PROVIDER_GOOGLE and not _variant(
+        properties, GOA_CALENDAR_DISABLED
+    )
+
+
+def _variant(properties, name):
+    return properties.get(name, {}).get("data")
+
+
+def _account_events(account, calendars, window_start, window_end, zone, busctl, http_get):
+    def fetch():
+        return _fetch_account_events(account, calendars, window_start, window_end, zone, busctl, http_get)
+
+    try:
+        return fetch()
+    except HttpUnauthorized:
+        _ensure_credentials(account, busctl)
+        return fetch()
+
+
+def _ensure_credentials(account, busctl):
+    busctl(_goa_arguments(account.path, GOA_ACCOUNT_INTERFACE, ENSURE_CREDENTIALS))
+
+
+def _fetch_account_events(account, calendars, window_start, window_end, zone, busctl, http_get):
+    token = _access_token(account, busctl)
+    events = []
+    for calendar_id, name in _selected_calendars(token, calendars, http_get):
+        events += _calendar_events(calendar_id, name, token, window_start, window_end, zone, http_get)
+    return events
+
+
+def _access_token(account, busctl):
+    return busctl(_goa_arguments(account.path, GOA_OAUTH2_INTERFACE, GET_ACCESS_TOKEN))["data"][0]
+
+
+def _selected_calendars(token, wanted_names, http_get):
+    items = _paginated_items(f"{GOOGLE_CALENDAR_API}/users/me/calendarList", {}, token, http_get)
+    selected = [(item["id"], _google_calendar_name(item)) for item in items if item.get("selected") is True]
+    return [(calendar_id, name) for calendar_id, name in selected if not wanted_names or name in wanted_names]
+
+
+def _google_calendar_name(item):
+    return item.get("summaryOverride") or item.get("summary", "")
+
+
+def _calendar_events(calendar_id, calendar_name, token, window_start, window_end, zone, http_get):
+    parameters = {
+        "timeMin": window_start.isoformat(),
+        "timeMax": window_end.isoformat(),
+        "singleEvents": "true",
+        "orderBy": "startTime",
+        "maxResults": GOOGLE_PAGE_SIZE,
+    }
+    quoted_id = urllib.parse.quote(calendar_id, safe="")
+    url = f"{GOOGLE_CALENDAR_API}/calendars/{quoted_id}/events"
+    items = _paginated_items(url, parameters, token, http_get)
+    return [_google_event(item, calendar_name, zone) for item in items]
+
+
+def _paginated_items(url, parameters, token, http_get):
+    items, page_token = [], None
+    for _ in range(MAXIMUM_PAGES):
+        query = {**parameters, GOOGLE_PAGE_TOKEN: page_token} if page_token else parameters
+        page = http_get(_page_url(url, query), token)
+        items += page.get("items", [])
+        page_token = page.get(GOOGLE_NEXT_PAGE_TOKEN)
+        if not page_token:
+            break
+    return items
+
+
+def _page_url(url, parameters):
+    return f"{url}?{urllib.parse.urlencode(parameters)}" if parameters else url
+
+
+def _google_event(item, calendar_name, zone):
+    start, all_day = _google_moment(item["start"], zone)
+    end, _ = _google_moment(item["end"], zone)
+    return Event(
+        id=item["id"],
+        title=item.get("summary") or GOOGLE_UNTITLED_TITLE,
+        start=start,
+        end=end,
+        all_day=all_day,
+        location=item.get("location", ""),
+        calendar=calendar_name,
+        declined=_declined_by_self(item),
+        cancelled=item.get("status") == GOOGLE_CANCELLED_STATUS,
+    )
+
+
+def _google_moment(value, zone):
+    if GOOGLE_DATE_TIME in value:
+        return datetime.fromisoformat(value[GOOGLE_DATE_TIME]), False
+    return datetime.combine(date.fromisoformat(value[GOOGLE_DATE]), time.min, tzinfo=zone), True
+
+
+def _declined_by_self(item):
+    return any(
+        attendee.get("self") is True and attendee.get("responseStatus") == GOOGLE_DECLINED_STATUS
+        for attendee in item.get("attendees", [])
+    )
 
 
 def gcalcli_source(config, now, window_end, zone):
