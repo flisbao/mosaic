@@ -760,9 +760,17 @@ def _yearly_days(rule, anchor_day, offset):
     if rule.weekdays and not rule.month_days and not rule.months:
         return _weekday_dates(date(year, 1, 1), date(year, MONTHS_IN_YEAR, MAXIMUM_MONTH_DAY), rule.weekdays)
     days = []
-    for month in rule.months or [anchor_day.month]:
+    for month in _yearly_months(rule, anchor_day):
         days += _days_of_month(rule, anchor_day, year, month)
     return days
+
+
+def _yearly_months(rule, anchor_day):
+    if rule.months:
+        return rule.months
+    if rule.month_days:
+        return range(1, MONTHS_IN_YEAR + 1)
+    return [anchor_day.month]
 
 
 def _shift_month(year, month, offset):

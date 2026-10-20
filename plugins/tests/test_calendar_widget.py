@@ -503,6 +503,11 @@ class RecurrenceTests(unittest.TestCase):
         november = datetime(2026, 11, 22, 8, tzinfo=ZONE), datetime(2026, 11, 23, tzinfo=ZONE)
         self.assertEqual(occurrences(lines, *november), [datetime(2026, 11, 22, 9, tzinfo=ZONE)])
 
+    def test_yearly_bymonthday_without_bymonth_expands_every_month(self):
+        lines = sao_paulo_series("FREQ=YEARLY;BYMONTHDAY=-1", start="20240110T100000", end="20240110T110000")
+        window = at(25, 0), datetime(2026, 11, 2, tzinfo=ZONE)
+        self.assertEqual(occurrences(lines, *window), [at(31, 10)])
+
     def test_wkst_changes_biweekly_weeks(self):
         window = datetime(1997, 8, 1, tzinfo=NEW_YORK), datetime(1997, 9, 1, tzinfo=NEW_YORK)
         expected = {"MO": [5, 10, 19, 24], "SU": [5, 17, 19, 31]}
