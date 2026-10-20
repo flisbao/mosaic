@@ -14,7 +14,7 @@ use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
 
-const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]... [--timeout SEGUNDOS] [--cwd DIRETORIO]";
+const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]... [--timeout SEGUNDOS] [--cwd DIRETORIO] [-- argumentos-do-provider...]";
 const CHECK_ENV_FLAG: &str = "--env";
 const CHECK_TIMEOUT_FLAG: &str = "--timeout";
 const CHECK_CWD_FLAG: &str = "--cwd";
@@ -71,8 +71,21 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, CheckU
     let mut env = Vec::new();
     let mut timeout_seconds = DEFAULT_TIMEOUT_SECONDS;
     let mut working_directory = None;
+    let mut provider_arguments_only = false;
     let mut remaining = arguments.iter();
     while let Some(argument) = remaining.next() {
+        if provider_arguments_only {
+            if command.is_none() {
+                command = Some(argument.clone());
+            } else {
+                args.push(argument.clone());
+            }
+            continue;
+        }
+        if argument == "--" {
+            provider_arguments_only = true;
+            continue;
+        }
         match argument.as_str() {
             CHECK_ENV_FLAG => {
                 let assignment = remaining.next().ok_or(CheckUsageError::EnvWithoutValue)?;

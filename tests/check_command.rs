@@ -88,6 +88,30 @@ fn check_passes_env_variables() {
 }
 
 #[test]
+fn check_passes_provider_flags_after_separator() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("widget.sh"),
+        "[ \"$1\" = \"--timeout\" ] && [ \"$2\" = \"7\" ] && [ \"$3\" = \"--cwd\" ] && [ \"$4\" = \"provider-dir\" ] || exit 9\nprintf '{\"summary\":{\"title\":\"flags recebidas\"}}'\n",
+    )
+    .unwrap();
+    let output = run_check(
+        directory.path(),
+        &[
+            "sh",
+            "widget.sh",
+            "--",
+            "--timeout",
+            "7",
+            "--cwd",
+            "provider-dir",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(stdout(&output).contains("flags recebidas"));
+}
+
+#[test]
 fn check_without_command_exits_two() {
     let directory = tempfile::tempdir().unwrap();
     let output = run_check(directory.path(), &[]);
