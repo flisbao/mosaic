@@ -3,10 +3,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::application::llm::{LlmError, LlmRequest, LlmRunner};
-use crate::application::ports::Cancellable;
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::private_directory::prepare_private_directory;
-use crate::infrastructure::process::{run_process, CancelFlag, ProcessError, ProcessLimits};
+use crate::infrastructure::process::{
+    run_process, CancelFlag, HasCancelFlag, ProcessError, ProcessLimits,
+};
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
@@ -167,13 +168,9 @@ impl<H: HarnessCommand> LlmRunner for LlmCli<H> {
     }
 }
 
-impl<H: HarnessCommand> Cancellable for LlmCli<H> {
-    fn cancel(&self) {
-        self.cancel_flag.cancel();
-    }
-
-    fn request_cancel(&self) {
-        self.cancel_flag.request_cancel();
+impl<H: HarnessCommand> HasCancelFlag for LlmCli<H> {
+    fn cancel_flag(&self) -> &CancelFlag {
+        &self.cancel_flag
     }
 }
 

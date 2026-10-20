@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::application::launch_spec::ProviderCommand;
-use crate::application::ports::{ActionExecutor, Cancellable, SourceError, WidgetSource};
+use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
 use crate::domain::widget::WidgetSnapshot;
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::plugin_protocol::parse_snapshot;
-use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
+use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 
@@ -55,13 +55,9 @@ impl WidgetSource for PluginRunner {
     }
 }
 
-impl Cancellable for PluginRunner {
-    fn cancel(&self) {
-        self.cancel_flag.cancel();
-    }
-
-    fn request_cancel(&self) {
-        self.cancel_flag.request_cancel();
+impl HasCancelFlag for PluginRunner {
+    fn cancel_flag(&self) -> &CancelFlag {
+        &self.cancel_flag
     }
 }
 
@@ -100,6 +96,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::application::ports::Cancellable;
     use crate::domain::action::ProposedAction;
     use crate::domain::widget::{ActionScope, ActionSpec, WidgetId};
 
