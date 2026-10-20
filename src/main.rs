@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -61,6 +61,7 @@ use ratatui::crossterm::event::{self, Event};
 use thiserror::Error;
 
 const EVENT_WAIT_LIMIT: Duration = Duration::from_millis(250);
+const EVENT_QUEUE_CAPACITY: usize = 16;
 const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
 const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório de estado do usuário";
 const NO_STATE_DIRECTORY_STORE_WARNING: &str =
@@ -98,7 +99,7 @@ struct Services {
 }
 
 struct EventChannel {
-    sender: Sender<AppEvent>,
+    sender: SyncSender<AppEvent>,
     receiver: mpsc::Receiver<AppEvent>,
 }
 
@@ -129,7 +130,7 @@ fn run() -> Result<(), AppError> {
     install_defaults_if_missing(&directory)?;
     let config = load_config(&directory)?;
     let termination = termination_requested()?;
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
     let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
     let (state, spans) = initial_state(&config, &services, &SystemClock);
     let mut app = App {
@@ -211,7 +212,7 @@ fn tab_placements(config: &AppConfig) -> Vec<TabPlacement> {
 fn build_services(
     config: &AppConfig,
     directory: &Path,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
     termination: Arc<AtomicBool>,
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
@@ -410,7 +411,7 @@ impl App {
     }
 }
 
-fn spawn_input_reader(sender: Sender<AppEvent>) {
+fn spawn_input_reader(sender: SyncSender<AppEvent>) {
     thread::spawn(move || {
         while let Ok(terminal_event) = event::read() {
             let app_event = match terminal_event {
@@ -490,7 +491,7 @@ fn spawn_action(
     action: ConfirmedAction,
     state: &mut AppState,
     services: &Services,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
 ) {
     let widget = action.widget().clone();
     let (Some(runner), Some(refresh)) = (
@@ -509,7 +510,10 @@ fn spawn_action(
     });
 }
 
-fn spawn_event_task(sender: &Sender<AppEvent>, work: impl FnOnce() -> AppEvent + Send + 'static) {
+fn spawn_event_task(
+    sender: &SyncSender<AppEvent>,
+    work: impl FnOnce() -> AppEvent + Send + 'static,
+) {
     let sender = sender.clone();
     thread::spawn(move || {
         let _ = sender.send(work());
@@ -537,7 +541,7 @@ fn request_recommendation(
     state: &mut AppState,
     services: &Services,
     clock: &dyn Clock,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
 ) {
     let Some(llm) = &services.llm else {
         state.show_notice(LLM_DISABLED_NOTICE.to_string());
@@ -569,7 +573,7 @@ fn start_recommendation(
     services: &Services,
     plan: RecommendationPlan,
     clock: &dyn Clock,
-    sender: &Sender<AppEvent>,
+    sender: &SyncSender<AppEvent>,
 ) {
     let Some(llm) = &services.llm else {
         return;
