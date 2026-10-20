@@ -30,7 +30,7 @@ const WARNING_COLOR: Color = Color::Yellow;
 
 pub struct BoxContext<'a> {
     pub shortcut: Option<char>,
-    pub selected: bool,
+    pub emphasis: Emphasis,
     pub now: NaiveDateTime,
     pub warning: Option<&'a str>,
 }
@@ -40,14 +40,26 @@ pub struct BoxBody {
     pub blocks: Vec<Line<'static>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureDetail {
+    Hidden,
+    Shown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emphasis {
+    Focused,
+    Normal,
+}
+
 pub fn render_widget_box(frame: &mut Frame, entry: &WidgetEntry, area: Rect, context: &BoxContext) {
     if area.width < MINIMUM_BOX_WIDTH || area.height < MINIMUM_BOX_HEIGHT {
         return;
     }
-    let block = box_block(entry, context.shortcut, context.selected, area.width);
+    let block = box_block(entry, context.shortcut, context.emphasis, area.width);
     let inner = block.inner(area);
     let width = usize::from(inner.width);
-    let body = box_body(entry, width, context.now, false);
+    let body = box_body(entry, width, context.now, FailureDetail::Hidden);
     let mut header = warning_lines(context.warning, width);
     header.extend(body.header);
     let header_rows = u16::try_from(header.len()).unwrap_or(u16::MAX);
@@ -62,7 +74,7 @@ pub fn render_widget_box(frame: &mut Frame, entry: &WidgetEntry, area: Rect, con
 pub fn box_block(
     entry: &WidgetEntry,
     shortcut: Option<char>,
-    selected: bool,
+    emphasis: Emphasis,
     outer_width: u16,
 ) -> Block<'static> {
     let record = &entry.record;
@@ -73,17 +85,16 @@ pub fn box_block(
         record.is_refreshing(),
         title_width,
     );
-    let emphasis = if selected {
-        Modifier::BOLD
-    } else {
-        Modifier::empty()
+    let weight = match emphasis {
+        Emphasis::Focused => Modifier::BOLD,
+        Emphasis::Normal => Modifier::empty(),
     };
     Block::bordered()
-        .title(Line::styled(title, Style::default().add_modifier(emphasis)))
+        .title(Line::styled(title, Style::default().add_modifier(weight)))
         .border_style(
             Style::default()
-                .fg(border_color(record, selected))
-                .add_modifier(emphasis),
+                .fg(border_color(record, emphasis))
+                .add_modifier(weight),
         )
 }
 
@@ -94,10 +105,10 @@ pub fn entry_title(entry: &WidgetEntry) -> String {
     }
 }
 
-pub fn border_color(record: &WidgetRecord, selected: bool) -> Color {
+pub fn border_color(record: &WidgetRecord, emphasis: Emphasis) -> Color {
     if record.is_failing() {
         FAILURE_COLOR
-    } else if selected {
+    } else if emphasis == Emphasis::Focused {
         SELECTED_BORDER_COLOR
     } else {
         IDLE_BORDER_COLOR
@@ -108,7 +119,7 @@ pub fn box_body(
     entry: &WidgetEntry,
     width: usize,
     now: NaiveDateTime,
-    show_failure_reason: bool,
+    detail: FailureDetail,
 ) -> BoxBody {
     let record = &entry.record;
     match record.snapshot() {
@@ -117,7 +128,7 @@ pub fn box_body(
             blocks: Vec::new(),
         },
         Some(snapshot) => BoxBody {
-            header: failure_header(record, width, now, show_failure_reason),
+            header: failure_header(record, width, now, detail),
             blocks: render_blocks(&snapshot.summary.display_blocks(), width),
         },
     }
@@ -137,13 +148,13 @@ pub(crate) fn failure_header(
     record: &WidgetRecord,
     width: usize,
     now: NaiveDateTime,
-    show_failure_reason: bool,
+    detail: FailureDetail,
 ) -> Vec<Line<'static>> {
     let Some(message) = record.last_error() else {
         return Vec::new();
     };
     let mut lines = Vec::new();
-    if show_failure_reason {
+    if detail == FailureDetail::Shown {
         let reason = format!("{FAILURE_PREFIX}{message}");
         lines.extend(reason.lines().map(|line| failure_line(line, width)));
     }
@@ -249,6 +260,45 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    fn now() -> NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 17)
+            .unwrap()
+            .and_hms_opt(9, 41, 0)
+            .unwrap()
+    }
+
+    #[test]
+    fn failure_header_shows_the_reason_only_when_asked() {
+        let mut record = WidgetRecord::loading();
+        record.apply::<String>(Err("quebrou".to_string()), now());
+
+        let hidden = failure_header(&record, 40, now(), FailureDetail::Hidden);
+        let shown = failure_header(&record, 40, now(), FailureDetail::Shown);
+
+        assert!(hidden.is_empty());
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+            .contains("quebrou"));
+    }
+
+    #[test]
+    fn border_color_depends_on_failure_then_emphasis() {
+        let loading = WidgetRecord::loading();
+        let mut failing = WidgetRecord::loading();
+        failing.apply::<String>(Err("x".to_string()), now());
+
+        assert_eq!(border_color(&failing, Emphasis::Focused), FAILURE_COLOR);
+        assert_eq!(
+            border_color(&loading, Emphasis::Focused),
+            SELECTED_BORDER_COLOR
+        );
+        assert_eq!(border_color(&loading, Emphasis::Normal), IDLE_BORDER_COLOR);
     }
 
     #[test]

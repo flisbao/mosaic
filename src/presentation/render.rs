@@ -17,7 +17,7 @@ use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
-    box_block, box_body, dim_if_stale, render_widget_box, BoxContext,
+    box_block, box_body, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
 };
 use crate::presentation::widget_view::render_blocks;
 
@@ -117,7 +117,11 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
                 };
                 let context = BoxContext {
                     shortcut: state.shortcut_of(entry_index),
-                    selected: Some(entry_index) == state.focused_entry(),
+                    emphasis: if Some(entry_index) == state.focused_entry() {
+                        Emphasis::Focused
+                    } else {
+                        Emphasis::Normal
+                    },
                     now,
                     warning: None,
                 };
@@ -132,7 +136,7 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
                 let warning = enlarge_warning();
                 let context = BoxContext {
                     shortcut: first.and_then(|index| state.shortcut_of(index)),
-                    selected: true,
+                    emphasis: Emphasis::Focused,
                     now,
                     warning: Some(&warning),
                 };
@@ -198,7 +202,12 @@ fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, conten
     let Some(entry) = state.entries().get(index) else {
         return;
     };
-    let block = box_block(entry, state.shortcut_of(index), true, content.width);
+    let block = box_block(
+        entry,
+        state.shortcut_of(index),
+        Emphasis::Focused,
+        content.width,
+    );
     let inner = block.inner(content);
     let width = usize::from(inner.width);
     let (lines, selected_row) = detail_lines(entry, state.selected_item(), width, now);
@@ -216,7 +225,7 @@ fn detail_lines(
     width: usize,
     now: NaiveDateTime,
 ) -> (Vec<Line<'static>>, usize) {
-    let header = box_body(entry, width, now, true).header;
+    let header = box_body(entry, width, now, FailureDetail::Shown).header;
     let header_height = header.len();
     let Some(sections) = entry
         .record
