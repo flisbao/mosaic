@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
@@ -17,9 +16,11 @@ use crate::presentation::key_input::KeyInput;
 
 mod alert_queue;
 mod focus_navigation;
+mod pending_actions;
 mod pomodoro_control;
 
 use alert_queue::AlertQueue;
+use pending_actions::PendingActions;
 use pomodoro_control::PomodoroControl;
 
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
@@ -102,7 +103,7 @@ pub struct AppState {
     notice: Option<String>,
     pomodoro: PomodoroControl,
     alerts: AlertQueue,
-    pending_actions: HashSet<WidgetId>,
+    pending_actions: PendingActions,
 }
 
 impl AppState {
@@ -118,7 +119,7 @@ impl AppState {
             notice: None,
             pomodoro: PomodoroControl::default(),
             alerts: AlertQueue::default(),
-            pending_actions: HashSet::new(),
+            pending_actions: PendingActions::default(),
         }
     }
 
@@ -231,11 +232,11 @@ impl AppState {
     }
 
     pub fn mark_action_pending(&mut self, id: &WidgetId) {
-        self.pending_actions.insert(id.clone());
+        self.pending_actions.try_begin(id);
     }
 
     pub fn finish_action(&mut self, id: &WidgetId) {
-        self.pending_actions.remove(id);
+        self.pending_actions.finish(id);
     }
 
     pub fn update_widget(
@@ -379,7 +380,7 @@ impl AppState {
         match key {
             KeyInput::Character('s') => {
                 let confirmed = proposed.confirm();
-                if !self.pending_actions.insert(confirmed.widget().clone()) {
+                if !self.pending_actions.try_begin(confirmed.widget()) {
                     self.show_notice(ACTION_PENDING_NOTICE.to_string());
                     return Transition::idle();
                 }
