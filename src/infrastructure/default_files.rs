@@ -180,10 +180,10 @@ mod tests {
     fn default_config_enables_kanban_for_the_llm() {
         let config = parse_config(default_config_text()).unwrap();
         assert_eq!(
-            config.widgets[0].llm_sections,
+            config.widgets[0].llm_selection.sections,
             vec!["inbox", "in progress", "acompanhar_jira"]
         );
-        assert!(config.widgets[1].llm_sections.is_empty());
+        assert!(config.widgets[1].llm_selection.sections.is_empty());
     }
 
     #[test]

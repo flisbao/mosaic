@@ -5,8 +5,6 @@ use mosaic::application::check_report::build_check_report;
 use mosaic::domain::widget::{WidgetId, WidgetSnapshot};
 use mosaic::infrastructure::config::{
     config_directory, config_file_path, parse_config, read_config_file, WidgetSettings,
-    DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM, DEFAULT_LLM_MAX_ITEMS,
-    DEFAULT_SPAN,
 };
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
@@ -73,18 +71,13 @@ pub fn run(arguments: &[String]) -> ExitCode {
         }
     };
     let settings = WidgetSettings {
-        id: WidgetId::new(CHECK_WIDGET_ID),
-        command: invocation.command,
-        args: invocation.args,
-        env: invocation.env,
-        interval_seconds: DEFAULT_INTERVAL_SECONDS,
-        interval_adjusted: false,
         timeout_seconds: CHECK_TIMEOUT_SECONDS,
-        span: DEFAULT_SPAN,
-        max_items: None,
-        llm_sections: vec![],
-        llm_max_items: DEFAULT_LLM_MAX_ITEMS,
-        llm_max_characters_per_item: DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+        ..WidgetSettings::for_command(
+            WidgetId::new(CHECK_WIDGET_ID),
+            invocation.command,
+            invocation.args,
+            invocation.env,
+        )
     };
     let working_directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let runner = PluginRunner::new(settings, working_directory);

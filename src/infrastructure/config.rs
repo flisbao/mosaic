@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::application::recommendation::LlmSelection;
 use crate::application::reload::{PreparedWidgets, WidgetSpec};
 use crate::application::reload_plan::{plan_reload, WidgetIdentity};
 use crate::domain::pomodoro::PomodoroSettings;
@@ -50,9 +51,37 @@ pub struct WidgetSettings {
     pub timeout_seconds: u64,
     pub span: u16,
     pub max_items: Option<usize>,
-    pub llm_sections: Vec<String>,
-    pub llm_max_items: usize,
-    pub llm_max_characters_per_item: usize,
+    pub llm_selection: LlmSelection,
+}
+
+impl WidgetSettings {
+    pub fn for_command(
+        id: WidgetId,
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            id,
+            command,
+            args,
+            env,
+            interval_seconds: DEFAULT_INTERVAL_SECONDS,
+            interval_adjusted: false,
+            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+            span: DEFAULT_SPAN,
+            max_items: None,
+            llm_selection: default_llm_selection(Vec::new()),
+        }
+    }
+}
+
+pub fn default_llm_selection(sections: Vec<String>) -> LlmSelection {
+    LlmSelection {
+        sections,
+        max_items: DEFAULT_LLM_MAX_ITEMS,
+        max_characters_per_item: DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -379,9 +408,11 @@ fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, ConfigError> {
         timeout_seconds,
         span: widget.span.unwrap_or(DEFAULT_SPAN),
         max_items,
-        llm_sections: widget.llm_sections,
-        llm_max_items,
-        llm_max_characters_per_item,
+        llm_selection: LlmSelection {
+            sections: widget.llm_sections,
+            max_items: llm_max_items,
+            max_characters_per_item: llm_max_characters_per_item,
+        },
     })
 }
 
@@ -831,6 +862,23 @@ mod tests {
     }
 
     #[test]
+    fn for_command_uses_the_documented_defaults() {
+        let settings = WidgetSettings::for_command(
+            WidgetId::new("x"),
+            "cmd".to_string(),
+            vec!["a".to_string()],
+            vec![("K".to_string(), "v".to_string())],
+        );
+        assert_eq!(settings.interval_seconds, DEFAULT_INTERVAL_SECONDS);
+        assert!(!settings.interval_adjusted);
+        assert_eq!(settings.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
+        assert_eq!(settings.span, DEFAULT_SPAN);
+        assert_eq!(settings.max_items, None);
+        assert_eq!(settings.llm_selection, default_llm_selection(Vec::new()));
+        assert_eq!(settings.llm_selection.max_items, DEFAULT_LLM_MAX_ITEMS);
+    }
+
+    #[test]
     fn missing_sections_use_defaults() {
         let config = parse_config("").unwrap();
         let pomodoro = &config.pomodoro;
@@ -915,18 +963,12 @@ mod tests {
             "[[widgets]]\nid = \"a\"\ncommand = \"x\"\nllm_sections = [\"inbox\"]\n[[widgets]]\nid = \"b\"\ncommand = \"x\"\nllm_max_items = 5\nllm_max_characters_per_item = 50\n",
         )
         .unwrap();
-        let first = &config.widgets[0];
-        assert_eq!(first.llm_sections, vec!["inbox"]);
-        assert_eq!(
-            (first.llm_max_items, first.llm_max_characters_per_item),
-            (20, 120)
-        );
-        let second = &config.widgets[1];
-        assert!(second.llm_sections.is_empty());
-        assert_eq!(
-            (second.llm_max_items, second.llm_max_characters_per_item),
-            (5, 50)
-        );
+        let first = &config.widgets[0].llm_selection;
+        assert_eq!(first.sections, vec!["inbox"]);
+        assert_eq!((first.max_items, first.max_characters_per_item), (20, 120));
+        let second = &config.widgets[1].llm_selection;
+        assert!(second.sections.is_empty());
+        assert_eq!((second.max_items, second.max_characters_per_item), (5, 50));
     }
 
     #[test]

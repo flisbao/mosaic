@@ -140,6 +140,7 @@ mod tests {
     use crate::application::refresh::fakes::snapshot_titled;
     use crate::domain::action::{ActionOutcome, ConfirmedAction};
     use crate::domain::widget::WidgetSnapshot;
+    use crate::infrastructure::config::default_llm_selection;
 
     const RECEIVE_LIMIT: Duration = Duration::from_secs(2);
 
@@ -184,9 +185,7 @@ mod tests {
             timeout_seconds: 5,
             span: 1,
             max_items: None,
-            llm_sections: vec![],
-            llm_max_items: 20,
-            llm_max_characters_per_item: 120,
+            llm_selection: default_llm_selection(vec![]),
         }
     }
 

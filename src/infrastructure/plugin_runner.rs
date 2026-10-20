@@ -104,6 +104,7 @@ mod tests {
     use super::*;
     use crate::domain::action::ProposedAction;
     use crate::domain::widget::{ActionScope, ActionSpec, WidgetId};
+    use crate::infrastructure::config::default_llm_selection;
 
     fn runner(directory: &Path, script: &str, timeout_seconds: u64) -> PluginRunner {
         fs::write(directory.join("plugin.sh"), script).unwrap();
@@ -117,9 +118,7 @@ mod tests {
             timeout_seconds,
             span: 1,
             max_items: None,
-            llm_sections: vec![],
-            llm_max_items: 20,
-            llm_max_characters_per_item: 120,
+            llm_selection: default_llm_selection(vec![]),
         };
         PluginRunner::new(settings, directory.to_path_buf())
     }

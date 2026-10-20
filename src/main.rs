@@ -292,16 +292,7 @@ fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<
 fn llm_selections(widgets: &[WidgetSettings]) -> HashMap<String, LlmSelection> {
     widgets
         .iter()
-        .map(|widget| {
-            (
-                widget.id.as_str().to_string(),
-                LlmSelection {
-                    sections: widget.llm_sections.clone(),
-                    max_items: widget.llm_max_items,
-                    max_characters_per_item: widget.llm_max_characters_per_item,
-                },
-            )
-        })
+        .map(|widget| (widget.id.as_str().to_string(), widget.llm_selection.clone()))
         .collect()
 }
 

@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use mosaic::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use mosaic::domain::action::ProposedAction;
 use mosaic::domain::widget::{ActionScope, ActionSpec, WidgetId, WidgetSnapshot};
-use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 
 const TOKEN: &str = "TOKEN-E2E-XYZ";
@@ -73,9 +73,7 @@ fn jira_runner(server: &FakeJira, state_dir: &Path, mode: &str, token: &str) -> 
         timeout_seconds: 30,
         span: 1,
         max_items: None,
-        llm_sections: vec!["Sem dono".to_string()],
-        llm_max_items: 20,
-        llm_max_characters_per_item: 120,
+        llm_selection: default_llm_selection(vec!["Sem dono".to_string()]),
     };
     PluginRunner::new(settings, state_dir.to_path_buf())
 }

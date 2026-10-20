@@ -7,7 +7,7 @@ use mosaic::application::ports::SourceError;
 use mosaic::domain::blocks::{Block, BLOCK_TYPE_NAMES};
 use mosaic::domain::snapshot_report::Severity;
 use mosaic::domain::widget::WidgetId;
-use mosaic::infrastructure::config::WidgetSettings;
+use mosaic::infrastructure::config::{default_llm_selection, WidgetSettings};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 
@@ -27,9 +27,7 @@ fn gallery_output(command: &str, script: &str) -> Result<String, SourceError> {
         timeout_seconds: 10,
         span: 1,
         max_items: None,
-        llm_sections: vec![],
-        llm_max_items: 20,
-        llm_max_characters_per_item: 120,
+        llm_selection: default_llm_selection(vec![]),
     };
     PluginRunner::new(settings, root.to_path_buf()).raw_snapshot_output()
 }
