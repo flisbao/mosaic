@@ -195,7 +195,7 @@ impl Reader {
 
     pub(super) fn flag(&mut self, object: &Map<String, Value>, path: &str) -> Option<Flag> {
         let name = self.optional_string(object, "flag", path)?;
-        let flag = parse_flag(name);
+        let flag = Flag::parse(name);
         if flag.is_none() {
             self.warning(
                 &child_path(path, "flag"),
@@ -583,14 +583,6 @@ impl Reader {
                 AlertLevel::Info
             }
         }
-    }
-}
-
-fn parse_flag(name: &str) -> Option<Flag> {
-    match name {
-        "updated" => Some(Flag::Updated),
-        "warning" => Some(Flag::Warning),
-        _ => None,
     }
 }
 

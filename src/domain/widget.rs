@@ -5,7 +5,19 @@ use chrono::{NaiveDateTime, TimeDelta};
 use crate::domain::blocks::{lines::WidgetLine, Block};
 use crate::domain::widget_content::{Alert, Tone};
 
-pub const FLAG_NAMES: [&str; 2] = ["updated", "warning"];
+const FLAGS: [(&str, Flag); 2] = [("updated", Flag::Updated), ("warning", Flag::Warning)];
+
+pub const FLAG_NAMES: [&str; 2] = flag_names();
+
+const fn flag_names() -> [&'static str; 2] {
+    let mut names = [""; 2];
+    let mut index = 0;
+    while index < FLAGS.len() {
+        names[index] = FLAGS[index].0;
+        index += 1;
+    }
+    names
+}
 pub const MAXIMUM_MINI_VALUE_CHARACTERS: usize = 8;
 pub const MAXIMUM_MINI_TEXT_CHARACTERS: usize = 24;
 
@@ -29,6 +41,13 @@ pub enum Flag {
 }
 
 impl Flag {
+    pub fn parse(text: &str) -> Option<Flag> {
+        FLAGS
+            .iter()
+            .find(|(name, _)| *name == text)
+            .map(|(_, flag)| *flag)
+    }
+
     pub fn symbol(self) -> char {
         match self {
             Flag::Updated => '●',
@@ -231,6 +250,17 @@ impl WidgetRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flag_parse_accepts_known_names_only() {
+        for name in FLAG_NAMES {
+            assert!(Flag::parse(name).is_some(), "{name}");
+        }
+        assert_eq!(Flag::parse("updated"), Some(Flag::Updated));
+        assert_eq!(Flag::parse("warning"), Some(Flag::Warning));
+        assert_eq!(Flag::parse("Warning"), None);
+        assert_eq!(Flag::parse("x"), None);
+    }
     use crate::domain::blocks::{lines::WidgetLine, Block};
     use crate::domain::widget_content::Tone;
     use chrono::{NaiveDate, NaiveDateTime, TimeDelta};

@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use crate::domain::blocks::{
     lines::MAXIMUM_LINES_PER_BLOCK,
     table::{Cell, Column, MAXIMUM_TABLE_COLUMNS},
-    Block,
+    Block, BlockKind,
 };
 use crate::domain::widget_content::{Align, Tone};
 use crate::infrastructure::protocol_report::{child_path, indexed_path, Reader};
@@ -13,8 +13,8 @@ use super::BlockParser;
 pub(super) struct TableParser;
 
 impl BlockParser for TableParser {
-    fn type_name(&self) -> &'static str {
-        "table"
+    fn kind(&self) -> BlockKind {
+        BlockKind::Table
     }
 
     fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block> {

@@ -6,12 +6,12 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::application::pomodoro_notifications::AlertMessage;
+use crate::application::pomodoro_notifications::{phase_label, AlertMessage};
 use crate::domain::layout::{
     arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
     TOP_BAR_HEIGHT,
 };
-use crate::domain::pomodoro::{Phase, PomodoroStatus, PomodoroTimer};
+use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer};
 use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
@@ -82,11 +82,7 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
 
 fn pomodoro_text(timer: &PomodoroTimer) -> String {
     let seconds = timer.remaining().as_secs();
-    let phase = match timer.phase() {
-        Phase::Focus => "foco",
-        Phase::ShortBreak => "descanso curto",
-        Phase::LongBreak => "descanso longo",
-    };
+    let phase = phase_label(timer.phase());
     let suffix = match timer.status() {
         PomodoroStatus::Running => "",
         PomodoroStatus::Paused => " (pausado)",

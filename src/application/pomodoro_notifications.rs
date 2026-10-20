@@ -21,7 +21,10 @@ pub fn alert_for(ended: &PhaseEnded) -> AlertMessage {
             let headline = ended.suggestion.as_deref().unwrap_or(DEFAULT_REST_BODY);
             AlertMessage {
                 title: FOCUS_ENDED_TITLE.to_string(),
-                body: format!("{headline}\nPróximo: {} (p inicia)", phase_name(ended.next)),
+                body: format!(
+                    "{headline}\nPróximo: {} (p inicia)",
+                    phase_label(ended.next)
+                ),
             }
         }
         Phase::ShortBreak | Phase::LongBreak => AlertMessage {
@@ -31,7 +34,7 @@ pub fn alert_for(ended: &PhaseEnded) -> AlertMessage {
     }
 }
 
-fn phase_name(phase: Phase) -> &'static str {
+pub fn phase_label(phase: Phase) -> &'static str {
     match phase {
         Phase::Focus => "foco",
         Phase::ShortBreak => "descanso curto",
@@ -42,6 +45,13 @@ fn phase_name(phase: Phase) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phase_labels_are_the_user_facing_names() {
+        assert_eq!(phase_label(Phase::Focus), "foco");
+        assert_eq!(phase_label(Phase::ShortBreak), "descanso curto");
+        assert_eq!(phase_label(Phase::LongBreak), "descanso longo");
+    }
 
     fn focus_ended(next: Phase, suggestion: Option<&str>) -> PhaseEnded {
         PhaseEnded {

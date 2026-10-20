@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use crate::domain::blocks::{
     lines::{WidgetLine, MAXIMUM_LINES_PER_BLOCK},
-    Block,
+    Block, BlockKind,
 };
 use crate::infrastructure::protocol_report::{child_path, Reader};
 
@@ -11,8 +11,8 @@ use super::BlockParser;
 pub(super) struct LinesParser;
 
 impl BlockParser for LinesParser {
-    fn type_name(&self) -> &'static str {
-        "lines"
+    fn kind(&self) -> BlockKind {
+        BlockKind::Lines
     }
 
     fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block> {

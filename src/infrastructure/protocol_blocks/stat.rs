@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use crate::domain::blocks::{
     stat::{StatItem, MAXIMUM_STAT_ITEMS},
-    Block,
+    Block, BlockKind,
 };
 use crate::infrastructure::protocol_report::{child_path, Reader};
 
@@ -11,8 +11,8 @@ use super::BlockParser;
 pub(super) struct StatParser;
 
 impl BlockParser for StatParser {
-    fn type_name(&self) -> &'static str {
-        "stat"
+    fn kind(&self) -> BlockKind {
+        BlockKind::Stat
     }
 
     fn parse(&self, reader: &mut Reader, object: &Map<String, Value>, path: &str) -> Option<Block> {
