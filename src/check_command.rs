@@ -4,11 +4,12 @@ use std::process::ExitCode;
 use mosaic::application::check_report::build_check_report;
 use mosaic::domain::widget::{WidgetId, WidgetSnapshot};
 use mosaic::infrastructure::config::{
-    config_directory, config_file_path, parse_config, read_config_file, WidgetSettings,
+    config_directory, config_file_path, parse_config, read_config_file, ConfigError, WidgetSettings,
 };
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
+use thiserror::Error;
 
 const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]...";
 const CHECK_ENV_FLAG: &str = "--env";
@@ -20,6 +21,28 @@ const EXIT_CODE_FAILURE: u8 = 1;
 const CHECK_CONFIG_FLAG: &str = "--config";
 const CHECK_CONFIG_USAGE: &str = "uso: mosaic check --config [caminho]";
 
+#[derive(Debug, Error, PartialEq)]
+enum CheckUsageError {
+    #[error("{CHECK_USAGE}")]
+    MissingCommand,
+    #[error("{}", env_without_value_message())]
+    EnvWithoutValue,
+    #[error("{}", invalid_variable_message(.0))]
+    InvalidVariable(String),
+    #[error("{CHECK_CONFIG_USAGE}")]
+    TooManyPaths,
+    #[error(transparent)]
+    ConfigDirectory(#[from] ConfigError),
+}
+
+fn env_without_value_message() -> String {
+    format!("{CHECK_ENV_FLAG} precisa de NOME=valor\n{CHECK_USAGE}")
+}
+
+fn invalid_variable_message(assignment: &str) -> String {
+    format!("variável inválida: {assignment}\n{CHECK_USAGE}")
+}
+
 #[derive(Debug)]
 struct CheckInvocation {
     command: String,
@@ -27,7 +50,7 @@ struct CheckInvocation {
     env: Vec<(String, String)>,
 }
 
-fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, String> {
+fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, CheckUsageError> {
     let mut command = None;
     let mut args = Vec::new();
     let mut env = Vec::new();
@@ -40,17 +63,15 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, String
             }
             continue;
         }
-        let assignment = remaining
-            .next()
-            .ok_or_else(|| format!("{CHECK_ENV_FLAG} precisa de NOME=valor\n{CHECK_USAGE}"))?;
+        let assignment = remaining.next().ok_or(CheckUsageError::EnvWithoutValue)?;
         match assignment.split_once('=') {
             Some((name, value)) if !name.is_empty() => {
                 env.push((name.to_string(), value.to_string()))
             }
-            _ => return Err(format!("variável inválida: {assignment}\n{CHECK_USAGE}")),
+            _ => return Err(CheckUsageError::InvalidVariable(assignment.clone())),
         }
     }
-    let command = command.ok_or_else(|| CHECK_USAGE.to_string())?;
+    let command = command.ok_or(CheckUsageError::MissingCommand)?;
     Ok(CheckInvocation { command, args, env })
 }
 
@@ -65,8 +86,8 @@ pub fn run(arguments: &[String]) -> ExitCode {
     }
     let invocation = match parse_check_arguments(arguments) {
         Ok(invocation) => invocation,
-        Err(message) => {
-            eprintln!("{message}");
+        Err(error) => {
+            eprintln!("{error}");
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
@@ -90,8 +111,8 @@ pub fn run(arguments: &[String]) -> ExitCode {
 fn run_check_config(arguments: &[String]) -> ExitCode {
     let path = match config_path_argument(arguments) {
         Ok(path) => path,
-        Err(message) => {
-            eprintln!("{message}");
+        Err(error) => {
+            eprintln!("{error}");
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
@@ -110,13 +131,11 @@ fn run_check_config(arguments: &[String]) -> ExitCode {
     }
 }
 
-fn config_path_argument(arguments: &[String]) -> Result<PathBuf, String> {
+fn config_path_argument(arguments: &[String]) -> Result<PathBuf, CheckUsageError> {
     match arguments {
-        [] => config_directory()
-            .map(|directory| config_file_path(&directory))
-            .map_err(|error| error.to_string()),
+        [] => Ok(config_file_path(&config_directory()?)),
         [path] => Ok(PathBuf::from(path)),
-        _ => Err(CHECK_CONFIG_USAGE.to_string()),
+        _ => Err(CheckUsageError::TooManyPaths),
     }
 }
 
@@ -142,21 +161,31 @@ mod tests {
     #[test]
     fn env_flag_without_value_is_a_usage_error() {
         let error = parse_check_arguments(&arguments(&["cmd", "--env"])).unwrap_err();
-        assert!(error.contains("precisa de NOME=valor"), "{error}");
+        assert_eq!(error, CheckUsageError::EnvWithoutValue);
+        assert!(
+            error.to_string().contains("precisa de NOME=valor"),
+            "{error}"
+        );
     }
 
     #[test]
     fn env_with_empty_name_is_rejected() {
         let error = parse_check_arguments(&arguments(&["cmd", "--env", "=valor"])).unwrap_err();
-        assert!(error.contains("variável inválida"), "{error}");
+        assert_eq!(
+            error,
+            CheckUsageError::InvalidVariable("=valor".to_string())
+        );
+        assert!(error.to_string().contains("variável inválida"), "{error}");
     }
 
     #[test]
     fn missing_command_is_a_usage_error() {
-        assert_eq!(parse_check_arguments(&[]).unwrap_err(), CHECK_USAGE);
+        let error = parse_check_arguments(&[]).unwrap_err();
+        assert_eq!(error, CheckUsageError::MissingCommand);
+        assert_eq!(error.to_string(), CHECK_USAGE);
         assert_eq!(
             parse_check_arguments(&arguments(&["--env", "A=b"])).unwrap_err(),
-            CHECK_USAGE
+            CheckUsageError::MissingCommand
         );
     }
 
@@ -166,9 +195,8 @@ mod tests {
             config_path_argument(&arguments(&["/tmp/x.toml"])).unwrap(),
             std::path::PathBuf::from("/tmp/x.toml")
         );
-        assert_eq!(
-            config_path_argument(&arguments(&["a", "b"])).unwrap_err(),
-            CHECK_CONFIG_USAGE
-        );
+        let error = config_path_argument(&arguments(&["a", "b"])).unwrap_err();
+        assert_eq!(error, CheckUsageError::TooManyPaths);
+        assert_eq!(error.to_string(), CHECK_CONFIG_USAGE);
     }
 }
