@@ -41,7 +41,6 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
-use mosaic::infrastructure::terminal_capabilities::detect_graphics_support;
 use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime, WidgetUpdate};
 use mosaic::presentation::app_events::{apply_event, stored_ia_result, AppEvent, EventContext};
 use mosaic::presentation::app_state::{AppState, Command};
@@ -109,8 +108,6 @@ fn run() -> Result<(), AppError> {
     let directory = config_directory()?;
     install_defaults_if_missing(&directory)?;
     let config = load_config(&directory)?;
-    let _graphics_support = detect_graphics_support(&|name| std::env::var(name).ok());
-
     let termination = termination_requested()?;
     let (sender, receiver) = mpsc::channel();
     let mut services = build_services(&config, &directory, &sender, Arc::clone(&termination));
