@@ -1,0 +1,3 @@
+# SDD ledger — plan: /home/flisbao/projetos/mosaic/docs/plans/2026-10-19/02-solid-dry/SD-01-main-caso-de-uso-recomendacao.md
+
+Tasks 1-4 complete. prepare_recommendation's five tests failed against the provisional Notice("") implementation then passed; FilePriorityPrompt's two tests pass. main now uses the application flow, reads prompt through the adapter, and sends action/recommendation background work through spawn_event_task. Per CC-11 reconciliation, removed the superseded read/confirmation helpers and their two tests, retaining widget_contexts. Full suite 569 lib + 5 bin + 28 integration = 602 passed; clippy/fmt/diff-check/build clean. Grep for fs:: and build_plan in main returned no matches.

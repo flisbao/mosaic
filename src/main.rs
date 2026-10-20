@@ -1,7 +1,6 @@
 mod check_command;
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
@@ -18,8 +17,9 @@ use mosaic::application::launch_spec::WidgetLaunchSpec;
 use mosaic::application::llm::{execute_recommendation, LlmRunner, RecommendationStore};
 use mosaic::application::pomodoro_notifications::Notifier;
 use mosaic::application::ports::{Cancellable, Clock, WidgetRunner};
-use mosaic::application::recommendation::{
-    build_plan, LlmSelection, RecommendationPlan, WidgetContext,
+use mosaic::application::recommendation::{LlmSelection, RecommendationPlan, WidgetContext};
+use mosaic::application::recommendation_request::{
+    prepare_recommendation, RecommendationStep, SendPolicy,
 };
 use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations, WidgetUpdate};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
@@ -36,6 +36,7 @@ use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::build_llm_runner;
 use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
 use mosaic::infrastructure::plugin_runner::PluginRunner;
+use mosaic::infrastructure::priority_prompt::FilePriorityPrompt;
 use mosaic::infrastructure::recommendation_file::{
     FileRecommendationStore, NullRecommendationStore,
 };
@@ -465,34 +466,22 @@ fn spawn_action(
         return;
     };
     let runner = Arc::clone(runner);
-    let sender = sender.clone();
-    thread::spawn(move || {
+    spawn_event_task(sender, move || {
         let (notice, result) = execute_confirmed(runner.as_ref(), runner.as_ref(), action);
         let update = WidgetUpdate {
             id: widget,
             generation,
             result,
         };
-        let _ = sender.send(AppEvent::ActionFinished { update, notice });
+        AppEvent::ActionFinished { update, notice }
     });
 }
 
-#[derive(Debug, Error)]
-#[error("Não foi possível ler {path}: {source}")]
-struct PriorityCriteriaUnreadable {
-    path: String,
-    source: std::io::Error,
-}
-
-fn read_priority_criteria(
-    config_directory: &Path,
-    config: &LlmConfig,
-) -> Result<String, PriorityCriteriaUnreadable> {
-    let prompt_path = config_directory.join(&config.priority_prompt);
-    fs::read_to_string(&prompt_path).map_err(|source| PriorityCriteriaUnreadable {
-        path: prompt_path.display().to_string(),
-        source,
-    })
+fn spawn_event_task(sender: &Sender<AppEvent>, work: impl FnOnce() -> AppEvent + Send + 'static) {
+    let sender = sender.clone();
+    thread::spawn(move || {
+        let _ = sender.send(work());
+    });
 }
 
 fn widget_contexts<'a>(
@@ -512,15 +501,6 @@ fn widget_contexts<'a>(
         .collect()
 }
 
-fn confirmation_text(plan: &RecommendationPlan, config: &LlmConfig) -> String {
-    format!(
-        "Enviar {} itens (~{} tokens, estimativa) para {}?",
-        plan.item_count,
-        plan.estimated_tokens,
-        describe_target(config)
-    )
-}
-
 fn request_recommendation(
     state: &mut AppState,
     services: &Services,
@@ -531,25 +511,24 @@ fn request_recommendation(
         state.show_notice(LLM_DISABLED_NOTICE.to_string());
         return;
     };
-    let criteria = match read_priority_criteria(&services.config_directory, &llm.config) {
-        Ok(criteria) => criteria,
-        Err(error) => {
-            state.show_notice(error.to_string());
-            return;
-        }
+    let criteria =
+        FilePriorityPrompt::new(services.config_directory.join(&llm.config.priority_prompt));
+    let policy = SendPolicy {
+        confirm_before_send: llm.config.confirm_before_send,
+        target_label: describe_target(&llm.config),
     };
-    let plan = build_plan(
+    let step = prepare_recommendation(
         &criteria,
-        clock.now(),
         &widget_contexts(state, &llm.selections),
+        clock.now(),
+        &policy,
     );
-    match plan {
-        Err(error) => state.show_notice(error.to_string()),
-        Ok(plan) if llm.config.confirm_before_send => {
-            let text = confirmation_text(&plan, &llm.config);
-            state.ask_send_confirmation(text, plan);
+    match step {
+        RecommendationStep::Notice(text) => state.show_notice(text),
+        RecommendationStep::Confirm { text, plan } => state.ask_send_confirmation(text, plan),
+        RecommendationStep::Send(plan) => {
+            start_recommendation(state, services, plan, clock, sender)
         }
-        Ok(plan) => start_recommendation(state, services, plan, clock, sender),
     }
 }
 
@@ -568,16 +547,14 @@ fn start_recommendation(
     let store = Arc::clone(&llm.store);
     let model = llm.config.model.clone();
     let now = clock.now();
-    let sender = sender.clone();
-    thread::spawn(move || {
-        let result = execute_recommendation(
+    spawn_event_task(sender, move || {
+        AppEvent::RecommendationFinished(execute_recommendation(
             runner.as_ref(),
             store.as_ref(),
             &plan,
             model.as_deref(),
             now,
-        );
-        let _ = sender.send(AppEvent::RecommendationFinished(result));
+        ))
     });
 }
 
@@ -586,54 +563,5 @@ fn describe_target(config: &LlmConfig) -> String {
     match &config.model {
         Some(model) => format!("{harness}/{model}"),
         None => harness.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mosaic::infrastructure::config::Harness;
-
-    fn llm_config(model: Option<&str>) -> LlmConfig {
-        LlmConfig {
-            enabled: true,
-            harness: Harness::Claude,
-            model: model.map(str::to_string),
-            max_budget_usd: None,
-            timeout_seconds: 5,
-            confirm_before_send: true,
-            priority_prompt: "prompts/prioridade.md".to_string(),
-        }
-    }
-
-    #[test]
-    fn confirmation_text_names_the_item_count_the_estimate_and_the_target() {
-        let plan = RecommendationPlan {
-            prompt: "p".to_string(),
-            item_count: 3,
-            estimated_tokens: 40,
-        };
-
-        assert_eq!(
-            confirmation_text(&plan, &llm_config(Some("haiku"))),
-            "Enviar 3 itens (~40 tokens, estimativa) para claude/haiku?"
-        );
-        assert_eq!(
-            confirmation_text(&plan, &llm_config(None)),
-            "Enviar 3 itens (~40 tokens, estimativa) para claude?"
-        );
-    }
-
-    #[test]
-    fn missing_priority_prompt_reports_its_path() {
-        let directory = tempfile::tempdir().unwrap();
-
-        let error = read_priority_criteria(directory.path(), &llm_config(None)).unwrap_err();
-
-        assert!(
-            error.to_string().starts_with("Não foi possível ler "),
-            "{error}"
-        );
-        assert!(error.to_string().contains("prioridade.md"), "{error}");
     }
 }
