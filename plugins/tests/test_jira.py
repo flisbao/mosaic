@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -222,6 +223,156 @@ class ClientTests(unittest.TestCase):
                 make_client(http).get_json("/x")
             self.assertNotIn(SECRET, str(caught.exception))
             self.assertNotIn(SECRET, repr(caught.exception))
+
+
+def issue_payload(key, **fields):
+    base = {
+        "summary": f"Resumo {key}",
+        "status": {"name": "Em andamento", "statusCategory": {"key": "indeterminate"}},
+        "assignee": {"displayName": "Ana"},
+        "priority": {"name": "High"},
+        "created": "2026-10-01T10:00:00.000+0000",
+        "updated": "2026-10-02T11:30:00.000+0000",
+    }
+    base.update(fields)
+    return {"key": key, "fields": base}
+
+
+def page(keys, next_token=None):
+    body = {"issues": [issue_payload(key) for key in keys]}
+    if next_token:
+        body["nextPageToken"] = next_token
+    return 200, body
+
+
+class FakeClock:
+    def __init__(self, readings):
+        self.readings = list(readings)
+
+    def __call__(self):
+        return self.readings.pop(0)
+
+
+class SearchTests(unittest.TestCase):
+    def test_jql_is_url_encoded_exactly(self):
+        jql = 'summary ~ "a&b=c%" AND nome = "ação"'
+        http = FakeHttp([page(["A-1"])])
+        jira.search_issues(make_client(http), jql, 10, 40)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(http.calls[0]["url"]).query)
+        self.assertEqual(query["jql"], [jql])
+        self.assertEqual(query["fields"], ["summary,status,assignee,priority,updated,created"])
+        self.assertEqual(query["maxResults"], ["10"])
+        self.assertNotIn("nextPageToken", query)
+
+    def test_follows_next_page_token_until_last(self):
+        http = FakeHttp([page(["A-1", "A-2"], "t2"), page(["A-3"])])
+        result = jira.search_issues(make_client(http), "x", 10, 40)
+        self.assertEqual([issue.key for issue in result.issues], ["A-1", "A-2", "A-3"])
+        self.assertFalse(result.has_more)
+        second = urllib.parse.parse_qs(urllib.parse.urlparse(http.calls[1]["url"]).query)
+        self.assertEqual(second["nextPageToken"], ["t2"])
+        self.assertEqual(second["maxResults"], ["8"])
+
+    def test_stops_at_max_issues_and_reports_has_more_only_when_token_remains(self):
+        with_token = FakeHttp([page(["A-1", "A-2"], "t2")])
+        capped = jira.search_issues(make_client(with_token), "x", 2, 40)
+        self.assertEqual(len(capped.issues), 2)
+        self.assertTrue(capped.has_more)
+        self.assertEqual(len(with_token.calls), 1)
+        without_token = FakeHttp([page(["A-1", "A-2"])])
+        exact = jira.search_issues(make_client(without_token), "x", 2, 40)
+        self.assertEqual(len(exact.issues), 2)
+        self.assertFalse(exact.has_more)
+
+    def test_caps_page_size_at_one_hundred(self):
+        http = FakeHttp([page(["A-1"])])
+        jira.search_issues(make_client(http), "x", 500, 40)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(http.calls[0]["url"]).query)
+        self.assertEqual(query["maxResults"], ["100"])
+
+    def test_budget_exhausted_raises_network_error(self):
+        http = FakeHttp([page(["A-1"], "t2"), page(["A-2"])])
+        clock = FakeClock([0, 0, 100])
+        with self.assertRaises(jira.NetworkError) as caught:
+            jira.search_issues(make_client(http), "x", 10, 40, clock)
+        self.assertEqual(str(caught.exception), "orçamento de tempo esgotado")
+        self.assertEqual(len(http.calls), 1)
+
+    def test_http_400_becomes_query_error_with_jira_message(self):
+        body = {"errorMessages": ["Campo 'foo' não existe."], "errors": {}}
+        with self.assertRaises(jira.QueryError) as caught:
+            make_client(FakeHttp([(400, body)])).get_json("/x")
+        self.assertEqual(str(caught.exception), "JQL inválido: Campo 'foo' não existe.")
+        self.assertIsInstance(caught.exception, jira.JiraError)
+
+    def test_http_400_message_is_truncated_and_has_a_fallback(self):
+        long_body = {"errorMessages": ["x" * 500]}
+        with self.assertRaises(jira.QueryError) as caught:
+            make_client(FakeHttp([(400, long_body)])).get_json("/x")
+        self.assertEqual(len(str(caught.exception)), len("JQL inválido: ") + 200)
+        for unusable in ({}, {"errorMessages": []}, {"errorMessages": [3]}, b"<html>"):
+            with self.assertRaises(jira.QueryError) as caught:
+                make_client(FakeHttp([(400, unusable)])).get_json("/x")
+            self.assertEqual(str(caught.exception), "JQL inválido")
+
+    def test_http_401_still_auth_error(self):
+        with self.assertRaises(jira.AuthError):
+            jira.search_issues(make_client(FakeHttp([(401, {})])), "x", 10, 40)
+
+    def test_unexpected_search_payload_is_an_error(self):
+        with self.assertRaises(jira.UnexpectedResponseError):
+            jira.search_issues(make_client(FakeHttp([(200, {"issues": "nope"})])), "x", 10, 40)
+
+    def test_invalid_issues_are_dropped_from_results(self):
+        broken = {"key": "A-2", "fields": {"created": "ontem"}}
+        http = FakeHttp([(200, {"issues": [issue_payload("A-1"), broken, None]})])
+        result = jira.search_issues(make_client(http), "x", 10, 40)
+        self.assertEqual([issue.key for issue in result.issues], ["A-1"])
+
+
+class IssueTests(unittest.TestCase):
+    def test_parse_issue_reads_every_field(self):
+        issue = jira.parse_issue(issue_payload("A-1"))
+        self.assertEqual(issue.key, "A-1")
+        self.assertEqual(issue.summary, "Resumo A-1")
+        self.assertEqual(issue.status, "Em andamento")
+        self.assertEqual(issue.status_category, "indeterminate")
+        self.assertEqual(issue.assignee, "Ana")
+        self.assertEqual(issue.priority, "High")
+        self.assertEqual(issue.updated, datetime(2026, 10, 2, 11, 30, tzinfo=timezone.utc))
+
+    def test_parse_issue_handles_null_assignee_priority_and_unknown_category(self):
+        payload = issue_payload(
+            "A-1",
+            assignee=None,
+            priority=None,
+            status={"name": "Estranho", "statusCategory": {"key": "outra"}},
+        )
+        issue = jira.parse_issue(payload)
+        self.assertIsNone(issue.assignee)
+        self.assertIsNone(issue.priority)
+        self.assertEqual(issue.status_category, jira.UNKNOWN_CATEGORY)
+
+    def test_parse_issue_survives_missing_optional_fields(self):
+        payload = issue_payload("A-1", summary=None, status=None)
+        issue = jira.parse_issue(payload)
+        self.assertEqual(issue.summary, "")
+        self.assertEqual(issue.status, "")
+        self.assertEqual(issue.status_category, jira.UNKNOWN_CATEGORY)
+
+    def test_parse_issue_drops_invalid_created(self):
+        for created in ("ontem", None, 5):
+            self.assertIsNone(jira.parse_issue(issue_payload("A-1", created=created)))
+        self.assertIsNone(jira.parse_issue(issue_payload("A-1", updated="ontem")))
+
+    def test_parse_issue_drops_payloads_without_key_or_fields(self):
+        for payload in (None, "x", [], {}, {"key": "A-1"}, {"fields": {}}, {"key": "A-1", "fields": []}):
+            self.assertIsNone(jira.parse_issue(payload))
+
+    def test_issue_raw_round_trip(self):
+        issue = jira.parse_issue(issue_payload("A-1", assignee=None))
+        raw = json.loads(json.dumps(issue.to_raw()))
+        self.assertEqual(jira.Issue.from_raw(raw), issue)
 
 
 class _Handler(BaseHTTPRequestHandler):

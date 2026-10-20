@@ -8,10 +8,11 @@ import base64
 import http.client
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ HTTP_REDIRECT_FLOOR = 300
 REQUEST_TIMEOUT_SECONDS = 20
 MAXIMUM_RESPONSE_BYTES = 8 * 1024 * 1024
 MAXIMUM_ERROR_BODY_BYTES = 8 * 1024
+HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_TOO_MANY_REQUESTS = 429
@@ -43,6 +45,12 @@ DEFAULT_MAX_ISSUES = 100
 MAXIMUM_ISSUES = 500
 COLUMNS_SEPARATOR = ","
 ARGUMENT_ERROR_EXIT_CODE = 2
+SEARCH_PATH = "/rest/api/3/search/jql"
+SEARCH_FIELDS = "summary,status,assignee,priority,updated,created"
+MAXIMUM_PAGE_SIZE = 100
+MAXIMUM_QUERY_MESSAGE_LENGTH = 200
+STATUS_CATEGORIES = ("new", "indeterminate", "done")
+UNKNOWN_CATEGORY = "unknown"
 REMOVED_VARIABLES = (
     "JIRA_MODE",
     "JIRA_PROJECT",
@@ -216,6 +224,10 @@ class UnexpectedResponseError(JiraError):
     pass
 
 
+class QueryError(JiraError):
+    pass
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
         return None
@@ -265,6 +277,8 @@ class JiraClient:
     def _decode(self, status, body):
         if status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
             raise AuthError(f"credenciais inválidas para {self._config.site}")
+        if status == HTTP_BAD_REQUEST:
+            raise QueryError(_describe_query_failure(body))
         if status == HTTP_TOO_MANY_REQUESTS:
             raise RateLimitError("limite de requisições do Jira; tentando de novo mais tarde")
         if status >= HTTP_REDIRECT_FLOOR:
@@ -275,6 +289,16 @@ class JiraClient:
             raise UnexpectedResponseError("a resposta do Jira não é JSON") from None
 
 
+def _describe_query_failure(body):
+    prefix = "JQL inválido"
+    try:
+        messages = json.loads(body).get("errorMessages")
+    except (ValueError, AttributeError):
+        return prefix
+    if not isinstance(messages, list) or not messages or not isinstance(messages[0], str):
+        return prefix
+    first_message = messages[0].strip()[:MAXIMUM_QUERY_MESSAGE_LENGTH]
+    return f"{prefix}: {first_message}" if first_message else prefix
 
 def parse_timestamp(text):
     if not isinstance(text, str) or not text:
@@ -307,3 +331,130 @@ def flatten_text(text, limit):
     if limit <= 0:
         return ""
     return flattened[: limit - 1] + ELLIPSIS
+
+
+@dataclass(frozen=True)
+class Issue:
+    key: str
+    summary: str
+    status: str
+    status_category: str
+    assignee: str | None
+    priority: str | None
+    created: datetime
+    updated: datetime
+
+    def to_raw(self):
+        return {
+            "key": self.key,
+            "summary": self.summary,
+            "status": self.status,
+            "status_category": self.status_category,
+            "assignee": self.assignee,
+            "priority": self.priority,
+            "created": self.created.isoformat(),
+            "updated": self.updated.isoformat(),
+        }
+
+    @classmethod
+    def from_raw(cls, raw):
+        return cls(
+            key=raw["key"],
+            summary=raw["summary"],
+            status=raw["status"],
+            status_category=raw["status_category"],
+            assignee=raw["assignee"],
+            priority=raw["priority"],
+            created=parse_timestamp(raw["created"]),
+            updated=parse_timestamp(raw["updated"]),
+        )
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    issues: list[Issue]
+    has_more: bool
+
+
+def parse_issue(payload):
+    if not isinstance(payload, dict) or not isinstance(payload.get("key"), str):
+        return None
+    fields = payload.get("fields")
+    if not isinstance(fields, dict):
+        return None
+    created = parse_timestamp(fields.get("created"))
+    updated = parse_timestamp(fields.get("updated"))
+    if created is None or updated is None:
+        return None
+    status = fields.get("status")
+    status = status if isinstance(status, dict) else {}
+    return Issue(
+        key=payload["key"],
+        summary=_text_or_empty(fields.get("summary")),
+        status=_text_or_empty(status.get("name")),
+        status_category=_read_status_category(status),
+        assignee=_read_name(fields.get("assignee"), "displayName"),
+        priority=_read_name(fields.get("priority"), "name"),
+        created=created,
+        updated=updated,
+    )
+
+
+def _text_or_empty(value):
+    return value if isinstance(value, str) else ""
+
+
+def _read_name(entity, field_name):
+    if not isinstance(entity, dict):
+        return None
+    name = entity.get(field_name)
+    return name if isinstance(name, str) and name else None
+
+
+def _read_status_category(status):
+    category = status.get("statusCategory")
+    key = category.get("key") if isinstance(category, dict) else None
+    return key if key in STATUS_CATEGORIES else UNKNOWN_CATEGORY
+
+
+def search_issues(
+    client: JiraClient,
+    jql: str,
+    max_issues: int,
+    budget_seconds: int,
+    clock: Callable[[], float] = time.monotonic,
+) -> SearchResult:
+    started_at = clock()
+    issues: list[Issue] = []
+    page_token = None
+    while True:
+        if clock() - started_at > budget_seconds:
+            raise NetworkError("orçamento de tempo esgotado")
+        remaining = max_issues - len(issues)
+        payload = client.get_json(SEARCH_PATH, _search_params(jql, remaining, page_token))
+        page_issues = _parse_search_page(payload)
+        issues.extend(page_issues[:remaining])
+        page_token = payload.get("nextPageToken") or None
+        if len(issues) >= max_issues:
+            return SearchResult(issues, has_more=bool(page_token) or len(page_issues) > remaining)
+        if page_token is None:
+            return SearchResult(issues, has_more=False)
+
+
+def _search_params(jql, remaining, page_token):
+    params = {
+        "jql": jql,
+        "fields": SEARCH_FIELDS,
+        "maxResults": min(MAXIMUM_PAGE_SIZE, remaining),
+    }
+    if page_token:
+        params["nextPageToken"] = page_token
+    return params
+
+
+def _parse_search_page(payload):
+    raw_issues = payload.get("issues") if isinstance(payload, dict) else None
+    if not isinstance(raw_issues, list):
+        raise UnexpectedResponseError("a resposta de busca do Jira não tem a lista de issues")
+    parsed = (parse_issue(raw_issue) for raw_issue in raw_issues)
+    return [issue for issue in parsed if issue is not None]
