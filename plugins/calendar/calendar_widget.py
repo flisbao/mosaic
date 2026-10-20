@@ -26,7 +26,6 @@ USAGE_MESSAGE = "uso: calendar_widget.py snapshot\n"
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
 USAGE_EXIT_CODE = 2
-NOT_IMPLEMENTED_MESSAGE = "fonte ainda não implementada"
 
 SOURCE_ICS = "ics"
 SOURCE_GOA = "goa"
@@ -144,6 +143,35 @@ GOOGLE_UNAVAILABLE_MESSAGE = "não foi possível consultar a API do Google Agend
 ALL_ACCOUNTS_FAILED_MESSAGE = "nenhuma conta Google respondeu; veja a seção GOA do README"
 ACCOUNT_UNAVAILABLE_WARNING = "conta {email} indisponível"
 ATTENTION_NEEDED_WARNING = "conta {email} precisa entrar de novo em Configurações → Contas Online"
+GCALCLI_COMMAND = "gcalcli"
+GCALCLI_TIMEOUT_SECONDS = 15
+GCALCLI_NO_COLOR_OPTION = "--nocolor"
+GCALCLI_CALENDAR_OPTION = "--calendar"
+GCALCLI_AGENDA_COMMAND = "agenda"
+GCALCLI_AGENDA_OPTIONS = (
+    "--tsv",
+    "--nodeclined",
+    "--details",
+    "id",
+    "--details",
+    "calendar",
+    "--details",
+    "location",
+)
+GCALCLI_COLUMNS = ("id", "start_date", "start_time", "end_date", "end_time", "title", "location", "calendar")
+GCALCLI_REQUIRED_COLUMNS = ("start_date", "start_time", "end_date", "end_time", "title")
+GCALCLI_DATE_FORMAT = "%Y-%m-%d"
+GCALCLI_MIDNIGHT = "00:00"
+GCALCLI_ESCAPED_NEWLINE = "\\n"
+GCALCLI_ID_TEMPLATE = "{title}@{start}"
+GCALCLI_ERROR_LINE_LIMIT = 200
+GCALCLI_NO_ERROR_DETAIL = "sem detalhes"
+GCALCLI_FAILURE_MESSAGE = "gcalcli falhou: {detail}"
+GCALCLI_MISSING_BINARY_MESSAGE = "gcalcli não encontrado no PATH; veja a seção gcalcli do README"
+GCALCLI_NOT_RESPONDING_MESSAGE = "gcalcli não respondeu; rode `gcalcli init` no terminal (seção gcalcli do README)"
+GCALCLI_MISSING_COLUMNS_MESSAGE = "saída do gcalcli sem as colunas: {columns}"
+GCALCLI_SKIPPED_ROW_WARNING = "linha do gcalcli ignorada"
+TSV_SEPARATOR = "\t"
 
 MAXIMUM_RECURRENCE_ITERATIONS = 100_000
 MAXIMUM_ITEM_ID_LENGTH = 200
@@ -1221,8 +1249,142 @@ def _declined_by_self(item):
     )
 
 
-def gcalcli_source(config, now, window_end, zone):
-    raise SourceError(NOT_IMPLEMENTED_MESSAGE)
+def run_gcalcli(arguments):
+    completed = subprocess.run(
+        arguments,
+        capture_output=True,
+        text=True,
+        timeout=GCALCLI_TIMEOUT_SECONDS,
+        stdin=subprocess.DEVNULL,
+    )
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+def gcalcli_source(config, window_start, window_end, zone, run=run_gcalcli):
+    arguments = _gcalcli_arguments(config, window_start, window_end)
+    code, output, errors = _run_gcalcli(arguments, run)
+    if code != SUCCESS_EXIT_CODE:
+        raise SourceError(GCALCLI_FAILURE_MESSAGE.format(detail=_first_error_line(errors)))
+    return _gcalcli_result(output, zone)
+
+
+def _gcalcli_arguments(config, window_start, window_end):
+    calendar_options = [option for name in config.calendars for option in (GCALCLI_CALENDAR_OPTION, name)]
+    return [
+        GCALCLI_COMMAND,
+        GCALCLI_NO_COLOR_OPTION,
+        *calendar_options,
+        GCALCLI_AGENDA_COMMAND,
+        *GCALCLI_AGENDA_OPTIONS,
+        window_start.isoformat(timespec="minutes"),
+        window_end.isoformat(timespec="minutes"),
+    ]
+
+
+def _run_gcalcli(arguments, run):
+    try:
+        return run(arguments)
+    except FileNotFoundError:
+        raise SourceError(GCALCLI_MISSING_BINARY_MESSAGE) from None
+    except subprocess.TimeoutExpired:
+        raise SourceError(GCALCLI_NOT_RESPONDING_MESSAGE) from None
+
+
+def _first_error_line(errors):
+    for line in errors.splitlines():
+        if line.strip():
+            return line.strip()[:GCALCLI_ERROR_LINE_LIMIT]
+    return GCALCLI_NO_ERROR_DETAIL
+
+
+def _gcalcli_result(output, zone):
+    rows, columns = _tsv_table(output)
+    events, skipped_any = [], False
+    for fields in rows:
+        try:
+            events.append(_gcalcli_event(_gcalcli_row(fields, columns), zone))
+        except ValueError:
+            skipped_any = True
+    warnings = [GCALCLI_SKIPPED_ROW_WARNING] if skipped_any else []
+    return SourceResult(events=events, warnings=warnings)
+
+
+def _tsv_table(output):
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        return [], {}
+    header = [name.strip() for name in lines[0].split(TSV_SEPARATOR)]
+    _check_required_columns(header)
+    columns = {name: index for index, name in enumerate(header)}
+    return [line.split(TSV_SEPARATOR) for line in lines[1:]], columns
+
+
+def _check_required_columns(header):
+    missing = [name for name in GCALCLI_REQUIRED_COLUMNS if name not in header]
+    if missing:
+        raise SourceError(GCALCLI_MISSING_COLUMNS_MESSAGE.format(columns=", ".join(missing)))
+
+
+def _gcalcli_row(fields, columns):
+    return {name: _cell(fields, columns, name) for name in GCALCLI_COLUMNS}
+
+
+def _cell(fields, columns, name):
+    index = columns.get(name)
+    if index is None or index >= len(fields):
+        return ""
+    return fields[index]
+
+
+def _gcalcli_event(row, zone):
+    start, end, all_day = _gcalcli_span(row, zone)
+    title = _gcalcli_text(row["title"])
+    return Event(
+        id=row["id"] or GCALCLI_ID_TEMPLATE.format(title=title, start=start.isoformat()),
+        title=title,
+        start=start,
+        end=end,
+        all_day=all_day,
+        location=_gcalcli_text(row["location"]),
+        calendar=_gcalcli_text(row["calendar"]),
+    )
+
+
+def _gcalcli_span(row, zone):
+    if _is_all_day(row):
+        start_day = _gcalcli_day(row["start_date"])
+        start = datetime.combine(start_day, time.min, tzinfo=zone)
+        return start, _all_day_end(row, start, zone), True
+    start = _gcalcli_moment(row["start_date"], row["start_time"], zone)
+    end = _gcalcli_moment(row["end_date"], row["end_time"], zone)
+    return start, end, False
+
+
+def _is_all_day(row):
+    if not row["start_time"]:
+        return True
+    midnight_span = row["start_time"] == row["end_time"] == GCALCLI_MIDNIGHT
+    return midnight_span and row["end_date"] > row["start_date"]
+
+
+def _all_day_end(row, start, zone):
+    if not row["end_date"]:
+        return start + timedelta(days=1)
+    return datetime.combine(_gcalcli_day(row["end_date"]), time.min, tzinfo=zone)
+
+
+def _gcalcli_day(text):
+    return datetime.strptime(text, GCALCLI_DATE_FORMAT).date()
+
+
+def _gcalcli_moment(day_text, time_text, zone):
+    day = _gcalcli_day(day_text)
+    moment = datetime.strptime(time_text, TIME_FORMAT).time()
+    return datetime.combine(day, moment, tzinfo=zone)
+
+
+def _gcalcli_text(text):
+    return text.replace(GCALCLI_ESCAPED_NEWLINE, " ")
 
 
 DEFAULT_SOURCES = {

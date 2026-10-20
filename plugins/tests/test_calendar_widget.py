@@ -1253,18 +1253,6 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(stderr.getvalue(), "erro: x\n")
 
-    def test_placeholder_sources_report_not_implemented(self):
-        stderr = io.StringIO()
-        code = calendar_widget.main(
-            ["snapshot"],
-            environ={"CALENDAR_SOURCE": "gcalcli", "CALENDAR_GOA_ACCOUNT": "conta"},
-            now=NOW,
-            stdout=io.StringIO(),
-            stderr=stderr,
-        )
-        self.assertEqual(code, 1)
-        self.assertEqual(stderr.getvalue(), "erro: fonte ainda não implementada\n")
-
     def test_snapshot_prints_json_from_fake_source(self):
         received = []
 
@@ -1291,6 +1279,157 @@ class MainTests(unittest.TestCase):
         data = json.loads(output)
         self.assertEqual(data["summary"]["title"], "Minha agenda")
         self.assertEqual(summary_rows(data)[0]["text"], "Reunião")
+
+
+TSV_HEADER = "id\tstart_date\tstart_time\tend_date\tend_time\ttitle\tlocation\tcalendar"
+GCALCLI_MISSING_BINARY = "gcalcli não encontrado no PATH; veja a seção gcalcli do README"
+GCALCLI_NOT_RESPONDING = "gcalcli não respondeu; rode `gcalcli init` no terminal (seção gcalcli do README)"
+
+
+class FakeGcalcli:
+    def __init__(self, output="", code=0, stderr="", error=None):
+        self.output = output
+        self.code = code
+        self.stderr = stderr
+        self.error = error
+        self.calls = []
+
+    def __call__(self, arguments):
+        self.calls.append(list(arguments))
+        if self.error is not None:
+            raise self.error
+        return self.code, self.output, self.stderr
+
+
+def tsv(*rows, header=TSV_HEADER):
+    return "\n".join([header, *rows]) + "\n"
+
+
+def gcalcli_config(*calendars):
+    environ = {"CALENDAR_SOURCE": "gcalcli"}
+    if calendars:
+        environ["CALENDAR_CALENDARS"] = ",".join(calendars)
+    return calendar_widget.load_config(environ)
+
+
+def run_gcalcli_source(fake, config=None):
+    config = gcalcli_config() if config is None else config
+    return calendar_widget.gcalcli_source(config, NOW, WINDOW_END, ZONE, run=fake)
+
+
+class GcalcliSourceTests(unittest.TestCase):
+    def test_default_sources_point_to_gcalcli_source(self):
+        self.assertIs(calendar_widget.DEFAULT_SOURCES[calendar_widget.SOURCE_GCALCLI], calendar_widget.gcalcli_source)
+
+    def test_builds_command_with_calendar_options_before_agenda(self):
+        fake = FakeGcalcli(output=tsv())
+        run_gcalcli_source(fake, gcalcli_config("Trabalho", "Pessoal"))
+        self.assertEqual(
+            fake.calls,
+            [[
+                "gcalcli", "--nocolor", "--calendar", "Trabalho", "--calendar", "Pessoal",
+                "agenda", "--tsv", "--nodeclined",
+                "--details", "id", "--details", "calendar", "--details", "location",
+                "2026-10-20T10:00-03:00", "2026-10-26T00:00-03:00",
+            ]],
+        )
+
+    def test_parses_tsv_by_header_names(self):
+        header = "title\tcalendar\tend_time\tstart_time\tend_date\tstart_date\tlocation\tid"
+        row = "Reunião\tTrabalho\t15:00\t14:00\t2026-10-20\t2026-10-20\tSala 1\tabc"
+        result = run_gcalcli_source(FakeGcalcli(output=tsv(row, header=header)))
+        self.assertEqual(
+            [(e.id, e.title, e.start, e.end, e.all_day, e.location, e.calendar) for e in result.events],
+            [("abc", "Reunião", at(20, 14), at(20, 15), False, "Sala 1", "Trabalho")],
+        )
+        self.assertEqual(result.warnings, [])
+
+    def test_all_day_rows(self):
+        rows = [
+            "d1\t2026-10-21\t\t2026-10-22\t\tFeriado\t\t",
+            "d2\t2026-10-22\t00:00\t2026-10-24\t00:00\tViagem\t\t",
+            "d3\t2026-10-23\t\t\t\tAniversário\t\t",
+        ]
+        result = run_gcalcli_source(FakeGcalcli(output=tsv(*rows)))
+        self.assertEqual(
+            [(e.id, e.start, e.end, e.all_day) for e in result.events],
+            [
+                ("d1", at(21, 0), at(22, 0), True),
+                ("d2", at(22, 0), at(24, 0), True),
+                ("d3", at(23, 0), at(24, 0), True),
+            ],
+        )
+
+    def test_missing_id_uses_title_and_start(self):
+        row = "\t2026-10-20\t14:00\t2026-10-20\t15:00\tReunião\t\t"
+        result = run_gcalcli_source(FakeGcalcli(output=tsv(row)))
+        self.assertEqual(result.events[0].id, f"Reunião@{at(20, 14).isoformat()}")
+
+    def test_escaped_newlines_in_title_become_spaces(self):
+        row = "e1\t2026-10-20\t14:00\t2026-10-20\t15:00\tLinha 1\\nLinha 2\t\t"
+        result = run_gcalcli_source(FakeGcalcli(output=tsv(row)))
+        self.assertEqual(result.events[0].title, "Linha 1 Linha 2")
+
+    def test_empty_output_yields_no_events(self):
+        result = run_gcalcli_source(FakeGcalcli(output=""))
+        self.assertEqual((result.events, result.warnings), ([], []))
+
+    def test_header_only_output_yields_no_events(self):
+        result = run_gcalcli_source(FakeGcalcli(output=tsv()))
+        self.assertEqual((result.events, result.warnings), ([], []))
+
+    def test_missing_required_columns_is_an_error(self):
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_gcalcli_source(FakeGcalcli(output=tsv(header="id\ttitle")))
+        self.assertEqual(
+            str(context.exception),
+            "saída do gcalcli sem as colunas: start_date, start_time, end_date, end_time",
+        )
+
+    def test_unparseable_rows_are_skipped_with_one_warning(self):
+        rows = [
+            "b1\tdata-ruim\t14:00\t2026-10-20\t15:00\tRuim\t\t",
+            "b2\t2026-10-20\t25:99\t2026-10-20\t15:00\tOutra ruim\t\t",
+            "g1\t2026-10-20\t16:00\t2026-10-20\t17:00\tBoa\t\t",
+        ]
+        result = run_gcalcli_source(FakeGcalcli(output=tsv(*rows)))
+        self.assertEqual([e.id for e in result.events], ["g1"])
+        self.assertEqual(result.warnings, ["linha do gcalcli ignorada"])
+
+    def test_missing_binary_names_the_readme_section(self):
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_gcalcli_source(FakeGcalcli(error=FileNotFoundError()))
+        self.assertEqual(str(context.exception), GCALCLI_MISSING_BINARY)
+
+    def test_timeout_suggests_init(self):
+        error = subprocess.TimeoutExpired(["gcalcli"], calendar_widget.GCALCLI_TIMEOUT_SECONDS)
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_gcalcli_source(FakeGcalcli(error=error))
+        self.assertEqual(str(context.exception), GCALCLI_NOT_RESPONDING)
+
+    def test_nonzero_exit_uses_first_stderr_line_truncated(self):
+        stderr = "\n" + "x" * 300 + "\nsegunda linha"
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_gcalcli_source(FakeGcalcli(code=1, stderr=stderr))
+        self.assertEqual(str(context.exception), "gcalcli falhou: " + "x" * 200)
+
+    def test_nonzero_exit_without_stderr_has_fallback_detail(self):
+        with self.assertRaises(calendar_widget.SourceError) as context:
+            run_gcalcli_source(FakeGcalcli(code=1, stderr=""))
+        self.assertEqual(str(context.exception), "gcalcli falhou: sem detalhes")
+
+    def test_run_gcalcli_uses_timeout_and_closed_stdin(self):
+        completed = subprocess.CompletedProcess(["gcalcli", "agenda"], 0, stdout="saída", stderr="aviso")
+        with mock.patch("calendar_widget.subprocess.run", return_value=completed) as run:
+            result = calendar_widget.run_gcalcli(["gcalcli", "agenda"])
+        run.assert_called_once_with(
+            ["gcalcli", "agenda"],
+            capture_output=True,
+            text=True,
+            timeout=calendar_widget.GCALCLI_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+        )
+        self.assertEqual(result, (0, "saída", "aviso"))
 
 
 if __name__ == "__main__":
