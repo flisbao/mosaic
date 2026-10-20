@@ -168,10 +168,13 @@ pub fn run_process(
         limits.maximum_output_bytes.min(MAXIMUM_ERROR_BYTES),
         OverflowPolicy::Truncate,
     );
+    let group_id = child.id();
     let status = wait_for_exit(&mut child, &stdout, limits, deadline, cancel)?;
 
-    let stdout_bytes = join_output(stdout, limits, deadline, cancel)?;
-    let stderr_bytes = join_output(stderr, limits, deadline, cancel)?;
+    let stdout_bytes = join_output(stdout, limits, deadline, cancel)
+        .inspect_err(|_| signal_process_group(group_id))?;
+    let stderr_bytes = join_output(stderr, limits, deadline, cancel)
+        .inspect_err(|_| signal_process_group(group_id))?;
     if !status.success() {
         return Err(failure_error(status, &stderr_bytes));
     }
@@ -776,6 +779,16 @@ mod tests {
         let started = Instant::now();
         let error = run(shell(&grandchild_script(&pid_file)), None, &limits(2, 1024)).unwrap_err();
         assert!(started.elapsed() < WAIT_LIMIT);
+        assert!(error.to_string().contains("tempo"), "{error}");
+        assert!(wait_until_gone(&read_grandchild_pid(&pid_file)));
+    }
+
+    #[test]
+    fn timeout_kills_group_members_after_leader_exits() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid.txt");
+        let script = format!("sleep 30 & echo $! > '{}'; echo '{{}}'", pid_file.display());
+        let error = run(shell(&script), None, &limits(1, 1024)).unwrap_err();
         assert!(error.to_string().contains("tempo"), "{error}");
         assert!(wait_until_gone(&read_grandchild_pid(&pid_file)));
     }
