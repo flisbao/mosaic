@@ -30,6 +30,7 @@ use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
+use mosaic::infrastructure::concurrency_gate::ConcurrencyGate;
 use mosaic::infrastructure::config::{
     config_directory, load_config, prepare_reload, read_installed_config, restart_sections,
     retain_restart_sections, AppConfig, ConfigError, LlmConfig, WidgetSettings,
@@ -37,7 +38,7 @@ use mosaic::infrastructure::config::{
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::build_llm_runner;
 use mosaic::infrastructure::notifiers::{BellNotifier, CommandNotifier, CompositeNotifier};
-use mosaic::infrastructure::plugin_runner::PluginRunner;
+use mosaic::infrastructure::plugin_runner::{PluginRunner, MAXIMUM_CONCURRENT_PARSES};
 use mosaic::infrastructure::priority_prompt::FilePriorityPrompt;
 use mosaic::infrastructure::recommendation_file::{
     FileRecommendationStore, NullRecommendationStore,
@@ -215,11 +216,12 @@ fn build_services(
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
     let working_directory = directory.to_path_buf();
+    let parse_gate = Arc::new(ConcurrencyGate::new(MAXIMUM_CONCURRENT_PARSES));
     let factory: RunnerFactory = Box::new(move |spec| {
-        Arc::new(PluginRunner::new(
-            spec.command.clone(),
-            working_directory.clone(),
-        )) as Arc<dyn WidgetRunner>
+        Arc::new(
+            PluginRunner::new(spec.command.clone(), working_directory.clone())
+                .with_parse_gate(Arc::clone(&parse_gate)),
+        ) as Arc<dyn WidgetRunner>
     });
     let mut runtime = WidgetRuntime::new(
         factory,

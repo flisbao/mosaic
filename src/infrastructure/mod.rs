@@ -1,5 +1,6 @@
 pub mod app_paths;
 pub mod child_environment;
+pub mod concurrency_gate;
 pub mod config;
 pub mod default_files;
 pub mod llm_cli;
