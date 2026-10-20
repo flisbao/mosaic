@@ -66,6 +66,31 @@ pub enum Command {
     SendRecommendation(RecommendationPlan),
 }
 
+struct Transition {
+    mode: Mode,
+    command: Option<Command>,
+}
+
+impl Transition {
+    fn to(mode: Mode) -> Self {
+        Self {
+            mode,
+            command: None,
+        }
+    }
+
+    fn idle() -> Self {
+        Self::to(Mode::Browsing)
+    }
+
+    fn emit(command: Command) -> Self {
+        Self {
+            mode: Mode::Browsing,
+            command: Some(command),
+        }
+    }
+}
+
 pub struct AppState {
     entries: Vec<WidgetEntry>,
     tabs: Vec<TabView>,
@@ -267,20 +292,19 @@ impl AppState {
         if self.alerts.dismiss_front() {
             return None;
         }
-        match std::mem::replace(&mut self.mode, Mode::Browsing) {
+        let transition = match self.mode.clone() {
             Mode::Browsing => self.handle_browsing_key(key),
-            Mode::ChoosingAction { selected } => {
-                self.handle_action_menu_key(key, selected);
-                None
-            }
+            Mode::ChoosingAction { selected } => self.handle_action_menu_key(key, selected),
             Mode::Confirming(proposed) => self.handle_confirmation_key(key, proposed),
             Mode::ConfirmingSend { text, plan } => {
                 self.handle_send_confirmation_key(key, text, plan)
             }
-        }
+        };
+        self.mode = transition.mode;
+        transition.command
     }
 
-    fn handle_browsing_key(&mut self, key: KeyInput) -> Option<Command> {
+    fn handle_browsing_key(&mut self, key: KeyInput) -> Transition {
         match key {
             KeyInput::Character(letter) => self.handle_character(letter),
             KeyInput::Tab
@@ -296,49 +320,46 @@ impl AppState {
             | KeyInput::Home
             | KeyInput::End => {
                 self.handle_navigation_key(key);
-                None
+                Transition::idle()
             }
         }
     }
 
-    fn handle_character(&mut self, letter: char) -> Option<Command> {
+    fn handle_character(&mut self, letter: char) -> Transition {
         match letter {
-            'r' => Some(Command::RefreshAll),
-            'R' => Some(Command::ReloadConfig),
-            'q' => Some(Command::Quit),
+            'r' => Transition::emit(Command::RefreshAll),
+            'R' => Transition::emit(Command::ReloadConfig),
+            'q' => Transition::emit(Command::Quit),
             'i' => self.request_recommendation(),
             'p' => {
                 self.toggle_pomodoro();
-                None
+                Transition::idle()
             }
             'x' => {
                 self.reset_pomodoro();
-                None
+                Transition::idle()
             }
-            'a' => {
-                self.open_action_menu();
-                None
-            }
+            'a' => Transition::to(self.open_action_menu()),
             other => {
                 self.handle_selection_character(other);
-                None
+                Transition::idle()
             }
         }
     }
 
-    fn request_recommendation(&mut self) -> Option<Command> {
+    fn request_recommendation(&mut self) -> Transition {
         if self.ia_is_loading() {
             self.notice = Some(IA_BUSY_NOTICE.to_string());
-            None
+            Transition::idle()
         } else {
-            Some(Command::RequestRecommendation)
+            Transition::emit(Command::RequestRecommendation)
         }
     }
 
-    fn handle_action_menu_key(&mut self, key: KeyInput, selected: usize) {
+    fn handle_action_menu_key(&mut self, key: KeyInput, selected: usize) -> Transition {
         let actions = self.available_actions();
         let last = actions.len().saturating_sub(1);
-        self.mode = match key {
+        Transition::to(match key {
             KeyInput::Down => Mode::ChoosingAction {
                 selected: (selected + 1).min(last),
             },
@@ -351,28 +372,21 @@ impl AppState {
             },
             KeyInput::Escape | KeyInput::Character('n') => Mode::Browsing,
             _ => Mode::ChoosingAction { selected },
-        };
+        })
     }
 
-    fn handle_confirmation_key(
-        &mut self,
-        key: KeyInput,
-        proposed: ProposedAction,
-    ) -> Option<Command> {
+    fn handle_confirmation_key(&mut self, key: KeyInput, proposed: ProposedAction) -> Transition {
         match key {
             KeyInput::Character('s') => {
                 let confirmed = proposed.confirm();
                 if !self.pending_actions.insert(confirmed.widget().clone()) {
                     self.show_notice(ACTION_PENDING_NOTICE.to_string());
-                    return None;
+                    return Transition::idle();
                 }
-                Some(Command::Execute(confirmed))
+                Transition::emit(Command::Execute(confirmed))
             }
-            KeyInput::Escape | KeyInput::Character('n') => None,
-            _ => {
-                self.mode = Mode::Confirming(proposed);
-                None
-            }
+            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
+            _ => Transition::to(Mode::Confirming(proposed)),
         }
     }
 
@@ -381,14 +395,11 @@ impl AppState {
         key: KeyInput,
         text: String,
         plan: RecommendationPlan,
-    ) -> Option<Command> {
+    ) -> Transition {
         match key {
-            KeyInput::Character('s') => Some(Command::SendRecommendation(plan)),
-            KeyInput::Escape | KeyInput::Character('n') => None,
-            _ => {
-                self.mode = Mode::ConfirmingSend { text, plan };
-                None
-            }
+            KeyInput::Character('s') => Transition::emit(Command::SendRecommendation(plan)),
+            KeyInput::Escape | KeyInput::Character('n') => Transition::idle(),
+            _ => Transition::to(Mode::ConfirmingSend { text, plan }),
         }
     }
 
@@ -427,11 +438,12 @@ impl AppState {
         }
     }
 
-    fn open_action_menu(&mut self) {
+    fn open_action_menu(&mut self) -> Mode {
         if self.available_actions().is_empty() {
             self.notice = Some(NO_ACTIONS_NOTICE.to_string());
+            Mode::Browsing
         } else {
-            self.mode = Mode::ChoosingAction { selected: 0 };
+            Mode::ChoosingAction { selected: 0 }
         }
     }
 
@@ -653,6 +665,30 @@ mod tests {
             title: title.to_string(),
             body: String::new(),
         }
+    }
+
+    #[test]
+    fn irrelevant_key_preserves_every_modal_mode() {
+        let mut confirming = app_confirming_move_of_second_item();
+        let before = confirming.mode().clone();
+        assert_eq!(confirming.handle_key(character('z')), None);
+        assert_eq!(confirming.mode(), &before);
+
+        let mut sending = app();
+        sending.ask_send_confirmation("enviar?".to_string(), plan());
+        let before = sending.mode().clone();
+        assert_eq!(sending.handle_key(character('z')), None);
+        assert_eq!(sending.mode(), &before);
+
+        let mut choosing = app();
+        press(
+            &mut choosing,
+            &[KeyInput::Enter, KeyInput::Down, character('a')],
+        );
+        let before = choosing.mode().clone();
+        assert!(matches!(before, Mode::ChoosingAction { .. }));
+        assert_eq!(choosing.handle_key(character('z')), None);
+        assert_eq!(choosing.mode(), &before);
     }
 
     #[test]
