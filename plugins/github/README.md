@@ -6,14 +6,14 @@
 
 O widget tem duas seções, sempre com estes nomes:
 
-- **Aguardando minha revisão**: PRs em que você foi pedido como revisor, ou que você já revisou e continuam abertos. PRs já aprovados por você saem da lista.
+- **Aguardando minha revisão**: PRs em que pediram a sua revisão, ou em que você pediu mudanças (e continuam abertos). PRs que você aprovou saem da lista, a menos que peçam a sua revisão de novo. PRs que você só comentou não aparecem.
 - **Meus PRs**: PRs que você abriu.
 
 Cada item leva uma tag:
 
 | Seção | Tag | Quando aparece |
 | --- | --- | --- |
-| Aguardando minha revisão | `novo` | Você ainda não revisou o PR |
+| Aguardando minha revisão | `novo` | Você ainda não revisou o PR, ou aprovou e pediram a sua revisão de novo |
 | Aguardando minha revisão | `push novo` | O autor fez push depois da sua última revisão (o item vem com a flag `updated`) |
 | Aguardando minha revisão | nenhuma | Você já revisou e não houve push depois |
 | Meus PRs | `conflito` | O PR tem conflito com a base |
@@ -82,19 +82,26 @@ mosaic check --cwd ~/.config/mosaic \
   python3 plugins/github/github_prs.py
 ```
 
-Sem rede e sem conta, use o servidor falso dos testes. Ele imprime a porta na primeira linha e aceita o token definido em `FAKE_PR_TOKEN`:
+Sem rede e sem conta, use o servidor falso dos testes. Ele imprime a porta na primeira linha e aceita o token definido em `FAKE_PR_TOKEN`. Rode os comandos a partir da raiz do repositório:
 
 ```sh
-FAKE_PR_TOKEN=segredo python3 plugins/tests/fake_pull_request_server.py > /tmp/porta.txt &
-PORTA=$(head -1 /tmp/porta.txt)
+ARQUIVO_PORTA=$(mktemp)
+FAKE_PR_TOKEN=segredo python3 plugins/tests/fake_pull_request_server.py > "$ARQUIVO_PORTA" &
+PID_SERVIDOR=$!
+until [ -s "$ARQUIVO_PORTA" ]; do sleep 0.1; done
+PORTA=$(head -1 "$ARQUIVO_PORTA")
 export FAKE_TOKEN=segredo
-mosaic check --cwd ~/.config/mosaic \
+mosaic check \
   --env GITHUB_API_URL=http://127.0.0.1:$PORTA \
   --env GITHUB_TOKEN_ENV=FAKE_TOKEN \
   --env GITHUB_STATE_DIR="$(mktemp -d)" \
   python3 plugins/github/github_prs.py
-kill %1
+kill "$PID_SERVIDOR"
 ```
+
+## Estado
+
+Cada widget guarda o seu estado (memória das revisões e cache offline) num arquivo próprio em `GITHUB_STATE_DIR`. O nome do arquivo é um hash da URL da API, de `GITHUB_OWNERS`, da origem do token (o nome da variável ou o caminho do arquivo) e de `GITHUB_TITLE`. O token nunca entra na chave nem no arquivo. Trocar o título, os donos ou a origem do token cria outro arquivo: a memória do `push novo` e o cache offline começam vazios.
 
 ## Limitações
 

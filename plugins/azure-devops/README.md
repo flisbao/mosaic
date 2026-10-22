@@ -82,20 +82,27 @@ mosaic check --cwd ~/.config/mosaic \
   python3 plugins/azure-devops/azure_devops.py
 ```
 
-Sem rede e sem conta, use o servidor falso dos testes. Ele imprime a porta na primeira linha e aceita o token definido em `FAKE_PR_TOKEN`:
+Sem rede e sem conta, use o servidor falso dos testes. Ele imprime a porta na primeira linha e aceita o token definido em `FAKE_PR_TOKEN`. Rode os comandos a partir da raiz do repositório:
 
 ```sh
-FAKE_PR_TOKEN=segredo python3 plugins/tests/fake_pull_request_server.py > /tmp/porta.txt &
-PORTA=$(head -1 /tmp/porta.txt)
+ARQUIVO_PORTA=$(mktemp)
+FAKE_PR_TOKEN=segredo python3 plugins/tests/fake_pull_request_server.py > "$ARQUIVO_PORTA" &
+PID_SERVIDOR=$!
+until [ -s "$ARQUIVO_PORTA" ]; do sleep 0.1; done
+PORTA=$(head -1 "$ARQUIVO_PORTA")
 export FAKE_TOKEN=segredo
-mosaic check --cwd ~/.config/mosaic \
+mosaic check \
   --env AZDO_BASE_URL=http://127.0.0.1:$PORTA \
   --env AZDO_ORGANIZATION=org \
   --env AZDO_TOKEN_ENV=FAKE_TOKEN \
   --env AZDO_STATE_DIR="$(mktemp -d)" \
   python3 plugins/azure-devops/azure_devops.py
-kill %1
+kill "$PID_SERVIDOR"
 ```
+
+## Estado
+
+Cada widget guarda o seu estado (memória das revisões e cache offline) num arquivo próprio em `AZDO_STATE_DIR`. O nome do arquivo é um hash da URL base, da organização, de `AZDO_PROJECTS`, da origem do token (o nome da variável ou o caminho do arquivo) e de `AZDO_TITLE`. O token nunca entra na chave nem no arquivo. Trocar o título, a organização, os projetos ou a origem do token cria outro arquivo: a memória do `push novo` e o cache offline começam vazios.
 
 ## Limitações
 
