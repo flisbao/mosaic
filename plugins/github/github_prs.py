@@ -103,6 +103,9 @@ ARGUMENT_ERROR_EXIT_CODE = 2
 FAILURE_EXIT_CODE = 1
 USAGE_MESSAGE = "uso: github_prs.py snapshot"
 SNAPSHOT_COMMAND = ["snapshot"]
+STATE_KEY_SEPARATOR = "\n"
+TOKEN_VARIABLE_KEY = f"{TOKEN_PREFIX}_TOKEN_ENV"
+TOKEN_FILE_KEY = f"{TOKEN_PREFIX}_TOKEN_FILE"
 
 
 class ConfigError(Exception):
@@ -587,7 +590,7 @@ def build_snapshot(pull_requests: list[PullRequest], title: str, now: datetime) 
             {"heading": MINE_SECTION, "items": [_detail_item(pull, now) for pull in mine]},
         ],
         "mini": _mini_block(review),
-        "alerts": [_alert(pull) for pull in review],
+        "alerts": [_alert(pull) for pull in review if pull.state],
     }
 
 
@@ -703,6 +706,19 @@ class StateStore:
             return
 
 
+def state_key(config: GitHubConfig, environ: Mapping[str, str]) -> str:
+    return STATE_KEY_SEPARATOR.join(
+        (config.api_url, OWNERS_SEPARATOR.join(config.owners), _token_source(environ), config.title)
+    )
+
+
+def _token_source(environ: Mapping[str, str]) -> str:
+    variable = environ.get(TOKEN_VARIABLE_KEY, "").strip()
+    if variable:
+        return f"env:{variable}"
+    return f"file:{environ.get(TOKEN_FILE_KEY, '').strip()}"
+
+
 def _empty_state() -> dict:
     return {"reviews": {}, "snapshot": None, "saved_at": None}
 
@@ -748,9 +764,16 @@ def run_snapshot(
 def _cached_snapshot(state: dict) -> tuple[dict, datetime] | None:
     snapshot = state.get("snapshot")
     saved_at = parse_timestamp(state.get("saved_at"))
-    if not isinstance(snapshot, dict) or saved_at is None:
+    if not _has_summary_blocks(snapshot) or saved_at is None:
         return None
     return snapshot, saved_at
+
+
+def _has_summary_blocks(snapshot: object) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    summary = snapshot.get("summary")
+    return isinstance(summary, dict) and isinstance(summary.get("blocks"), list)
 
 
 def _print_json(stdout, document: dict) -> None:
@@ -780,7 +803,7 @@ def main(
         config = load_config(environ)
     except ConfigError as error:
         return _fail(stderr, error)
-    store = StateStore(config.state_dir, config.api_url)
+    store = StateStore(config.state_dir, state_key(config, environ))
     client = GitHubClient(config, http)
     moment = now if now is not None else datetime.now(timezone.utc)
     return run_snapshot(

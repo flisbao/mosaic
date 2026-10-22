@@ -470,6 +470,12 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["summary"]["blocks"][0]["type"], "stat")
 
 
+    def test_reviewed_items_have_no_alert(self):
+        pulls = [pull("a", REVIEW, state="novo"), pull("b", REVIEW, state="")]
+        alerts = github_prs.build_snapshot(pulls, "GitHub", NOW)["alerts"]
+        self.assertEqual([alert["id"] for alert in alerts], ["review-a"])
+
+
 class StateStoreTests(unittest.TestCase):
     def test_round_trip_and_private_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -563,6 +569,31 @@ class MainTests(unittest.TestCase):
             self.assertNotIn(SECRET, path.read_text(encoding="utf-8"))
         self.assertNotIn(SECRET, self.stdout.getvalue())
         self.assertNotIn(SECRET, self.stderr.getvalue())
+
+
+    def test_widgets_with_different_owners_have_separate_state_files(self):
+        self.run_main(FakeHttp([(200, fixtures.github_response())]), GITHUB_OWNERS="acme")
+        self.run_main(FakeHttp([(200, fixtures.github_response())]), GITHUB_OWNERS="outra")
+        self.assertEqual(len(list(self.state_dir.glob("*.json"))), 2)
+
+    def test_offline_widget_never_shows_another_widgets_snapshot(self):
+        self.run_main(FakeHttp([(200, fixtures.github_response())]), GITHUB_OWNERS="acme")
+        self.stdout = io.StringIO()
+        self.assertEqual(self.run_main(FakeHttp(error=OSError("sem rede")), GITHUB_OWNERS="outra"), 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+
+    def test_cached_state_without_valid_summary_is_not_served(self):
+        self.populate_cache()
+        state_file = next(self.state_dir.glob("*.json"))
+        state_file.write_text(
+            json.dumps({"reviews": {}, "snapshot": {}, "saved_at": "2026-10-22T12:00:00+00:00"}),
+            encoding="utf-8",
+        )
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+        self.assertEqual(self.run_main(FakeHttp(error=OSError("sem rede"))), 1)
+        self.assertTrue(self.stderr.getvalue().startswith("erro: "))
 
 
 if __name__ == "__main__":
