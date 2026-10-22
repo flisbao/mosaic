@@ -6,7 +6,7 @@
 
 O widget tem duas seções, sempre com estes nomes:
 
-- **Aguardando minha revisão**: merge requests abertos em que você foi pedido como revisor. Os que você aprovou saem da lista.
+- **Aguardando minha revisão**: merge requests abertos em que você foi pedido como revisor e que não foram criados por você. Os que você aprovou saem da lista.
 - **Meus PRs**: merge requests abertos que você abriu.
 
 Cada item leva uma tag:
@@ -111,7 +111,7 @@ Cada widget guarda o seu estado (memória das revisões e cache offline) num arq
 
 ## Quando a API não responde
 
-Se a rede falhar, a API responder com erro inesperado ou o limite de requisições do GitLab estourar, o widget mostra o último resultado bom com o aviso `dados de HH:MM (offline)`. Sem nenhum resultado guardado, mostra o erro. Token inválido ou sem permissão **não** usa o cache: o widget mostra `erro: token inválido ou sem permissão para GitLab`.
+Se a rede falhar, a API responder com erro inesperado ou o limite de requisições do GitLab estourar, o widget mostra o último resultado bom com o aviso `dados de HH:MM (offline)` (`dados de DD/MM HH:MM (offline)` quando o resultado não é de hoje). Sem nenhum resultado guardado, mostra o erro. Erros permanentes **não** usam o cache e aparecem como `erro: ...`: token inválido ou sem permissão para GitLab, requisição recusada (HTTP 400, 404 ou 410), consulta recusada pelo GitLab. Nesses casos, confira a configuração do widget e a versão do plugin.
 
 ## Roteiro de teste manual
 

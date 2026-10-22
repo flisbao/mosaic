@@ -62,7 +62,7 @@ Vão em `[widgets.env]` (o token, por `inherit_env` ou `AZDO_TOKEN_FILE`).
 | Variável | Padrão | O que faz |
 | --- | --- | --- |
 | `AZDO_ORGANIZATION` | obrigatória | Nome da organização, ex.: `minha-org` (só o nome, sem URL) |
-| `AZDO_PROJECTS` | vazio | Projetos separados por vírgula. Vazio = todos os projetos da organização |
+| `AZDO_PROJECTS` | vazio | Projetos separados por vírgula, sem diferenciar maiúsculas de minúsculas. Vazio = todos os projetos da organização |
 | `AZDO_TOKEN_ENV` | | Nome da variável de ambiente que contém o PAT |
 | `AZDO_TOKEN_FILE` | | Caminho de um arquivo com o PAT (alternativa a `AZDO_TOKEN_ENV`) |
 | `AZDO_TITLE` | `Azure DevOps` | Título do widget |
@@ -115,7 +115,7 @@ Cada widget guarda o seu estado (memória das revisões e cache offline) num arq
 
 ## Quando a API não responde
 
-Se a rede falhar, a API responder com erro inesperado ou o limite de requisições do Azure DevOps estourar, o widget mostra o último resultado bom com o aviso `dados de HH:MM (offline)`. Sem nenhum resultado guardado, mostra o erro. Token inválido ou sem permissão **não** usa o cache: o widget mostra `erro: token inválido ou sem permissão para Azure DevOps`.
+Se a rede falhar, a API responder com erro inesperado ou o limite de requisições do Azure DevOps estourar, o widget mostra o último resultado bom com o aviso `dados de HH:MM (offline)` (`dados de DD/MM HH:MM (offline)` quando o resultado não é de hoje). Sem nenhum resultado guardado, mostra o erro. Erros permanentes **não** usam o cache e aparecem como `erro: ...`: token inválido ou sem permissão para Azure DevOps, requisição recusada (HTTP 400, 404 ou 410; um 404 no primeiro acesso indica `AZDO_ORGANIZATION` errada). Nesses casos, confira a configuração do widget e a versão do plugin.
 
 ## Roteiro de teste manual
 
