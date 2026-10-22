@@ -133,6 +133,9 @@ class ClientTests(unittest.TestCase):
             (401, github_prs.AuthError),
             (403, github_prs.AuthError),
             (429, github_prs.RateLimitError),
+            (400, github_prs.RequestRejectedError),
+            (404, github_prs.RequestRejectedError),
+            (410, github_prs.RequestRejectedError),
             (500, github_prs.UnexpectedResponseError),
         ]
         for status, error in cases:
@@ -144,10 +147,19 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(github_prs.RateLimitError):
             make_client(FakeHttp([(403, body)])).query("q", {})
 
-    def test_graphql_errors_without_data_are_unexpected(self):
-        http = FakeHttp([(200, {"errors": [{"message": "x"}], "data": None})])
-        with self.assertRaises(github_prs.UnexpectedResponseError):
+    def test_graphql_errors_without_data_are_rejected(self):
+        http = FakeHttp([(200, {"errors": [{"message": SECRET}], "data": None})])
+        with self.assertRaises(github_prs.RequestRejectedError) as caught:
             make_client(http).query("q", {})
+        self.assertEqual(str(caught.exception), "o GitHub recusou a consulta; o plugin pode estar desatualizado")
+
+    def test_graphql_without_errors_and_without_data_is_unexpected(self):
+        with self.assertRaises(github_prs.UnexpectedResponseError):
+            make_client(FakeHttp([(200, {})])).query("q", {})
+
+    def test_graphql_errors_with_data_keep_the_data(self):
+        payload = {"errors": [{"message": "parcial"}], "data": {"viewer": {"login": "eu"}}}
+        self.assertEqual(make_client(FakeHttp([(200, payload)])).query("q", {}), {"viewer": {"login": "eu"}})
 
     def test_graphql_rate_limited_error_type_is_rate_limit(self):
         http = FakeHttp([(200, {"errors": [{"type": "RATE_LIMITED", "message": "x"}]})])
@@ -177,6 +189,23 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(github_prs.NetworkError) as caught:
             make_client(FakeHttp(error=OSError(f"falha {SECRET}"))).query("q", {})
         self.assertNotIn(SECRET, str(caught.exception))
+
+
+class DecodeResponseTests(unittest.TestCase):
+    def test_permanent_rejections_have_a_fixed_message(self):
+        for status in (400, 404, 410):
+            body = json.dumps({"message": SECRET}).encode()
+            with self.assertRaises(github_prs.RequestRejectedError, msg=status) as caught:
+                github_prs.decode_response(status, body, "GitHub")
+            self.assertEqual(
+                str(caught.exception),
+                f"o GitHub recusou a requisição (HTTP {status}); confira a configuração do widget",
+            )
+
+    def test_transient_statuses_are_not_permanent_rejections(self):
+        for status in (500, 502, 503):
+            with self.assertRaises(github_prs.UnexpectedResponseError, msg=status):
+                github_prs.decode_response(status, b"{}", "GitHub")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -557,6 +586,18 @@ class MainTests(unittest.TestCase):
             snapshot["summary"]["blocks"][0],
             {"type": "lines", "lines": [{"text": expected, "tone": "warn"}]},
         )
+
+    def test_main_permanent_errors_are_not_masked_by_the_cache(self):
+        rejected_query = (200, {"errors": [{"message": SECRET}], "data": None})
+        for response in (rejected_query, (401, {"message": SECRET})):
+            with self.subTest(status=response[0]):
+                self.populate_cache()
+                self.stderr = io.StringIO()
+                self.assertEqual(self.run_main(FakeHttp([response])), 1)
+                self.assertEqual(self.stdout.getvalue(), "")
+                self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+                self.assertNotIn("offline", self.stderr.getvalue())
+                self.assertNotIn(SECRET, self.stderr.getvalue())
 
     def test_main_network_error_without_cache_exits_one(self):
         code = self.run_main(FakeHttp(error=OSError("sem rede")))

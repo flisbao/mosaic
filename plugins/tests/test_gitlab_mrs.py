@@ -96,9 +96,36 @@ class ClientTests(unittest.TestCase):
 
     def test_graphql_errors_never_contain_the_token(self):
         body = {"errors": [{"message": f"bad {SECRET}"}]}
-        with self.assertRaises(gitlab_mrs.UnexpectedResponseError) as caught:
+        with self.assertRaises(gitlab_mrs.RequestRejectedError) as caught:
             make_client(FakeHttp([(200, body)])).query("query {}", {})
-        self.assertNotIn(SECRET, str(caught.exception))
+        self.assertEqual(str(caught.exception), "o GitLab recusou a consulta; o plugin pode estar desatualizado")
+
+    def test_graphql_without_errors_and_without_data_is_unexpected(self):
+        with self.assertRaises(gitlab_mrs.UnexpectedResponseError):
+            make_client(FakeHttp([(200, {})])).query("query {}", {})
+
+    def test_status_errors_map_to_exceptions(self):
+        cases = [
+            (401, gitlab_mrs.AuthError),
+            (429, gitlab_mrs.RateLimitError),
+            (400, gitlab_mrs.RequestRejectedError),
+            (404, gitlab_mrs.RequestRejectedError),
+            (410, gitlab_mrs.RequestRejectedError),
+            (500, gitlab_mrs.UnexpectedResponseError),
+        ]
+        for status, error in cases:
+            with self.assertRaises(error, msg=status):
+                make_client(FakeHttp([(status, b"{}")])).query("query {}", {})
+
+    def test_permanent_rejections_have_a_fixed_message(self):
+        for status in (400, 404, 410):
+            body = json.dumps({"message": SECRET}).encode()
+            with self.assertRaises(gitlab_mrs.RequestRejectedError, msg=status) as caught:
+                gitlab_mrs.decode_response(status, body, "GitLab")
+            self.assertEqual(
+                str(caught.exception),
+                f"o GitLab recusou a requisição (HTTP {status}); confira a configuração do widget",
+            )
 
     def test_graphql_rate_limited_error_is_rate_limit(self):
         body = {"errors": [{"type": "RATE_LIMITED", "message": "devagar"}]}
@@ -212,6 +239,19 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.run_main(FakeHttp(error=OSError("sem rede"))), 0)
         snapshot = json.loads(self.stdout.getvalue())
         self.assertIn("(offline)", snapshot["summary"]["blocks"][0]["lines"][0]["text"])
+
+    def test_main_permanent_errors_are_not_masked_by_the_cache(self):
+        rejected_query = (200, {"errors": [{"message": SECRET}], "data": None})
+        for response in (rejected_query, (401, {"message": SECRET})):
+            with self.subTest(status=response[0]):
+                self.assertEqual(self.run_main(FakeHttp([(200, fixtures.gitlab_response())])), 0)
+                self.stdout = io.StringIO()
+                self.stderr = io.StringIO()
+                self.assertEqual(self.run_main(FakeHttp([response])), 1)
+                self.assertEqual(self.stdout.getvalue(), "")
+                self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+                self.assertNotIn("offline", self.stderr.getvalue())
+                self.assertNotIn(SECRET, self.stderr.getvalue())
 
     def test_main_output_never_contains_the_token(self):
         self.run_main(FakeHttp([(200, fixtures.gitlab_response())]))

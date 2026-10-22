@@ -136,6 +136,37 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(azure_devops.AuthError, msg=status):
                 make_client(FakeHttp([(status, body)])).get_json("/_apis/connectionData", {})
 
+    def test_status_errors_map_to_exceptions(self):
+        cases = [
+            (429, azure_devops.RateLimitError),
+            (400, azure_devops.RequestRejectedError),
+            (404, azure_devops.RequestRejectedError),
+            (410, azure_devops.RequestRejectedError),
+            (500, azure_devops.UnexpectedResponseError),
+        ]
+        for status, error in cases:
+            with self.assertRaises(error, msg=status):
+                make_client(FakeHttp([(status, b"{}")])).get_json("/x", {})
+
+    def test_permanent_rejections_have_a_fixed_message(self):
+        for status in (400, 404, 410):
+            body = json.dumps({"message": SECRET}).encode()
+            with self.assertRaises(azure_devops.RequestRejectedError, msg=status) as caught:
+                azure_devops.decode_response(status, body, "Azure DevOps")
+            self.assertEqual(
+                str(caught.exception),
+                f"o Azure DevOps recusou a requisição (HTTP {status}); confira a configuração do widget",
+            )
+
+    def test_missing_organization_names_the_variable(self):
+        body = json.dumps({"message": SECRET}).encode()
+        with self.assertRaises(azure_devops.RequestRejectedError) as caught:
+            make_client(FakeHttp([(404, body)])).get_json("/_apis/connectionData", {})
+        self.assertEqual(
+            str(caught.exception),
+            "organização não encontrada no Azure DevOps; confira AZDO_ORGANIZATION",
+        )
+
     def test_non_object_response_is_unexpected(self):
         with self.assertRaises(azure_devops.UnexpectedResponseError):
             make_client(FakeHttp([(200, [1, 2])])).get_json("/x", {})
@@ -307,6 +338,19 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 1, status)
             self.assertEqual(self.stdout.getvalue(), "", status)
             self.assertTrue(self.stderr.getvalue().startswith("erro: "), status)
+
+    def test_main_permanent_errors_are_not_masked_by_the_cache(self):
+        for status in (404, 401):
+            with self.subTest(status=status):
+                self.stdout = io.StringIO()
+                self.stderr = io.StringIO()
+                self.assertEqual(self.run_main(self.successful_http()), 0)
+                self.stdout = io.StringIO()
+                self.assertEqual(self.run_main(FakeHttp([(status, {"message": SECRET})])), 1)
+                self.assertEqual(self.stdout.getvalue(), "")
+                self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+                self.assertNotIn("offline", self.stderr.getvalue())
+                self.assertNotIn(SECRET, self.stderr.getvalue())
 
     def test_main_network_error_serves_cache_with_offline_notice(self):
         self.assertEqual(self.run_main(self.successful_http()), 0)

@@ -60,15 +60,20 @@ BRANCH_REFERENCE_PREFIX = "refs/heads/"
 WEB_PATH_SEGMENT = "_git"
 PULL_REQUEST_PATH_SEGMENT = "pullrequest"
 HTTP_SIGN_IN_PAGE = 203
+ORGANIZATION_NOT_FOUND_MESSAGE = "organização não encontrada no Azure DevOps; confira AZDO_ORGANIZATION"
 HTTP_CLIENT_ERROR_FLOOR = 400
 REQUEST_TIMEOUT_SECONDS = 20
 MAXIMUM_RESPONSE_BYTES = 8 * 1024 * 1024
 MAXIMUM_ERROR_BODY_BYTES = 8 * 1024
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 HTTP_REDIRECT_FLOOR = 300
+HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
+HTTP_GONE = 410
 HTTP_TOO_MANY_REQUESTS = 429
+REJECTED_STATUSES = (HTTP_BAD_REQUEST, HTTP_NOT_FOUND, HTTP_GONE)
 RATE_LIMIT_MARKER = b"rate limit"
 TIMESTAMP_FORMATS = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
 UTC_OFFSET_SUFFIX = "+0000"
@@ -253,6 +258,10 @@ class UnexpectedResponseError(ApiError):
     pass
 
 
+class RequestRejectedError(ApiError):
+    pass
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
         return None
@@ -287,6 +296,8 @@ def decode_response(status: int, body: bytes, service: str) -> object:
         raise AuthError(_auth_message(service))
     if status == HTTP_TOO_MANY_REQUESTS:
         raise RateLimitError(_rate_limit_message(service))
+    if status in REJECTED_STATUSES:
+        raise RequestRejectedError(_rejected_message(service, status))
     if status >= HTTP_REDIRECT_FLOOR:
         raise UnexpectedResponseError(f"resposta inesperada do {service} (HTTP {status})")
     try:
@@ -301,6 +312,10 @@ def _auth_message(service: str) -> str:
 
 def _rate_limit_message(service: str) -> str:
     return f"limite de requisições do {service}; tento de novo na próxima leitura"
+
+
+def _rejected_message(service: str, status: int) -> str:
+    return f"o {service} recusou a requisição (HTTP {status}); confira a configuração do widget"
 
 
 class AzureClient:
@@ -328,6 +343,8 @@ class AzureClient:
             ) from None
         if _signals_invalid_credentials(status):
             raise AuthError(_auth_message(SERVICE_NAME))
+        if path == CONNECTION_DATA_PATH and status == HTTP_NOT_FOUND:
+            raise RequestRejectedError(ORGANIZATION_NOT_FOUND_MESSAGE)
         payload = decode_response(status, body, SERVICE_NAME)
         if not isinstance(payload, dict):
             raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
@@ -774,7 +791,7 @@ def run_snapshot(
     state = store.load()
     try:
         pull_requests = fetch()
-    except AuthError as error:
+    except (AuthError, RequestRejectedError) as error:
         return _fail(stderr, error)
     except (RateLimitError, NetworkError, UnexpectedResponseError) as error:
         cached = _cached_snapshot(state)

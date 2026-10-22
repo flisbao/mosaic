@@ -27,9 +27,13 @@ MAXIMUM_ERROR_BODY_BYTES = 8 * 1024
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 SERVICE_NAME = "GitHub"
 HTTP_REDIRECT_FLOOR = 300
+HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
+HTTP_GONE = 410
 HTTP_TOO_MANY_REQUESTS = 429
+REJECTED_STATUSES = (HTTP_BAD_REQUEST, HTTP_NOT_FOUND, HTTP_GONE)
 RATE_LIMIT_MARKER = b"rate limit"
 RATE_LIMITED_ERROR_TYPE = "RATE_LIMITED"
 OWNERS_SEPARATOR = ","
@@ -222,6 +226,10 @@ class UnexpectedResponseError(ApiError):
     pass
 
 
+class RequestRejectedError(ApiError):
+    pass
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
         return None
@@ -256,6 +264,8 @@ def decode_response(status: int, body: bytes, service: str) -> object:
         raise AuthError(_auth_message(service))
     if status == HTTP_TOO_MANY_REQUESTS:
         raise RateLimitError(_rate_limit_message(service))
+    if status in REJECTED_STATUSES:
+        raise RequestRejectedError(_rejected_message(service, status))
     if status >= HTTP_REDIRECT_FLOOR:
         raise UnexpectedResponseError(f"resposta inesperada do {service} (HTTP {status})")
     try:
@@ -270,6 +280,10 @@ def _auth_message(service: str) -> str:
 
 def _rate_limit_message(service: str) -> str:
     return f"limite de requisições do {service}; tento de novo na próxima leitura"
+
+
+def _rejected_message(service: str, status: int) -> str:
+    return f"o {service} recusou a requisição (HTTP {status}); confira a configuração do widget"
 
 
 class GitHubClient:
@@ -291,7 +305,7 @@ class GitHubClient:
         _raise_on_graphql_errors(payload)
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
-            raise UnexpectedResponseError(f"o {SERVICE_NAME} recusou a consulta")
+            raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
         return data
 
     def _post_graphql(self, document: str, variables: dict) -> object:
@@ -310,12 +324,20 @@ def _raise_on_graphql_errors(payload: object) -> None:
     if not isinstance(payload, dict):
         return
     errors = payload.get("errors")
-    if isinstance(errors, list) and any(_is_rate_limited(error) for error in errors):
+    if not isinstance(errors, list) or not errors:
+        return
+    if any(_is_rate_limited(error) for error in errors):
         raise RateLimitError(_rate_limit_message(SERVICE_NAME))
+    if not isinstance(payload.get("data"), dict):
+        raise RequestRejectedError(_query_rejected_message(SERVICE_NAME))
 
 
 def _is_rate_limited(error: object) -> bool:
     return isinstance(error, dict) and error.get("type") == RATE_LIMITED_ERROR_TYPE
+
+
+def _query_rejected_message(service: str) -> str:
+    return f"o {service} recusou a consulta; o plugin pode estar desatualizado"
 
 
 @dataclass(frozen=True)
@@ -745,7 +767,7 @@ def run_snapshot(
     state = store.load()
     try:
         pull_requests = fetch()
-    except AuthError as error:
+    except (AuthError, RequestRejectedError) as error:
         return _fail(stderr, error)
     except (RateLimitError, NetworkError, UnexpectedResponseError) as error:
         cached = _cached_snapshot(state)
