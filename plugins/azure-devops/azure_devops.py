@@ -507,7 +507,7 @@ def _base_pull(raw: object, config: AzureConfig) -> PullRequest | None:
 
 
 def _is_listed_project(project: str, projects: tuple[str, ...]) -> bool:
-    return not projects or project in projects
+    return not projects or project.casefold() in {listed.casefold() for listed in projects}
 
 
 def _pull_request_url(config: AzureConfig, project: str, repository: str, number: int) -> str:

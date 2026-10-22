@@ -199,6 +199,11 @@ class FetchTests(unittest.TestCase):
         self.assertNotIn("Outro/api#15", pulls)
         self.assertIn("Proj/api#10", pulls)
 
+    def test_projects_filter_ignores_case_and_spaces_around_names(self):
+        pulls = fetch_fixture_pulls(AZDO_PROJECTS=" PROJ ")
+        self.assertIn("Proj/api#10", pulls)
+        self.assertNotIn("Outro/api#15", pulls)
+
     def test_mine_states(self):
         pulls = fetch_fixture_pulls()
         expected = {
