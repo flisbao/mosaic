@@ -16,6 +16,7 @@ use crate::presentation::grid_layout::{
     arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
     TOP_BAR_HEIGHT,
 };
+use crate::presentation::key_hints::{context_hints, global_hints, HintContext, KeyHint};
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
     box_block, box_header, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
@@ -23,6 +24,9 @@ use crate::presentation::widget_box::{
 use crate::presentation::widget_view::render_blocks_limited;
 
 const FALLBACK_SPAN: u16 = 1;
+const HELP_KEY_COLUMN_WIDTH: usize = 18;
+const HELP_GLOBAL_HEADING: &str = "Em qualquer tela";
+const HELP_DISMISS_HINT: &str = "Esc ou ? fecha esta ajuda";
 const MAXIMUM_NUMBERED_TABS: usize = 9;
 const CONFIRMATION_HINT: &str = "[s] confirma  [n] cancela";
 const NOTICE_ROW_HEIGHT: u16 = 1;
@@ -464,6 +468,10 @@ fn notice_row(area: Rect) -> Option<Rect> {
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
     let (title, lines) = match state.mode() {
         Mode::Browsing => return,
+        Mode::Helping => {
+            let context = HintContext::from_expanded(state.is_expanded());
+            (context.title(), help_lines(context))
+        }
         Mode::ConfirmingSend { text, .. } => (
             "Enviar à IA",
             vec![text.clone(), String::new(), CONFIRMATION_HINT.to_string()],
@@ -515,6 +523,25 @@ fn draw_popup(frame: &mut Frame, area: Rect, title: &str, lines: &[String]) {
     frame.render_widget(Clear, popup);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(text), inner);
+}
+
+fn help_lines(context: HintContext) -> Vec<String> {
+    let mut lines: Vec<String> = context_hints(context).iter().map(help_line).collect();
+    lines.push(String::new());
+    lines.push(HELP_GLOBAL_HEADING.to_string());
+    lines.extend(global_hints().iter().map(help_line));
+    lines.push(String::new());
+    lines.push(HELP_DISMISS_HINT.to_string());
+    lines
+}
+
+fn help_line(hint: &KeyHint) -> String {
+    format!(
+        "{:<width$}{}",
+        hint.keys,
+        hint.description,
+        width = HELP_KEY_COLUMN_WIDTH
+    )
 }
 
 fn action_menu_lines(state: &AppState, selected: usize) -> Vec<String> {
@@ -860,6 +887,40 @@ mod tests {
             style_of_text(&buffer, "Alfa").unwrap().bg,
             Some(Color::Cyan)
         );
+    }
+
+    #[test]
+    fn help_window_in_grid_lists_grid_and_global_keys() {
+        let mut state = two_tab_state();
+        press(&mut state, &[KeyInput::Character('?')]);
+        let text = screen(&state, 100, 30);
+        for expected in [
+            "Ajuda · grade de widgets",
+            "Enter",
+            "Em qualquer tela",
+            "recarregar",
+            "fecha esta ajuda",
+        ] {
+            assert!(text.contains(expected), "falta {expected}\n{text}");
+        }
+    }
+
+    #[test]
+    fn help_window_in_expanded_widget_lists_navigation_keys() {
+        let mut state = two_tab_state();
+        press(&mut state, &[KeyInput::Enter, KeyInput::Character('?')]);
+        let text = screen(&state, 100, 30);
+        assert!(text.contains("Ajuda · widget aberto"), "{text}");
+        assert!(text.contains("PgUp"), "{text}");
+    }
+
+    #[test]
+    fn help_window_never_panics_on_tiny_terminals() {
+        let mut state = two_tab_state();
+        press(&mut state, &[KeyInput::Character('?')]);
+        for (width, height) in [(0, 0), (1, 1), (10, 3), (30, 8), (60, 12)] {
+            draw(&state, width, height);
+        }
     }
 
     #[test]

@@ -61,6 +61,7 @@ pub struct TabView {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
     Browsing,
+    Helping,
     ChoosingAction {
         selected: usize,
     },
@@ -315,6 +316,7 @@ impl AppState {
         }
         let transition = match self.mode.clone() {
             Mode::Browsing => self.handle_browsing_key(key),
+            Mode::Helping => Self::handle_help_key(key),
             Mode::ChoosingAction { selected } => self.handle_action_menu_key(key, selected),
             Mode::Confirming(proposed) => self.handle_confirmation_key(key, proposed),
             Mode::ConfirmingSend { text, plan } => {
@@ -346,8 +348,16 @@ impl AppState {
         }
     }
 
+    fn handle_help_key(key: KeyInput) -> Transition {
+        match key {
+            KeyInput::Escape | KeyInput::Character('?') => Transition::idle(),
+            _ => Transition::to(Mode::Helping),
+        }
+    }
+
     fn handle_character(&mut self, letter: char) -> Transition {
         match letter {
+            '?' => Transition::to(Mode::Helping),
             'r' => Transition::emit(Command::RefreshAll),
             'R' => Transition::emit(Command::ReloadConfig),
             'q' => Transition::emit(Command::Quit),
@@ -1179,6 +1189,50 @@ mod tests {
         assert_eq!(app.active_tab(), 1);
         assert!(app.notice().is_some());
         assert!(!app.is_expanded());
+    }
+
+    #[test]
+    fn question_mark_opens_help_and_escape_closes() {
+        let mut app = app();
+        assert_eq!(app.handle_key(character('?')), None);
+        assert_eq!(app.mode(), &Mode::Helping);
+        assert_eq!(app.handle_key(KeyInput::Escape), None);
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn question_mark_toggles_help() {
+        let mut app = app();
+        press(&mut app, &[character('?'), character('?')]);
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn help_swallows_every_other_key() {
+        let mut app = app();
+        press(&mut app, &[character('?')]);
+        for key in [
+            character('q'),
+            character('r'),
+            KeyInput::Tab,
+            KeyInput::Enter,
+        ] {
+            assert_eq!(app.handle_key(key), None);
+            assert_eq!(app.mode(), &Mode::Helping);
+        }
+        assert_eq!(app.active_tab(), 0);
+        assert!(!app.is_expanded());
+    }
+
+    #[test]
+    fn help_opens_inside_an_expanded_widget() {
+        let mut app = app();
+        press(&mut app, &[KeyInput::Enter, character('?')]);
+        assert_eq!(app.mode(), &Mode::Helping);
+        assert!(app.is_expanded());
+        press(&mut app, &[KeyInput::Escape]);
+        assert_eq!(app.mode(), &Mode::Browsing);
+        assert!(app.is_expanded());
     }
 
     #[test]
