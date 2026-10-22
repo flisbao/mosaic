@@ -8,8 +8,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "github"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import github_prs  # noqa: E402
+import pull_request_fixtures as fixtures  # noqa: E402
 
 SECRET = "TOKEN-SECRETO-123"
 
@@ -246,6 +248,105 @@ class UrllibHttpTests(unittest.TestCase):
     def test_urllib_http_times_out(self):
         with self.assertRaises(OSError):
             github_prs.urllib_http(f"{self.base}/slow", "GET", {}, None, 1)
+
+
+class ParseTimestampTests(unittest.TestCase):
+    def test_accepts_zulu_suffix_and_offsets(self):
+        self.assertEqual(github_prs.parse_timestamp("2026-10-20T10:00:00Z").hour, 10)
+        self.assertEqual(github_prs.parse_timestamp("2026-10-20T10:00:00.500+00:00").microsecond, 500000)
+
+    def test_invalid_text_is_none(self):
+        self.assertIsNone(github_prs.parse_timestamp("ontem"))
+        self.assertIsNone(github_prs.parse_timestamp(None))
+
+
+class NormalizeTests(unittest.TestCase):
+    def setUp(self):
+        self.pulls = {p.item_id: p for p in github_prs.normalize(fixtures.github_response()["data"])}
+
+    def test_review_section_membership(self):
+        review = {i for i, p in self.pulls.items() if p.section == github_prs.REVIEW_SECTION}
+        self.assertEqual(review, {"acme/api#10", "acme/api#11", "acme/web#12", "acme/lib#14"})
+
+    def test_review_status_and_push(self):
+        expected = {
+            "acme/api#10": ("unreviewed", False),
+            "acme/api#11": ("reviewed", True),
+            "acme/web#12": ("unreviewed", False),
+            "acme/lib#14": ("reviewed", False),
+        }
+        for item_id, (status, pushed) in expected.items():
+            self.assertEqual((self.pulls[item_id].review_status, self.pulls[item_id].pushed_after_review),
+                             (status, pushed), item_id)
+
+    def test_mine_states(self):
+        expected = {"acme/api#20": "conflito", "acme/api#21": "mudança pedida",
+                    "acme/api#22": "aprovado", "acme/api#23": "aguardando"}
+        for item_id, state in expected.items():
+            self.assertEqual(self.pulls[item_id].state, state, item_id)
+            self.assertEqual(self.pulls[item_id].section, "Meus PRs")
+
+    def test_pull_request_fields_are_mapped(self):
+        pull = self.pulls["acme/api#11"]
+        self.assertEqual(pull.repository, "acme/api")
+        self.assertEqual(pull.reference, "#11")
+        self.assertEqual(pull.author, "ana")
+        self.assertEqual(pull.target_branch, "main")
+        self.assertEqual(pull.head_commit, "sha11")
+        self.assertEqual(pull.url, "https://github.com/acme/api/pull/11")
+
+    def test_pull_request_without_author_uses_placeholder(self):
+        self.assertEqual(self.pulls["acme/api#24"].author, "desconhecido")
+
+    def test_pull_request_without_creation_date_is_skipped(self):
+        data = fixtures.github_response()["data"]
+        data["mine"]["nodes"][0]["createdAt"] = None
+        ids = {p.item_id for p in github_prs.normalize(data)}
+        self.assertNotIn("acme/api#20", ids)
+        self.assertIn("acme/api#21", ids)
+
+    def test_drafts_are_dropped(self):
+        self.assertNotIn("acme/api#13", self.pulls)
+
+    def test_reviewed_search_keeps_only_changes_requested_by_me(self):
+        self.assertNotIn("acme/lib#15", self.pulls)
+
+    def test_pull_request_already_in_review_section_is_not_repeated(self):
+        self.assertEqual(sum(1 for p in self.pulls.values() if p.item_id == "acme/api#11"), 1)
+
+    def test_malformed_nodes_are_skipped(self):
+        data = fixtures.github_response()["data"]
+        data["review"]["nodes"].append("lixo")
+        data["mine"]["nodes"].append(None)
+        ids = {p.item_id for p in github_prs.normalize(data)}
+        self.assertIn("acme/api#10", ids)
+
+    def test_sections_are_sorted_by_creation_date(self):
+        created = [p.created_at for p in github_prs.normalize(fixtures.github_response()["data"])]
+        self.assertEqual(created, sorted(created))
+
+
+class SearchQueryTests(unittest.TestCase):
+    def test_queries_without_owners(self):
+        self.assertEqual(github_prs.search_queries(())["review"],
+                         "is:pr is:open draft:false archived:false review-requested:@me")
+
+    def test_owners_become_user_qualifiers(self):
+        self.assertTrue(github_prs.search_queries(("acme", "eu"))["mine"].endswith(" user:acme user:eu"))
+
+    def test_reviewed_query_excludes_my_own_pull_requests(self):
+        self.assertEqual(github_prs.search_queries(())["reviewed"],
+                         "is:pr is:open draft:false archived:false reviewed-by:@me -author:@me")
+
+
+class FetchTests(unittest.TestCase):
+    def test_fetch_sends_one_query_with_the_three_searches(self):
+        http = FakeHttp([(200, fixtures.github_response())])
+        pulls = github_prs.fetch_pull_requests(make_client(http))
+        self.assertEqual(len(http.calls), 1)
+        variables = json.loads(http.calls[0]["body"])["variables"]
+        self.assertEqual(set(variables), {"review", "reviewed", "mine"})
+        self.assertTrue(pulls)
 
 
 if __name__ == "__main__":

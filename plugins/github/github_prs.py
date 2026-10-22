@@ -9,7 +9,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_API_URL = "https://api.github.com"
@@ -31,6 +32,33 @@ OWNERS_SEPARATOR = ","
 API_URL_VARIABLE = "GITHUB_API_URL"
 TOKEN_PREFIX = "GITHUB"
 STATE_DIRECTORY_VARIABLE = "GITHUB_STATE_DIR"
+TIMESTAMP_FORMATS = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
+UTC_OFFSET_SUFFIX = "+0000"
+UTC_ZULU_SUFFIX = "Z"
+REVIEW_SECTION = "Aguardando minha revisão"
+MINE_SECTION = "Meus PRs"
+UNREVIEWED = "unreviewed"
+REVIEWED = "reviewed"
+APPROVED = "approved"
+UNKNOWN_AUTHOR = "desconhecido"
+STATE_NEW = "novo"
+STATE_PUSHED = "push novo"
+STATE_CONFLICT = "conflito"
+STATE_CHANGES = "mudança pedida"
+STATE_APPROVED = "aprovado"
+STATE_WAITING = "aguardando"
+REVIEW_SEARCH = "is:pr is:open draft:false archived:false review-requested:@me"
+REVIEWED_SEARCH = "is:pr is:open draft:false archived:false reviewed-by:@me -author:@me"
+MINE_SEARCH = "is:pr is:open draft:false archived:false author:@me"
+OWNER_QUALIFIER = "user:{owner}"
+REVIEW_ALIAS = "review"
+REVIEWED_ALIAS = "reviewed"
+MINE_ALIAS = "mine"
+REVIEW_STATE_APPROVED = "APPROVED"
+REVIEW_STATE_CHANGES_REQUESTED = "CHANGES_REQUESTED"
+DECISION_CHANGES_REQUESTED = "CHANGES_REQUESTED"
+DECISION_APPROVED = "APPROVED"
+MERGEABLE_CONFLICTING = "CONFLICTING"
 
 
 class ConfigError(Exception):
@@ -207,6 +235,10 @@ class GitHubClient:
             "Accept": "application/json",
         }
 
+    @property
+    def owners(self) -> tuple[str, ...]:
+        return self._config.owners
+
     def query(self, document: str, variables: dict) -> dict:
         payload = self._post_graphql(document, variables)
         _raise_on_graphql_errors(payload)
@@ -237,3 +269,197 @@ def _raise_on_graphql_errors(payload: object) -> None:
 
 def _is_rate_limited(error: object) -> bool:
     return isinstance(error, dict) and error.get("type") == RATE_LIMITED_ERROR_TYPE
+
+
+@dataclass(frozen=True)
+class PullRequest:
+    item_id: str
+    repository: str
+    reference: str
+    title: str
+    author: str
+    created_at: datetime
+    url: str
+    target_branch: str
+    head_commit: str
+    section: str
+    review_status: str = ""
+    pushed_after_review: bool | None = None
+    state: str = ""
+
+
+PULL_REQUESTS_QUERY = """
+query PullRequests($review: String!, $reviewed: String!, $mine: String!) {
+  viewer { login }
+  review: search(type: ISSUE, query: $review, first: 100) { nodes { ...pullRequest } }
+  reviewed: search(type: ISSUE, query: $reviewed, first: 100) { nodes { ...pullRequest } }
+  mine: search(type: ISSUE, query: $mine, first: 100) { nodes { ...pullRequest } }
+}
+fragment pullRequest on PullRequest {
+  number
+  title
+  url
+  createdAt
+  isDraft
+  author { login }
+  repository { nameWithOwner }
+  baseRefName
+  headRefOid
+  mergeable
+  reviewDecision
+  commits(last: 1) { nodes { commit { committedDate } } }
+  latestReviews(first: 100) { nodes { author { login } state submittedAt } }
+}
+"""
+
+
+def parse_timestamp(text: str | None) -> datetime | None:
+    if not isinstance(text, str) or not text:
+        return None
+    candidate = text[:-1] + UTC_OFFSET_SUFFIX if text.endswith(UTC_ZULU_SUFFIX) else text
+    for timestamp_format in TIMESTAMP_FORMATS:
+        try:
+            return datetime.strptime(candidate, timestamp_format).astimezone(timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def search_queries(owners: tuple[str, ...]) -> dict[str, str]:
+    suffix = _owners_suffix(owners)
+    return {
+        REVIEW_ALIAS: REVIEW_SEARCH + suffix,
+        REVIEWED_ALIAS: REVIEWED_SEARCH + suffix,
+        MINE_ALIAS: MINE_SEARCH + suffix,
+    }
+
+
+def _owners_suffix(owners: tuple[str, ...]) -> str:
+    if not owners:
+        return ""
+    return " " + " ".join(OWNER_QUALIFIER.format(owner=owner) for owner in owners)
+
+
+def fetch_pull_requests(client: GitHubClient) -> list[PullRequest]:
+    return normalize(client.query(PULL_REQUESTS_QUERY, search_queries(client.owners)))
+
+
+def normalize(data: dict) -> list[PullRequest]:
+    viewer_login = _nested_text(data, "viewer", "login")
+    pulls: dict[str, PullRequest] = {}
+    for node in _connection_nodes(data.get(REVIEW_ALIAS)):
+        _keep_first(pulls, _review_pull(node, viewer_login))
+    for node in _connection_nodes(data.get(REVIEWED_ALIAS)):
+        _keep_first(pulls, _reviewed_pull(node, viewer_login))
+    for node in _connection_nodes(data.get(MINE_ALIAS)):
+        _keep_first(pulls, _mine_pull(node))
+    return sorted(pulls.values(), key=lambda pull: pull.created_at)
+
+
+def _keep_first(pulls: dict[str, PullRequest], pull: PullRequest | None) -> None:
+    if pull is not None:
+        pulls.setdefault(pull.item_id, pull)
+
+
+def _review_pull(node: dict, viewer_login: str) -> PullRequest | None:
+    pull = _base_pull(node)
+    if pull is None:
+        return None
+    review = _my_review(node, viewer_login)
+    if review is None:
+        return _in_review_section(pull, UNREVIEWED, pushed_after_review=False)
+    status = UNREVIEWED if review.get("state") == REVIEW_STATE_APPROVED else REVIEWED
+    return _in_review_section(pull, status, _pushed_after_review(node, review))
+
+
+def _reviewed_pull(node: dict, viewer_login: str) -> PullRequest | None:
+    pull = _base_pull(node)
+    review = _my_review(node, viewer_login)
+    if pull is None or review is None or review.get("state") != REVIEW_STATE_CHANGES_REQUESTED:
+        return None
+    return _in_review_section(pull, REVIEWED, _pushed_after_review(node, review))
+
+
+def _mine_pull(node: dict) -> PullRequest | None:
+    pull = _base_pull(node)
+    if pull is None:
+        return None
+    return replace(pull, section=MINE_SECTION, state=_mine_state(node))
+
+
+def _in_review_section(pull: PullRequest, status: str, pushed_after_review: bool) -> PullRequest:
+    return replace(
+        pull,
+        section=REVIEW_SECTION,
+        review_status=status,
+        pushed_after_review=pushed_after_review,
+    )
+
+
+def _mine_state(node: dict) -> str:
+    if node.get("mergeable") == MERGEABLE_CONFLICTING:
+        return STATE_CONFLICT
+    decision = node.get("reviewDecision")
+    if decision == DECISION_CHANGES_REQUESTED:
+        return STATE_CHANGES
+    if decision == DECISION_APPROVED:
+        return STATE_APPROVED
+    return STATE_WAITING
+
+
+def _base_pull(node: dict) -> PullRequest | None:
+    number = node.get("number")
+    created_at = parse_timestamp(node.get("createdAt"))
+    if not isinstance(number, int) or created_at is None or node.get("isDraft") is True:
+        return None
+    repository = _nested_text(node, "repository", "nameWithOwner")
+    return PullRequest(
+        item_id=f"{repository}#{number}",
+        repository=repository,
+        reference=f"#{number}",
+        title=node.get("title") or "",
+        author=_nested_text(node, "author", "login") or UNKNOWN_AUTHOR,
+        created_at=created_at,
+        url=node.get("url") or "",
+        target_branch=node.get("baseRefName") or "",
+        head_commit=node.get("headRefOid") or "",
+        section="",
+    )
+
+
+def _my_review(node: dict, viewer_login: str) -> dict | None:
+    for review in _connection_nodes(node.get("latestReviews")):
+        if _nested_text(review, "author", "login") == viewer_login:
+            return review
+    return None
+
+
+def _pushed_after_review(node: dict, review: dict) -> bool:
+    committed_at = parse_timestamp(_last_commit_date(node))
+    submitted_at = parse_timestamp(review.get("submittedAt"))
+    if committed_at is None or submitted_at is None:
+        return False
+    return committed_at > submitted_at
+
+
+def _last_commit_date(node: dict) -> str | None:
+    commits = _connection_nodes(node.get("commits"))
+    if not commits:
+        return None
+    commit = commits[0].get("commit")
+    return commit.get("committedDate") if isinstance(commit, dict) else None
+
+
+def _connection_nodes(connection: object) -> list[dict]:
+    if not isinstance(connection, dict):
+        return []
+    nodes = connection.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    return [node for node in nodes if isinstance(node, dict)]
+
+
+def _nested_text(node: dict, key: str, field: str) -> str:
+    inner = node.get(key)
+    value = inner.get(field) if isinstance(inner, dict) else None
+    return value or ""
