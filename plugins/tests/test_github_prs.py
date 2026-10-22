@@ -312,7 +312,10 @@ class NormalizeTests(unittest.TestCase):
         self.assertNotIn("acme/lib#15", self.pulls)
 
     def test_pull_request_already_in_review_section_is_not_repeated(self):
-        self.assertEqual(sum(1 for p in self.pulls.values() if p.item_id == "acme/api#11"), 1)
+        pulls = github_prs.normalize(fixtures.github_response()["data"])
+        matches = [p for p in pulls if p.item_id == "acme/api#11"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].section, github_prs.REVIEW_SECTION)
 
     def test_malformed_nodes_are_skipped(self):
         data = fixtures.github_response()["data"]
