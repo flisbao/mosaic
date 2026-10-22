@@ -100,6 +100,42 @@ priority_prompt = "prompts/prioridade.md"
 # e use inherit_env = ["DBUS_SESSION_BUS_ADDRESS"].
 # gcalcli: CALENDAR_SOURCE = "gcalcli" (rode `gcalcli init` antes).
 
+# --- Pull requests (descomente o seu; passo a passo em plugins/<github|azure-devops|gitlab>/README.md no repositório) ---
+#   export GITHUB_TOKEN_PRS="..."   export AZDO_TOKEN="..."   export GITLAB_TOKEN_MRS="..."
+# [[widgets]]
+# id = "github-prs"
+# command = "python3"
+# args = ["plugins/github/github_prs.py"]
+# interval_seconds = 120
+# timeout_seconds = 30
+# inherit_env = ["GITHUB_TOKEN_PRS"]
+#
+# [widgets.env]
+# GITHUB_TOKEN_ENV = "GITHUB_TOKEN_PRS"
+#
+# [[widgets]]
+# id = "azure-devops-prs"
+# command = "python3"
+# args = ["plugins/azure-devops/azure_devops.py"]
+# interval_seconds = 120
+# timeout_seconds = 30
+# inherit_env = ["AZDO_TOKEN"]
+#
+# [widgets.env]
+# AZDO_ORGANIZATION = "minha-org"
+# AZDO_TOKEN_ENV = "AZDO_TOKEN"
+#
+# [[widgets]]
+# id = "gitlab-mrs"
+# command = "python3"
+# args = ["plugins/gitlab/gitlab_mrs.py"]
+# interval_seconds = 120
+# timeout_seconds = 30
+# inherit_env = ["GITLAB_TOKEN_MRS"]
+#
+# [widgets.env]
+# GITLAB_TOKEN_ENV = "GITLAB_TOKEN_MRS"
+
 # --- Galeria de blocos (descomente para ver todos os blocos; veja PROTOCOL.md) ---
 # [[widgets]]
 # id = "gallery-python"
@@ -116,7 +152,7 @@ priority_prompt = "prompts/prioridade.md"
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
 
-const BUNDLED_PLUGINS: [(&str, &str); 7] = [
+const BUNDLED_PLUGINS: [(&str, &str); 10] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
     ("example.py", include_str!("../../plugins/example.py")),
     ("example.js", include_str!("../../plugins/example.js")),
@@ -124,6 +160,18 @@ const BUNDLED_PLUGINS: [(&str, &str); 7] = [
     (
         "calendar/calendar_widget.py",
         include_str!("../../plugins/calendar/calendar_widget.py"),
+    ),
+    (
+        "github/github_prs.py",
+        include_str!("../../plugins/github/github_prs.py"),
+    ),
+    (
+        "azure-devops/azure_devops.py",
+        include_str!("../../plugins/azure-devops/azure_devops.py"),
+    ),
+    (
+        "gitlab/gitlab_mrs.py",
+        include_str!("../../plugins/gitlab/gitlab_mrs.py"),
     ),
     ("gallery.py", include_str!("../../plugins/gallery.py")),
     ("gallery.js", include_str!("../../plugins/gallery.js")),
@@ -326,6 +374,29 @@ mod tests {
         let text = default_config_text();
         assert!(text.contains("# args = [\"plugins/calendar/calendar_widget.py\"]"));
         assert!(text.contains("# CALENDAR_SOURCE = \"ics\""));
+    }
+
+    #[test]
+    fn install_creates_pull_request_plugins_in_their_own_folders() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(install_defaults_if_missing(directory.path()).unwrap());
+        for relative in [
+            "plugins/github/github_prs.py",
+            "plugins/azure-devops/azure_devops.py",
+            "plugins/gitlab/gitlab_mrs.py",
+        ] {
+            let installed = std::fs::read_to_string(directory.path().join(relative)).unwrap();
+            assert!(installed.contains("def main("), "{relative}");
+        }
+    }
+
+    #[test]
+    fn default_config_has_commented_pull_request_widgets() {
+        let text = default_config_text();
+        assert!(text.contains("# args = [\"plugins/github/github_prs.py\"]"));
+        assert!(text.contains("# args = [\"plugins/azure-devops/azure_devops.py\"]"));
+        assert!(text.contains("# args = [\"plugins/gitlab/gitlab_mrs.py\"]"));
+        assert!(text.contains("# AZDO_ORGANIZATION = \"minha-org\""));
     }
 
     #[test]
