@@ -79,6 +79,28 @@ class ConfigTests(unittest.TestCase):
             github_prs.load_config(base_environment(GITHUB_TOKEN_ENV=None, MEU_TOKEN=None))
         self.assertIn("GITHUB_TOKEN_ENV", str(caught.exception))
 
+    def test_token_with_internal_whitespace_is_rejected_without_leaking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "token"
+            path.write_text("abc\ndef\n", encoding="utf-8")
+            environment = base_environment(
+                GITHUB_TOKEN_ENV=None, MEU_TOKEN=None, GITHUB_TOKEN_FILE=str(path)
+            )
+            with self.assertRaises(github_prs.ConfigError) as caught:
+                github_prs.load_config(environment)
+        self.assertNotIn("abc", str(caught.exception))
+        self.assertIn("GITHUB_TOKEN_ENV", str(caught.exception))
+
+    def test_token_with_space_in_variable_is_rejected_without_leaking(self):
+        with self.assertRaises(github_prs.ConfigError) as caught:
+            github_prs.load_config(base_environment(MEU_TOKEN="a b"))
+        self.assertNotIn("a b", str(caught.exception))
+
+    def test_token_outside_latin1_is_rejected_without_leaking(self):
+        with self.assertRaises(github_prs.ConfigError) as caught:
+            github_prs.load_config(base_environment(MEU_TOKEN="€abc"))
+        self.assertNotIn("€abc", str(caught.exception))
+
     def test_base_url_accepts_only_https_or_local_http(self):
         for bad in ("http://api.github.com", "ftp://x", "https://", "https://a b"):
             with self.assertRaises(github_prs.ConfigError, msg=bad):

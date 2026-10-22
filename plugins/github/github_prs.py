@@ -79,6 +79,26 @@ def read_state_dir(environ: Mapping[str, str], variable: str, default: str) -> P
 
 
 def read_token(environ: Mapping[str, str], prefix: str) -> str:
+    return _ensure_token_is_header_safe(_read_token_source(environ, prefix), prefix)
+
+
+def _ensure_token_is_header_safe(value: str, prefix: str) -> str:
+    if any(character.isspace() or not character.isprintable() for character in value) or not _is_latin1(value):
+        raise ConfigError(
+            f"o token de {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contém caracteres inválidos"
+        )
+    return value
+
+
+def _is_latin1(value: str) -> bool:
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _read_token_source(environ: Mapping[str, str], prefix: str) -> str:
     variable_key = f"{prefix}_TOKEN_ENV"
     file_key = f"{prefix}_TOKEN_FILE"
     variable = environ.get(variable_key, "").strip()
