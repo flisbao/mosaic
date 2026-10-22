@@ -11,6 +11,9 @@ use mosaic::domain::snapshot_report::Severity;
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
 
+const AGENDA_DETAIL_HEADING: &str = "Agenda de hoje";
+const AGENDA_SUMMARY_ROW_COUNT: usize = 3;
+
 fn interpreter_is_available(command: &str) -> bool {
     Command::new(command).arg("--version").output().is_ok()
 }
@@ -56,6 +59,12 @@ fn assert_gallery_is_valid_and_complete(command: &str, script: &str) {
         );
     }
     assert!(!parsed.snapshot.alerts.is_empty());
+    let detail = parsed.snapshot.detail.as_ref().unwrap();
+    assert!(detail
+        .iter()
+        .any(|section| section.heading == AGENDA_DETAIL_HEADING));
+    let detail_item_count: usize = detail.iter().map(|section| section.items.len()).sum();
+    assert!(detail_item_count > AGENDA_SUMMARY_ROW_COUNT);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Galeria do mosaic: um widget com todos os blocos do protocolo v1 e um aviso por hora.
+// Galeria do mosaic: um widget com todos os blocos do protocolo v1, a agenda completa no
+// detalhe (Enter) e um aviso por hora.
 // Não usa rede. Serve de modelo para escrever o seu widget; valide com
 // `mosaic check node plugins/gallery.js`.
 
@@ -19,6 +20,26 @@ function agendaRows() {
       text: "1:1 com a gestão",
       flag: "updated",
       tags: [{ text: "sala 3" }, { text: "remoto", tone: "muted" }],
+    },
+  ];
+}
+
+const AGENDA_DETAIL_HEADING = "Agenda de hoje";
+const FULL_AGENDA = [
+  "09:00 Daily do time",
+  "10:30 Revisão de código",
+  "12:00 Almoço",
+  "14:00 1:1 com a gestão",
+  "15:30 Planejamento da sprint",
+  "16:30 Estudo de ownership em Rust",
+  "17:30 Fechar o dia",
+];
+
+function agendaDetail() {
+  return [
+    {
+      heading: AGENDA_DETAIL_HEADING,
+      items: FULL_AGENDA.map((entry) => ({ text: entry })),
     },
   ];
 }
@@ -71,6 +92,7 @@ function buildSnapshot(now) {
         },
       ],
     },
+    detail: agendaDetail(),
     alerts: [
       {
         id: hourlyAlertId(now),

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Galeria do mosaic: um widget com todos os blocos do protocolo v1 e um aviso por hora.
+"""Galeria do mosaic: um widget com todos os blocos do protocolo v1, a agenda completa no
+detalhe (Enter) e um aviso por hora.
 
 Não usa rede. Serve de modelo para escrever o seu widget; valide com
 `mosaic check python3 plugins/gallery.py`.
@@ -28,6 +29,27 @@ def agenda_rows():
             "flag": "updated",
             "tags": [{"text": "sala 3"}, {"text": "remoto", "tone": "muted"}],
         },
+    ]
+
+
+AGENDA_DETAIL_HEADING = "Agenda de hoje"
+FULL_AGENDA = [
+    "09:00 Daily do time",
+    "10:30 Revisão de código",
+    "12:00 Almoço",
+    "14:00 1:1 com a gestão",
+    "15:30 Planejamento da sprint",
+    "16:30 Estudo de ownership em Rust",
+    "17:30 Fechar o dia",
+]
+
+
+def agenda_detail():
+    return [
+        {
+            "heading": AGENDA_DETAIL_HEADING,
+            "items": [{"text": entry} for entry in FULL_AGENDA],
+        }
     ]
 
 
@@ -73,6 +95,7 @@ def build_snapshot(now):
                 },
             ],
         },
+        "detail": agenda_detail(),
         "alerts": [
             {
                 "id": now.strftime(ALERT_ID_FORMAT),
