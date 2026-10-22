@@ -72,8 +72,9 @@ Teclas (modo grade, com os widgets visíveis):
 | `i` | Pede uma recomendação à IA (se `[llm]` estiver ligado) |
 | `p` / `x` | Inicia ou pausa / reinicia o pomodoro |
 | `q` ou `Ctrl+C` | Sai |
+| `?` | Abre a ajuda com as teclas da tela atual (`Esc` ou `?` fecham) |
 
-Com um widget expandido, as setas (ou `h` `j` `k` `l`) movem entre os itens, `PageUp`/`PageDown` pulam vários itens, `Home`/`End` vão ao primeiro e ao último, e `Esc` volta à grade. No menu de ações, `Enter` escolhe a ação, `s` confirma e `n` ou `Esc` cancela. A tecla `1` a `9` troca de aba só na grade.
+Com um widget expandido, as setas (ou `h` `j` `k` `l`) movem entre os itens, `PageUp`/`PageDown` pulam vários itens, `Home`/`End` vão ao primeiro e ao último, e `Esc` volta à grade. No menu de ações, `Enter` escolhe a ação, `s` confirma e `n` ou `Esc` cancela. A tecla `1` a `9` troca de aba só na grade. A última linha do terminal mostra as dicas de teclas do contexto (a partir de 21 linhas de altura) e cada aba exibe o número que a abre. `Enter` em um widget sem `detail` mostra um aviso em vez de expandir.
 
 Após editar a configuração, `R` recarrega widgets, abas e intervalos. Mudanças em `[llm]`, `[pomodoro]` e notificações só valem após reiniciar o Mosaic, mesmo com a recarga.
 
