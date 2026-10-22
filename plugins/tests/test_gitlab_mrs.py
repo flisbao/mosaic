@@ -190,6 +190,29 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(merge_requests[0].author, "desconhecido")
 
 
+class OfflineNoticeTests(unittest.TestCase):
+    SNAPSHOT = {"summary": {"title": "T", "blocks": [{"type": "stat", "items": []}]}}
+    SAVED_AT = datetime(2026, 10, 21, 15, 30).astimezone()
+
+    def notice_text(self, now):
+        blocks = gitlab_mrs.with_offline_notice(self.SNAPSHOT, self.SAVED_AT, now)["summary"]["blocks"]
+        self.assertEqual(blocks[0]["lines"][0]["tone"], "warn")
+        self.assertEqual(blocks[1], self.SNAPSHOT["summary"]["blocks"][0])
+        return blocks[0]["lines"][0]["text"]
+
+    def test_same_local_day_shows_only_the_time(self):
+        now = datetime(2026, 10, 21, 18, 0).astimezone()
+        self.assertEqual(self.notice_text(now), "dados de 15:30 (offline)")
+
+    def test_previous_local_day_shows_the_date(self):
+        now = datetime(2026, 10, 22, 9, 0).astimezone()
+        self.assertEqual(self.notice_text(now), "dados de 21/10 15:30 (offline)")
+
+    def test_days_ago_shows_the_date(self):
+        now = datetime(2026, 10, 25, 9, 0).astimezone()
+        self.assertEqual(self.notice_text(now), "dados de 21/10 15:30 (offline)")
+
+
 class MainTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

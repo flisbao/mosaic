@@ -493,7 +493,7 @@ class SnapshotTests(unittest.TestCase):
     def test_offline_notice_is_first_block_with_warn_tone(self):
         snapshot = github_prs.build_snapshot([pull("a", REVIEW, state="novo")], "GitHub", NOW)
         saved_at = NOW
-        notice = github_prs.with_offline_notice(snapshot, saved_at)["summary"]["blocks"][0]
+        notice = github_prs.with_offline_notice(snapshot, saved_at, NOW)["summary"]["blocks"][0]
         expected = saved_at.astimezone().strftime("dados de %H:%M (offline)")
         self.assertEqual(notice, {"type": "lines", "lines": [{"text": expected, "tone": "warn"}]})
         self.assertEqual(snapshot["summary"]["blocks"][0]["type"], "stat")
@@ -503,6 +503,29 @@ class SnapshotTests(unittest.TestCase):
         pulls = [pull("a", REVIEW, state="novo"), pull("b", REVIEW, state="")]
         alerts = github_prs.build_snapshot(pulls, "GitHub", NOW)["alerts"]
         self.assertEqual([alert["id"] for alert in alerts], ["review-a"])
+
+
+class OfflineNoticeTests(unittest.TestCase):
+    SNAPSHOT = {"summary": {"title": "T", "blocks": [{"type": "stat", "items": []}]}}
+    SAVED_AT = datetime(2026, 10, 21, 15, 30).astimezone()
+
+    def notice_text(self, now):
+        blocks = github_prs.with_offline_notice(self.SNAPSHOT, self.SAVED_AT, now)["summary"]["blocks"]
+        self.assertEqual(blocks[0]["lines"][0]["tone"], "warn")
+        self.assertEqual(blocks[1], self.SNAPSHOT["summary"]["blocks"][0])
+        return blocks[0]["lines"][0]["text"]
+
+    def test_same_local_day_shows_only_the_time(self):
+        now = datetime(2026, 10, 21, 18, 0).astimezone()
+        self.assertEqual(self.notice_text(now), "dados de 15:30 (offline)")
+
+    def test_previous_local_day_shows_the_date(self):
+        now = datetime(2026, 10, 22, 9, 0).astimezone()
+        self.assertEqual(self.notice_text(now), "dados de 21/10 15:30 (offline)")
+
+    def test_days_ago_shows_the_date(self):
+        now = datetime(2026, 10, 25, 9, 0).astimezone()
+        self.assertEqual(self.notice_text(now), "dados de 21/10 15:30 (offline)")
 
 
 class StateStoreTests(unittest.TestCase):

@@ -118,6 +118,7 @@ TONE_BY_STATE = {
     STATE_WAITING: TONE_MUTED,
 }
 OFFLINE_NOTICE_FORMAT = "dados de %H:%M (offline)"
+OFFLINE_NOTICE_FORMAT_WITH_DATE = "dados de %d/%m %H:%M (offline)"
 SECONDS_PER_MINUTE = 60
 MINUTES_PER_HOUR = 60
 HOURS_PER_DAY = 24
@@ -708,14 +709,17 @@ def _alert(pull: PullRequest) -> dict:
     }
 
 
-def with_offline_notice(snapshot: dict, saved_at: datetime) -> dict:
+def with_offline_notice(snapshot: dict, saved_at: datetime, now: datetime) -> dict:
     summary = snapshot["summary"]
-    blocks = [_offline_notice_block(saved_at), *summary["blocks"]]
+    blocks = [_offline_notice_block(saved_at, now), *summary["blocks"]]
     return {**snapshot, "summary": {**summary, "blocks": blocks}}
 
 
-def _offline_notice_block(saved_at: datetime) -> dict:
-    text = saved_at.astimezone().strftime(OFFLINE_NOTICE_FORMAT)
+def _offline_notice_block(saved_at: datetime, now: datetime) -> dict:
+    local_saved_at = saved_at.astimezone()
+    is_same_day = local_saved_at.date() == now.astimezone().date()
+    notice_format = OFFLINE_NOTICE_FORMAT if is_same_day else OFFLINE_NOTICE_FORMAT_WITH_DATE
+    text = local_saved_at.strftime(notice_format)
     return {"type": "lines", "lines": [{"text": text, "tone": TONE_WARN}]}
 
 
@@ -798,7 +802,7 @@ def run_snapshot(
         if cached is None:
             return _fail(stderr, error)
         snapshot, saved_at = cached
-        _print_json(stdout, with_offline_notice(snapshot, saved_at))
+        _print_json(stdout, with_offline_notice(snapshot, saved_at, moment))
         return 0
     shown, remembered = apply_review_memory(pull_requests, state["reviews"])
     snapshot = build_snapshot(shown, title, moment)
