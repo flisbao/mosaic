@@ -23,6 +23,7 @@ use crate::presentation::widget_box::{
 use crate::presentation::widget_view::render_blocks_limited;
 
 const FALLBACK_SPAN: u16 = 1;
+const MAXIMUM_NUMBERED_TABS: usize = 9;
 const CONFIRMATION_HINT: &str = "[s] confirma  [n] cancela";
 const NOTICE_ROW_HEIGHT: u16 = 1;
 const MINIMUM_HEIGHT_FOR_NOTICE: u16 = 2;
@@ -63,13 +64,15 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
         Style::default().fg(Color::Cyan),
     )];
     for (position, tab) in state.tabs().iter().enumerate() {
-        let name = tab.name.as_str();
         let style = if position == state.active_tab() {
-            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
-        } else {
             Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
         };
-        spans.push(Span::styled(format!(" {name} "), style));
+        spans.push(Span::styled(tab_label(position, &tab.name), style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), bar);
     if let Some(timer) = state.pomodoro() {
@@ -81,6 +84,14 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
             .alignment(Alignment::Right),
             bar,
         );
+    }
+}
+
+fn tab_label(position: usize, name: &str) -> String {
+    if position < MAXIMUM_NUMBERED_TABS {
+        format!(" {} {name} ", position + 1)
+    } else {
+        format!(" {name} ")
     }
 }
 
@@ -792,6 +803,63 @@ mod tests {
             }
         }
         None
+    }
+
+    fn two_tab_state() -> AppState {
+        AppState::new(
+            vec![
+                entry("kanban", ready(kanban_snapshot())),
+                entry(
+                    "notes",
+                    ready(snapshot("Notas", vec![plain_line("nota 1")])),
+                ),
+            ],
+            vec![
+                TabView {
+                    name: "Alfa".to_string(),
+                    entry_indexes: vec![0],
+                },
+                TabView {
+                    name: "Beta".to_string(),
+                    entry_indexes: vec![1],
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn tab_label_numbers_the_first_nine_tabs_only() {
+        assert_eq!(tab_label(0, "PRs"), " 1 PRs ");
+        assert_eq!(tab_label(8, "Nona"), " 9 Nona ");
+        assert_eq!(tab_label(9, "Décima"), " Décima ");
+    }
+
+    #[test]
+    fn top_bar_shows_numbered_tabs() {
+        let top_bar = draw(&two_tab_state(), 80, 24)[0].clone();
+        assert!(top_bar.contains("1 Alfa"), "{top_bar}");
+        assert!(top_bar.contains("2 Beta"), "{top_bar}");
+    }
+
+    #[test]
+    fn active_tab_is_a_cyan_pill_and_others_are_not() {
+        let mut state = two_tab_state();
+        let buffer = buffer_of(&state, 80, 24, now());
+        let active = style_of_text(&buffer, "Alfa").unwrap();
+        let inactive = style_of_text(&buffer, "Beta").unwrap();
+        assert_eq!(active.bg, Some(Color::Cyan));
+        assert_eq!(active.fg, Some(Color::Black));
+        assert_ne!(inactive.bg, Some(Color::Cyan));
+        press(&mut state, &[KeyInput::Tab]);
+        let buffer = buffer_of(&state, 80, 24, now());
+        assert_eq!(
+            style_of_text(&buffer, "Beta").unwrap().bg,
+            Some(Color::Cyan)
+        );
+        assert_ne!(
+            style_of_text(&buffer, "Alfa").unwrap().bg,
+            Some(Color::Cyan)
+        );
     }
 
     #[test]
