@@ -1,9 +1,12 @@
+import io
 import json
+import stat
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -350,6 +353,216 @@ class FetchTests(unittest.TestCase):
         variables = json.loads(http.calls[0]["body"])["variables"]
         self.assertEqual(set(variables), {"review", "reviewed", "mine"})
         self.assertTrue(pulls)
+
+
+def pull(item_id, section, review_status="", pushed=None, head="h1", state="", created="2026-10-20T10:00:00Z", title="T"):
+    return github_prs.PullRequest(
+        item_id=item_id,
+        repository="acme/api",
+        reference="#1",
+        title=title,
+        author="ana",
+        created_at=github_prs.parse_timestamp(created),
+        url="https://x/1",
+        target_branch="main",
+        head_commit=head,
+        section=section,
+        review_status=review_status,
+        pushed_after_review=pushed,
+        state=state,
+    )
+
+
+REVIEW = github_prs.REVIEW_SECTION
+MINE = github_prs.MINE_SECTION
+NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+
+
+class ReviewMemoryTests(unittest.TestCase):
+    def test_unreviewed_without_memory_is_new(self):
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed")], {})
+        self.assertEqual(shown[0].state, "novo")
+
+    def test_reviewed_then_head_changes_is_pushed(self):
+        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], {})
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h2")], memory)
+        self.assertEqual(shown[0].state, "push novo")
+
+    def test_reviewed_same_head_has_no_tag(self):
+        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], {})
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], memory)
+        self.assertEqual(shown[0].state, "")
+
+    def test_vote_reset_by_push_is_pushed_not_new(self):
+        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "approved", head="h1")], {})
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed", head="h2")], memory)
+        self.assertEqual(shown[0].state, "push novo")
+
+    def test_approved_is_hidden_but_remembered(self):
+        shown, memory = github_prs.apply_review_memory([pull("a", REVIEW, "approved")], {})
+        self.assertEqual(shown, [])
+        self.assertEqual(memory["a"]["reviewed_head"], "h1")
+
+    def test_known_push_flag_wins_over_memory(self):
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", pushed=True)], {})
+        self.assertEqual(shown[0].state, "push novo")
+
+    def test_mine_passes_through_and_memory_drops_vanished(self):
+        shown, memory = github_prs.apply_review_memory([pull("m", MINE, state="aprovado")], {"old": {}})
+        self.assertEqual(shown[0].state, "aprovado")
+        self.assertEqual(memory, {})
+
+    def test_non_dict_memory_entry_is_ignored(self):
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed")], {"a": "lixo"})
+        self.assertEqual(shown[0].state, "novo")
+
+
+class SnapshotTests(unittest.TestCase):
+    def test_sections_order_and_item_text(self):
+        pulls = [
+            pull("b", REVIEW, state="novo", created="2026-10-21T12:00:00Z"),
+            pull("a", REVIEW, state="push novo", created="2026-10-19T12:00:00Z"),
+            pull("m", MINE, state="aprovado"),
+        ]
+        snapshot = github_prs.build_snapshot(pulls, "GitHub", NOW)
+        self.assertEqual([s["heading"] for s in snapshot["detail"]], ["Aguardando minha revisão", "Meus PRs"])
+        review_items = snapshot["detail"][0]["items"]
+        self.assertEqual([i["id"] for i in review_items], ["a", "b"])
+        self.assertEqual(review_items[0]["text"], "acme/api #1 T · ana · 3d [push novo]")
+        self.assertEqual(review_items[0]["flag"], "updated")
+        self.assertNotIn("flag", review_items[1])
+        self.assertEqual(review_items[0]["meta"], {"url": "https://x/1", "target_branch": "main",
+                                                   "state": "push novo", "author": "ana"})
+
+    def test_home_stat_rows_mini_and_alerts(self):
+        snapshot = github_prs.build_snapshot([pull("a", REVIEW, state="novo"), pull("m", MINE, state="conflito")], "GitHub", NOW)
+        stat, rows = snapshot["summary"]["blocks"]
+        self.assertEqual(stat["items"], [{"value": "1", "label": "revisar"}, {"value": "1", "label": "meus PRs"}])
+        self.assertEqual(rows["rows"][0]["tags"], [{"text": "novo", "tone": "current"}])
+        self.assertEqual(snapshot["mini"], {"value": "1", "text": "para revisar", "tone": "warn"})
+        self.assertEqual(snapshot["alerts"][0]["id"], "review-a")
+        self.assertEqual(snapshot["protocol"], 1)
+
+    def test_empty_shows_nothing_pending(self):
+        snapshot = github_prs.build_snapshot([], "GitHub", NOW)
+        self.assertEqual(snapshot["summary"]["blocks"][1],
+                         {"type": "lines", "lines": [{"text": "nada pendente", "tone": "muted"}]})
+        self.assertEqual(snapshot["mini"]["tone"], "normal")
+
+    def test_home_rows_are_capped_at_protocol_limit(self):
+        pulls = [pull(f"p{n}", REVIEW, state="novo") for n in range(250)]
+        rows = github_prs.build_snapshot(pulls, "GitHub", NOW)["summary"]["blocks"][1]["rows"]
+        self.assertEqual(len(rows), 200)
+
+    def test_long_titles_are_flattened_and_cut(self):
+        pulls = [pull("a", REVIEW, state="novo", title="linha um\nlinha dois " + "x" * 200)]
+        item_text = github_prs.build_snapshot(pulls, "GitHub", NOW)["detail"][0]["items"][0]["text"]
+        self.assertNotIn("\n", item_text)
+        self.assertIn("…", item_text)
+        self.assertLessEqual(len(item_text.split(" · ")[0]), len("acme/api #1 ") + 80)
+
+    def test_offline_notice_is_first_block_with_warn_tone(self):
+        snapshot = github_prs.build_snapshot([pull("a", REVIEW, state="novo")], "GitHub", NOW)
+        saved_at = NOW
+        notice = github_prs.with_offline_notice(snapshot, saved_at)["summary"]["blocks"][0]
+        expected = saved_at.astimezone().strftime("dados de %H:%M (offline)")
+        self.assertEqual(notice, {"type": "lines", "lines": [{"text": expected, "tone": "warn"}]})
+        self.assertEqual(snapshot["summary"]["blocks"][0]["type"], "stat")
+
+
+class StateStoreTests(unittest.TestCase):
+    def test_round_trip_and_private_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "estado"
+            store = github_prs.StateStore(target, "k")
+            document = {"saved_at": NOW.isoformat(), "snapshot": {"protocol": 1}, "reviews": {"a": {"status": "reviewed"}}}
+            store.save(document)
+            self.assertEqual(store.load(), document)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+
+    def test_save_failure_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            blocker = Path(directory) / "arquivo"
+            blocker.write_text("não é diretório", encoding="utf-8")
+            store = github_prs.StateStore(blocker, "k")
+            store.save({"saved_at": None, "snapshot": None, "reviews": {}})
+
+    def test_corrupt_state_file_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = github_prs.StateStore(Path(directory) / "s", "k")
+            store.save({"saved_at": None, "snapshot": None, "reviews": {}})
+            next(Path(directory, "s").glob("*.json")).write_text("{quebrado", encoding="utf-8")
+            self.assertEqual(store.load(), {"reviews": {}, "snapshot": None, "saved_at": None})
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state_dir = Path(self.temporary.name) / "estado"
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def run_main(self, http, arguments=("snapshot",), **environment_overrides):
+        environment = base_environment(GITHUB_STATE_DIR=str(self.state_dir), **environment_overrides)
+        return github_prs.main(
+            list(arguments),
+            environ=environment,
+            http=http,
+            now=NOW,
+            stdout=self.stdout,
+            stderr=self.stderr,
+        )
+
+    def populate_cache(self):
+        self.assertEqual(self.run_main(FakeHttp([(200, fixtures.github_response())])), 0)
+        self.stdout = io.StringIO()
+
+    def test_main_prints_snapshot_and_saves_state(self):
+        code = self.run_main(FakeHttp([(200, fixtures.github_response())]))
+        self.assertEqual(code, 0)
+        snapshot = json.loads(self.stdout.getvalue())
+        self.assertEqual([s["heading"] for s in snapshot["detail"]], [REVIEW, MINE])
+        self.assertEqual(len(list(self.state_dir.glob("*.json"))), 1)
+
+    def test_main_usage_error_exits_two(self):
+        self.assertEqual(self.run_main(FakeHttp(), arguments=("outra",)), 2)
+        self.assertEqual(self.stderr.getvalue(), "uso: github_prs.py snapshot\n")
+
+    def test_main_config_error_exits_one(self):
+        code = self.run_main(FakeHttp(), GITHUB_TOKEN_ENV=None, MEU_TOKEN=None)
+        self.assertEqual(code, 1)
+        self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+
+    def test_main_auth_error_exits_one_without_cache(self):
+        code = self.run_main(FakeHttp([(401, {"message": SECRET})]))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+        self.assertNotIn(SECRET, self.stderr.getvalue())
+
+    def test_main_network_error_serves_cache_with_offline_notice(self):
+        self.populate_cache()
+        code = self.run_main(FakeHttp(error=OSError("sem rede")))
+        self.assertEqual(code, 0)
+        snapshot = json.loads(self.stdout.getvalue())
+        expected = NOW.astimezone().strftime("dados de %H:%M (offline)")
+        self.assertEqual(
+            snapshot["summary"]["blocks"][0],
+            {"type": "lines", "lines": [{"text": expected, "tone": "warn"}]},
+        )
+
+    def test_main_network_error_without_cache_exits_one(self):
+        code = self.run_main(FakeHttp(error=OSError("sem rede")))
+        self.assertEqual(code, 1)
+        self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+
+    def test_main_output_never_contains_the_token(self):
+        self.run_main(FakeHttp([(200, fixtures.github_response())]))
+        for path in self.state_dir.iterdir():
+            self.assertNotIn(SECRET, path.read_text(encoding="utf-8"))
+        self.assertNotIn(SECRET, self.stdout.getvalue())
+        self.assertNotIn(SECRET, self.stderr.getvalue())
 
 
 if __name__ == "__main__":

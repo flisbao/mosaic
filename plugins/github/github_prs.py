@@ -3,14 +3,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
+import os
+import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_API_URL = "https://api.github.com"
@@ -59,6 +63,46 @@ REVIEW_STATE_CHANGES_REQUESTED = "CHANGES_REQUESTED"
 DECISION_CHANGES_REQUESTED = "CHANGES_REQUESTED"
 DECISION_APPROVED = "APPROVED"
 MERGEABLE_CONFLICTING = "CONFLICTING"
+TITLE_TEXT_LIMIT = 80
+MAXIMUM_BLOCK_ROWS = 200
+PROTOCOL_VERSION = 1
+ITEM_SEPARATOR = " · "
+EMPTY_TEXT = "nada pendente"
+MINI_TEXT = "para revisar"
+REVIEW_LABEL = "revisar"
+MINE_LABEL = "meus PRs"
+ALERT_ID_PREFIX = "review-"
+MAXIMUM_ALERT_ID_LENGTH = 100
+ALERT_TITLE_PREFIX = "Revisão pedida: "
+ALERT_LEVEL = "info"
+UPDATED_FLAG = "updated"
+TONE_NORMAL = "normal"
+TONE_MUTED = "muted"
+TONE_WARN = "warn"
+TONE_OK = "ok"
+TONE_CURRENT = "current"
+TONE_DANGER = "danger"
+TONE_BY_STATE = {
+    STATE_NEW: TONE_CURRENT,
+    STATE_PUSHED: TONE_WARN,
+    STATE_CONFLICT: TONE_DANGER,
+    STATE_CHANGES: TONE_WARN,
+    STATE_APPROVED: TONE_OK,
+    STATE_WAITING: TONE_MUTED,
+}
+OFFLINE_NOTICE_FORMAT = "dados de %H:%M (offline)"
+SECONDS_PER_MINUTE = 60
+MINUTES_PER_HOUR = 60
+HOURS_PER_DAY = 24
+HOURS_SHOWN_BEFORE_DAYS = 48
+ELLIPSIS = "…"
+STATE_FILE_SUFFIX = ".json"
+TEMPORARY_FILE_SUFFIX = ".tmp"
+STATE_DIRECTORY_MODE = 0o700
+ARGUMENT_ERROR_EXIT_CODE = 2
+FAILURE_EXIT_CODE = 1
+USAGE_MESSAGE = "uso: github_prs.py snapshot"
+SNAPSHOT_COMMAND = ["snapshot"]
 
 
 class ConfigError(Exception):
@@ -463,3 +507,291 @@ def _nested_text(node: dict, key: str, field: str) -> str:
     inner = node.get(key)
     value = inner.get(field) if isinstance(inner, dict) else None
     return value or ""
+
+
+def apply_review_memory(
+    pull_requests: list[PullRequest], memory: dict
+) -> tuple[list[PullRequest], dict]:
+    displayed, remembered = [], {}
+    for pull in pull_requests:
+        if pull.section != REVIEW_SECTION:
+            displayed.append(pull)
+            continue
+        previous = _previous_entry(memory, pull.item_id)
+        reviewed_head = _reviewed_head_after(pull, previous)
+        remembered[pull.item_id] = {
+            "head": pull.head_commit,
+            "reviewed_head": reviewed_head,
+            "status": pull.review_status,
+        }
+        if pull.review_status != APPROVED:
+            displayed.append(replace(pull, state=_review_state(pull, reviewed_head)))
+    return displayed, remembered
+
+
+def _previous_entry(memory: dict, item_id: str) -> dict:
+    if not isinstance(memory, dict):
+        return {}
+    entry = memory.get(item_id)
+    return entry if isinstance(entry, dict) else {}
+
+
+def _reviewed_head_after(pull: PullRequest, previous: dict) -> str | None:
+    reviewed_head = previous.get("reviewed_head")
+    if pull.review_status in (REVIEWED, APPROVED):
+        if reviewed_head is None or previous.get("status") != pull.review_status:
+            return pull.head_commit
+    return reviewed_head
+
+
+def _review_state(pull: PullRequest, reviewed_head: str | None) -> str:
+    if pull.pushed_after_review is not None:
+        if pull.pushed_after_review:
+            return STATE_PUSHED
+        return STATE_NEW if pull.review_status == UNREVIEWED else ""
+    pushed = reviewed_head is not None and reviewed_head != pull.head_commit
+    if pushed:
+        return STATE_PUSHED
+    return STATE_NEW if pull.review_status == UNREVIEWED else ""
+
+
+def format_age(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // SECONDS_PER_MINUTE)
+    if minutes <= 0:
+        return "0m"
+    if minutes < MINUTES_PER_HOUR:
+        return f"{minutes}m"
+    hours = minutes // MINUTES_PER_HOUR
+    if hours < HOURS_SHOWN_BEFORE_DAYS:
+        return f"{hours}h"
+    return f"{hours // HOURS_PER_DAY}d"
+
+
+def flatten_text(text, limit: int) -> str:
+    flattened = " ".join(str(text).split())
+    if len(flattened) <= limit:
+        return flattened
+    if limit <= 0:
+        return ""
+    return flattened[: limit - 1] + ELLIPSIS
+
+
+def build_snapshot(pull_requests: list[PullRequest], title: str, now: datetime) -> dict:
+    review = _sorted_by_creation(pull for pull in pull_requests if pull.section == REVIEW_SECTION)
+    mine = _sorted_by_creation(pull for pull in pull_requests if pull.section == MINE_SECTION)
+    return {
+        "protocol": PROTOCOL_VERSION,
+        "summary": {"title": title, "blocks": _summary_blocks(review, mine, now)},
+        "detail": [
+            {"heading": REVIEW_SECTION, "items": [_detail_item(pull, now) for pull in review]},
+            {"heading": MINE_SECTION, "items": [_detail_item(pull, now) for pull in mine]},
+        ],
+        "mini": _mini_block(review),
+        "alerts": [_alert(pull) for pull in review],
+    }
+
+
+def _sorted_by_creation(pulls) -> list[PullRequest]:
+    return sorted(pulls, key=lambda pull: pull.created_at)
+
+
+def _summary_blocks(review: list[PullRequest], mine: list[PullRequest], now: datetime) -> list[dict]:
+    blocks = [_stat_block(review, mine)]
+    if review:
+        blocks.append({"type": "rows", "rows": [_row(pull, now) for pull in review[:MAXIMUM_BLOCK_ROWS]]})
+    elif not mine:
+        blocks.append({"type": "lines", "lines": [{"text": EMPTY_TEXT, "tone": TONE_MUTED}]})
+    return blocks
+
+
+def _stat_block(review: list[PullRequest], mine: list[PullRequest]) -> dict:
+    return {
+        "type": "stat",
+        "items": [
+            {"value": str(len(review)), "label": REVIEW_LABEL},
+            {"value": str(len(mine)), "label": MINE_LABEL},
+        ],
+    }
+
+
+def _row(pull: PullRequest, now: datetime) -> dict:
+    row = {"text": _pull_heading(pull), "time": format_age(now - pull.created_at)}
+    if pull.state:
+        row["tags"] = [{"text": pull.state, "tone": TONE_BY_STATE[pull.state]}]
+    return row
+
+
+def _pull_heading(pull: PullRequest) -> str:
+    return f"{pull.repository} {pull.reference} {flatten_text(pull.title, TITLE_TEXT_LIMIT)}"
+
+
+def _detail_item(pull: PullRequest, now: datetime) -> dict:
+    item = {
+        "id": pull.item_id,
+        "text": _detail_text(pull, now),
+        "meta": {
+            "url": pull.url,
+            "target_branch": pull.target_branch,
+            "state": pull.state,
+            "author": pull.author,
+        },
+    }
+    if pull.state == STATE_PUSHED:
+        item["flag"] = UPDATED_FLAG
+    return item
+
+
+def _detail_text(pull: PullRequest, now: datetime) -> str:
+    text = ITEM_SEPARATOR.join((_pull_heading(pull), pull.author, format_age(now - pull.created_at)))
+    if pull.state:
+        text += f" [{pull.state}]"
+    return text
+
+
+def _mini_block(review: list[PullRequest]) -> dict:
+    return {
+        "value": str(len(review)),
+        "text": MINI_TEXT,
+        "tone": TONE_WARN if review else TONE_NORMAL,
+    }
+
+
+def _alert(pull: PullRequest) -> dict:
+    return {
+        "id": (ALERT_ID_PREFIX + pull.item_id)[:MAXIMUM_ALERT_ID_LENGTH],
+        "title": f"{ALERT_TITLE_PREFIX}{pull.repository} {pull.reference}",
+        "body": flatten_text(pull.title, TITLE_TEXT_LIMIT),
+        "level": ALERT_LEVEL,
+    }
+
+
+def with_offline_notice(snapshot: dict, saved_at: datetime) -> dict:
+    summary = snapshot["summary"]
+    blocks = [_offline_notice_block(saved_at), *summary["blocks"]]
+    return {**snapshot, "summary": {**summary, "blocks": blocks}}
+
+
+def _offline_notice_block(saved_at: datetime) -> dict:
+    text = saved_at.astimezone().strftime(OFFLINE_NOTICE_FORMAT)
+    return {"type": "lines", "lines": [{"text": text, "tone": TONE_WARN}]}
+
+
+class StateStore:
+    def __init__(self, directory: Path, key: str):
+        self._directory = directory
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        self._path = directory / (digest + STATE_FILE_SUFFIX)
+
+    def load(self) -> dict:
+        try:
+            document = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return _empty_state()
+        if not isinstance(document, dict) or not isinstance(document.get("reviews"), dict):
+            return _empty_state()
+        return {
+            "reviews": document["reviews"],
+            "snapshot": document.get("snapshot"),
+            "saved_at": document.get("saved_at"),
+        }
+
+    def save(self, document: dict) -> None:
+        try:
+            self._directory.mkdir(mode=STATE_DIRECTORY_MODE, parents=True, exist_ok=True)
+            _write_atomically(self._path, json.dumps(document))
+        except OSError:
+            return
+
+
+def _empty_state() -> dict:
+    return {"reviews": {}, "snapshot": None, "saved_at": None}
+
+
+def _write_atomically(destination: Path, content: str) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(dir=destination.parent, suffix=TEMPORARY_FILE_SUFFIX)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temporary_name, destination)
+    except OSError:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+
+
+def run_snapshot(
+    store: StateStore,
+    title: str,
+    fetch: Callable[[], list[PullRequest]],
+    moment: datetime,
+    stdout,
+    stderr,
+) -> int:
+    state = store.load()
+    try:
+        pull_requests = fetch()
+    except AuthError as error:
+        return _fail(stderr, error)
+    except (RateLimitError, NetworkError, UnexpectedResponseError) as error:
+        cached = _cached_snapshot(state)
+        if cached is None:
+            return _fail(stderr, error)
+        snapshot, saved_at = cached
+        _print_json(stdout, with_offline_notice(snapshot, saved_at))
+        return 0
+    shown, remembered = apply_review_memory(pull_requests, state["reviews"])
+    snapshot = build_snapshot(shown, title, moment)
+    store.save({"saved_at": moment.isoformat(), "snapshot": snapshot, "reviews": remembered})
+    _print_json(stdout, snapshot)
+    return 0
+
+
+def _cached_snapshot(state: dict) -> tuple[dict, datetime] | None:
+    snapshot = state.get("snapshot")
+    saved_at = parse_timestamp(state.get("saved_at"))
+    if not isinstance(snapshot, dict) or saved_at is None:
+        return None
+    return snapshot, saved_at
+
+
+def _print_json(stdout, document: dict) -> None:
+    print(json.dumps(document, ensure_ascii=False), file=stdout)
+
+
+def _fail(stderr, error: Exception) -> int:
+    print(f"erro: {error}", file=stderr)
+    return FAILURE_EXIT_CODE
+
+
+def main(
+    arguments: list[str],
+    environ=None,
+    http=urllib_http,
+    now=None,
+    stdout=None,
+    stderr=None,
+) -> int:
+    environ = os.environ if environ is None else environ
+    stdout = sys.stdout if stdout is None else stdout
+    stderr = sys.stderr if stderr is None else stderr
+    if list(arguments) != SNAPSHOT_COMMAND:
+        print(USAGE_MESSAGE, file=stderr)
+        return ARGUMENT_ERROR_EXIT_CODE
+    try:
+        config = load_config(environ)
+    except ConfigError as error:
+        return _fail(stderr, error)
+    store = StateStore(config.state_dir, config.api_url)
+    client = GitHubClient(config, http)
+    moment = now if now is not None else datetime.now(timezone.utc)
+    return run_snapshot(
+        store,
+        config.title,
+        lambda: fetch_pull_requests(client),
+        moment,
+        stdout,
+        stderr,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
