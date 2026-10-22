@@ -1,4 +1,5 @@
 use super::{AppState, NO_DETAIL_NOTICE, PAGE_JUMP_ITEMS};
+use crate::domain::widget::WidgetRecord;
 use crate::presentation::key_input::KeyInput;
 
 const DECIMAL_RADIX: u32 = 10;
@@ -123,16 +124,21 @@ impl AppState {
         if self.focused_entry().is_none() {
             return;
         }
+        if !self.has_detail() && !self.is_focused_failing() {
+            self.show_notice(NO_DETAIL_NOTICE.to_string());
+            return;
+        }
         self.expanded = true;
         self.selected_item = 0;
-        if !self.has_detail() {
-            self.show_notice(NO_DETAIL_NOTICE.to_string());
-        }
     }
 
     fn collapse(&mut self) {
         self.expanded = false;
         self.selected_item = 0;
+    }
+
+    fn is_focused_failing(&self) -> bool {
+        self.focused_record().is_some_and(WidgetRecord::is_failing)
     }
 
     fn has_detail(&self) -> bool {

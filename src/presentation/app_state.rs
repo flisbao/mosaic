@@ -1173,11 +1173,20 @@ mod tests {
     }
 
     #[test]
-    fn expanding_widget_without_detail_shows_notice() {
+    fn enter_on_widget_without_detail_shows_notice_and_does_not_expand() {
         let mut app = app();
         press(&mut app, &[KeyInput::Tab, KeyInput::Enter]);
         assert_eq!(app.active_tab(), 1);
         assert!(app.notice().is_some());
+        assert!(!app.is_expanded());
+    }
+
+    #[test]
+    fn enter_on_widget_with_detail_expands_without_notice() {
+        let mut app = app();
+        press(&mut app, &[KeyInput::Enter]);
+        assert!(app.is_expanded());
+        assert!(app.notice().is_none());
     }
 
     #[test]
