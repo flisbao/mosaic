@@ -124,3 +124,52 @@ def azure_pull_request(number, project="Proj", repository="api", created="2026-1
         "lastMergeSourceCommit": {"commitId": f"c{number}"},
         "reviewers": [{"id": reviewer_id, "vote": vote} for reviewer_id, vote in reviewers],
     }
+
+
+def gitlab_response():
+    return {
+        "data": {
+            "currentUser": {
+                "username": VIEWER_LOGIN,
+                "reviewRequestedMergeRequests": {
+                    "nodes": [
+                        _gitlab_merge_request(10),
+                        _gitlab_merge_request(11, reviewers=[(VIEWER_LOGIN, "REQUESTED_CHANGES")]),
+                        _gitlab_merge_request(12, reviewers=[(VIEWER_LOGIN, "APPROVED")]),
+                        _gitlab_merge_request(13, draft=True),
+                    ],
+                },
+                "authoredMergeRequests": {
+                    "nodes": [
+                        _gitlab_merge_request(20, author=VIEWER_LOGIN, conflicts=True),
+                        _gitlab_merge_request(21, author=VIEWER_LOGIN,
+                                              reviewers=[(OTHER_LOGIN, "REQUESTED_CHANGES")]),
+                        _gitlab_merge_request(22, author=VIEWER_LOGIN,
+                                              reviewers=[(OTHER_LOGIN, "APPROVED")]),
+                        _gitlab_merge_request(23, author=VIEWER_LOGIN),
+                    ],
+                },
+            }
+        }
+    }
+
+
+def _gitlab_merge_request(number, *, author="ana", draft=False, conflicts=False, reviewers=()):
+    return {
+        "iid": str(number),
+        "title": f"Título do MR {number}",
+        "webUrl": f"https://gitlab.com/grupo/api/-/merge_requests/{number}",
+        "createdAt": f"2026-10-{number:02d}T08:00:00Z",
+        "draft": draft,
+        "author": {"username": author},
+        "project": {"fullPath": "grupo/api"},
+        "targetBranch": "main",
+        "diffHeadSha": f"sha{number}",
+        "conflicts": conflicts,
+        "reviewers": {
+            "nodes": [
+                {"username": login, "mergeRequestInteraction": {"reviewState": state}}
+                for login, state in reviewers
+            ],
+        },
+    }
