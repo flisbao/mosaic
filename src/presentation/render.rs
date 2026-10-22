@@ -16,7 +16,9 @@ use crate::presentation::grid_layout::{
     arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
     TOP_BAR_HEIGHT,
 };
-use crate::presentation::key_hints::{context_hints, global_hints, HintContext, KeyHint};
+use crate::presentation::key_hints::{
+    context_hints, footer_hints, global_hints, HintContext, KeyHint,
+};
 use crate::presentation::text_fit::{flagged, truncate_to_width};
 use crate::presentation::widget_box::{
     box_block, box_header, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
@@ -24,6 +26,10 @@ use crate::presentation::widget_box::{
 use crate::presentation::widget_view::render_blocks_limited;
 
 const FALLBACK_SPAN: u16 = 1;
+const FOOTER_HEIGHT: u16 = 1;
+const MINIMUM_HEIGHT_FOR_FOOTER: u16 = MINIMUM_FULL_HEIGHT + FOOTER_HEIGHT;
+const FOOTER_LEADING_PADDING: &str = " ";
+const FOOTER_SEPARATOR: &str = "  ";
 const HELP_KEY_COLUMN_WIDTH: usize = 18;
 const HELP_GLOBAL_HEADING: &str = "Em qualquer tela";
 const HELP_DISMISS_HINT: &str = "Esc ou ? fecha esta ajuda";
@@ -51,11 +57,13 @@ pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDate
         return;
     }
     render_top_bar(frame, state, now, area);
+    let body = body_area(area);
     if state.is_expanded() {
-        render_focus_mode(frame, state, now, area);
+        render_focus_mode(frame, state, now, body);
     } else {
-        render_home(frame, state, spans, now, area);
+        render_home(frame, state, spans, now, body);
     }
+    render_footer(frame, state, area);
     render_notice(frame, state, area);
     render_modal(frame, state, area);
     render_alert(frame, state, area);
@@ -89,6 +97,45 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
             bar,
         );
     }
+}
+
+fn footer_row(area: Rect) -> Option<Rect> {
+    if area.height < MINIMUM_HEIGHT_FOR_FOOTER {
+        return None;
+    }
+    Some(Rect::new(
+        area.x,
+        area.y + area.height - FOOTER_HEIGHT,
+        area.width,
+        FOOTER_HEIGHT,
+    ))
+}
+
+fn body_area(area: Rect) -> Rect {
+    match footer_row(area) {
+        Some(_) => Rect::new(area.x, area.y, area.width, area.height - FOOTER_HEIGHT),
+        None => area,
+    }
+}
+
+fn render_footer(frame: &mut Frame, state: &AppState, area: Rect) {
+    let Some(row) = footer_row(area) else {
+        return;
+    };
+    let context = HintContext::from_expanded(state.is_expanded());
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let description_style = Style::default().fg(Color::DarkGray);
+    let mut spans = vec![Span::raw(FOOTER_LEADING_PADDING)];
+    for hint in footer_hints(context, usize::from(area.width)) {
+        spans.push(Span::styled(hint.keys, key_style));
+        spans.push(Span::styled(
+            format!(" {}{FOOTER_SEPARATOR}", hint.description),
+            description_style,
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
 }
 
 fn tab_label(position: usize, name: &str) -> String {
@@ -921,6 +968,63 @@ mod tests {
         for (width, height) in [(0, 0), (1, 1), (10, 3), (30, 8), (60, 12)] {
             draw(&state, width, height);
         }
+    }
+
+    fn last_row(state: &AppState, width: u16, height: u16) -> String {
+        draw(state, width, height).pop().unwrap()
+    }
+
+    #[test]
+    fn footer_on_the_grid_lists_keys_and_help() {
+        let row = last_row(&two_tab_state(), 100, 30);
+        for expected in ["Enter", "abrir", "? ajuda"] {
+            assert!(row.contains(expected), "falta {expected}: {row}");
+        }
+    }
+
+    #[test]
+    fn footer_in_an_expanded_widget_lists_navigation_keys() {
+        let mut state = two_tab_state();
+        press(&mut state, &[KeyInput::Enter]);
+        let row = last_row(&state, 100, 30);
+        for expected in ["Esc", "voltar", "? ajuda"] {
+            assert!(row.contains(expected), "falta {expected}: {row}");
+        }
+    }
+
+    #[test]
+    fn footer_keeps_help_visible_at_minimum_width() {
+        let row = last_row(&two_tab_state(), 60, 30);
+        assert!(row.contains("? ajuda"), "{row}");
+    }
+
+    #[test]
+    fn footer_is_hidden_below_minimum_height() {
+        let state = two_tab_state();
+        for height in [20, 12] {
+            assert!(!screen(&state, 100, height).contains("? ajuda"));
+        }
+        let area = Rect::new(0, 0, 100, 20);
+        assert_eq!(footer_row(area), None);
+        assert_eq!(body_area(area), area);
+    }
+
+    #[test]
+    fn grid_keeps_full_layout_at_twenty_one_rows() {
+        let text = screen(&two_tab_state(), 100, 21);
+        assert!(!text.contains("Amplie o terminal"), "{text}");
+        assert!(last_row(&two_tab_state(), 100, 21).contains("? ajuda"));
+    }
+
+    #[test]
+    fn notice_covers_the_footer_and_footer_returns_after_next_key() {
+        let mut state = two_tab_state();
+        press(&mut state, &[KeyInput::Tab, KeyInput::Enter]);
+        let covered = last_row(&state, 100, 30);
+        assert!(covered.contains("ainda não tem detalhe"), "{covered}");
+        assert!(!covered.contains("? ajuda"), "{covered}");
+        press(&mut state, &[KeyInput::Down]);
+        assert!(last_row(&state, 100, 30).contains("? ajuda"));
     }
 
     #[test]
