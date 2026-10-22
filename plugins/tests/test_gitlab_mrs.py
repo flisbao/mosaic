@@ -183,6 +183,17 @@ class NormalizeTests(unittest.TestCase):
             gitlab_mrs.fetch_pull_requests(make_client(http))
         self.assertEqual(str(caught.exception), "token inválido ou sem permissão para GitLab")
 
+    def test_own_merge_request_with_self_review_stays_only_in_my_section(self):
+        response = fixtures.gitlab_response()
+        own = fixtures.gitlab_merge_request(30, author=VIEWER, reviewers=[(VIEWER, "UNREVIEWED")])
+        current_user = response["data"]["currentUser"]
+        current_user["reviewRequestedMergeRequests"]["nodes"].append(own)
+        current_user["authoredMergeRequests"]["nodes"].append(own)
+        merge_requests = gitlab_mrs.normalize(response["data"])
+        matches = [merge_request for merge_request in merge_requests if merge_request.item_id == "grupo/api!30"]
+        self.assertEqual([merge_request.section for merge_request in matches], [MINE])
+        self.assertEqual(len({merge_request.item_id for merge_request in merge_requests}), len(merge_requests))
+
     def test_merge_request_without_author_uses_placeholder(self):
         response = fixtures.gitlab_response()
         response["data"]["currentUser"]["reviewRequestedMergeRequests"]["nodes"][0]["author"] = None

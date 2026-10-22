@@ -399,7 +399,7 @@ def _normalized(nodes: list[dict], convert: Callable[[dict], PullRequest | None]
 
 def _review_merge_request(node: dict, viewer: str) -> PullRequest | None:
     merge_request = _base_merge_request(node)
-    if merge_request is None:
+    if merge_request is None or merge_request.author == viewer:
         return None
     review_state = _my_review_state(node, viewer)
     return replace(merge_request, section=REVIEW_SECTION, review_status=_review_status(review_state))
