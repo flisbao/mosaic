@@ -59,6 +59,8 @@ MERGE_STATUS_CONFLICTS = "conflicts"
 BRANCH_REFERENCE_PREFIX = "refs/heads/"
 WEB_PATH_SEGMENT = "_git"
 PULL_REQUEST_PATH_SEGMENT = "pullrequest"
+HTTP_SIGN_IN_PAGE = 203
+HTTP_CLIENT_ERROR_FLOOR = 400
 REQUEST_TIMEOUT_SECONDS = 20
 MAXIMUM_RESPONSE_BYTES = 8 * 1024 * 1024
 MAXIMUM_ERROR_BODY_BYTES = 8 * 1024
@@ -175,23 +177,33 @@ def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> st
     if not (is_secure or is_local) or any(character.isspace() for character in override):
         raise ConfigError(f"{variable} precisa ser https ou um endereço local de teste")
     return override.rstrip("/")
+
+
 def read_state_dir(environ: Mapping[str, str], variable: str, default: str) -> Path:
     raw = environ.get(variable, "").strip() or default
     return Path(raw).expanduser()
+
+
 def read_token(environ: Mapping[str, str], prefix: str) -> str:
     return _ensure_token_is_header_safe(_read_token_source(environ, prefix), prefix)
+
+
 def _ensure_token_is_header_safe(value: str, prefix: str) -> str:
     if any(character.isspace() or not character.isprintable() for character in value) or not _is_latin1(value):
         raise ConfigError(
             f"o token de {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contém caracteres inválidos"
         )
     return value
+
+
 def _is_latin1(value: str) -> bool:
     try:
         value.encode("latin-1")
     except UnicodeEncodeError:
         return False
     return True
+
+
 def _read_token_source(environ: Mapping[str, str], prefix: str) -> str:
     variable_key = f"{prefix}_TOKEN_ENV"
     file_key = f"{prefix}_TOKEN_FILE"
@@ -202,11 +214,15 @@ def _read_token_source(environ: Mapping[str, str], prefix: str) -> str:
     if path:
         return _read_token_file(path, file_key)
     raise ConfigError(f"defina {variable_key} (nome da variável com o token) ou {file_key}")
+
+
 def _read_token_variable(environ: Mapping[str, str], variable: str, variable_key: str) -> str:
     value = environ.get(variable, "").strip()
     if not value:
         raise ConfigError(f"a variável {variable} ({variable_key}) está vazia ou ausente")
     return value
+
+
 def _read_token_file(path: str, file_key: str) -> str:
     try:
         value = Path(path).expanduser().read_text(encoding="utf-8").strip()
@@ -215,20 +231,36 @@ def _read_token_file(path: str, file_key: str) -> str:
     if not value:
         raise ConfigError(f"o arquivo de {file_key} está vazio")
     return value
+
+
 class ApiError(Exception):
     pass
+
+
 class AuthError(ApiError):
     pass
+
+
 class RateLimitError(ApiError):
     pass
+
+
 class NetworkError(ApiError):
     pass
+
+
 class UnexpectedResponseError(ApiError):
     pass
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
         return None
+
+
 _OPENER = urllib.request.build_opener(_RefuseRedirects)
+
+
 def urllib_http(url: str, method: str, headers: dict, body: bytes | None, timeout: int) -> tuple[int, bytes]:
     request = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
@@ -237,11 +269,15 @@ def urllib_http(url: str, method: str, headers: dict, body: bytes | None, timeou
     except urllib.error.HTTPError as error:
         with error:
             return error.code, error.read(MAXIMUM_ERROR_BODY_BYTES)
+
+
 def _read_limited(stream, limit: int) -> bytes:
     body = stream.read(limit + 1)
     if len(body) > limit:
         raise UnexpectedResponseError(f"a resposta do {SERVICE_NAME} excede o tamanho máximo permitido")
     return body
+
+
 def decode_response(status: int, body: bytes, service: str) -> object:
     if status == HTTP_UNAUTHORIZED:
         raise AuthError(_auth_message(service))
@@ -257,8 +293,12 @@ def decode_response(status: int, body: bytes, service: str) -> object:
         return json.loads(body)
     except ValueError:
         raise UnexpectedResponseError(f"a resposta do {service} não é JSON") from None
+
+
 def _auth_message(service: str) -> str:
     return f"token inválido ou sem permissão para {service}"
+
+
 def _rate_limit_message(service: str) -> str:
     return f"limite de requisições do {service}; tento de novo na próxima leitura"
 
@@ -286,6 +326,8 @@ class AzureClient:
             raise NetworkError(
                 f"falha de rede ao falar com {SERVICE_NAME} ({type(error).__name__})"
             ) from None
+        if _signals_invalid_credentials(status):
+            raise AuthError(_auth_message(SERVICE_NAME))
         payload = decode_response(status, body, SERVICE_NAME)
         if not isinstance(payload, dict):
             raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
@@ -295,6 +337,10 @@ class AzureClient:
 def _basic_authorization(token: str) -> str:
     credentials = base64.b64encode(f":{token}".encode("utf-8")).decode("ascii")
     return f"Basic {credentials}"
+
+
+def _signals_invalid_credentials(status: int) -> bool:
+    return status == HTTP_SIGN_IN_PAGE or HTTP_REDIRECT_FLOOR <= status < HTTP_CLIENT_ERROR_FLOOR
 
 
 @dataclass(frozen=True)
@@ -312,6 +358,8 @@ class PullRequest:
     review_status: str = ""
     pushed_after_review: bool | None = None
     state: str = ""
+
+
 def parse_timestamp(text: str | None) -> datetime | None:
     if not isinstance(text, str) or not text:
         return None
@@ -505,17 +553,23 @@ def apply_review_memory(
         if pull.review_status != APPROVED:
             displayed.append(replace(pull, state=_review_state(pull, reviewed_head)))
     return displayed, remembered
+
+
 def _previous_entry(memory: dict, item_id: str) -> dict:
     if not isinstance(memory, dict):
         return {}
     entry = memory.get(item_id)
     return entry if isinstance(entry, dict) else {}
+
+
 def _reviewed_head_after(pull: PullRequest, previous: dict) -> str | None:
     reviewed_head = previous.get("reviewed_head")
     if pull.review_status in (REVIEWED, APPROVED):
         if reviewed_head is None or previous.get("status") != pull.review_status:
             return pull.head_commit
     return reviewed_head
+
+
 def _review_state(pull: PullRequest, reviewed_head: str | None) -> str:
     if pull.pushed_after_review is not None:
         if pull.pushed_after_review:
@@ -525,6 +579,8 @@ def _review_state(pull: PullRequest, reviewed_head: str | None) -> str:
     if pushed:
         return STATE_PUSHED
     return STATE_NEW if pull.review_status == UNREVIEWED else ""
+
+
 def format_age(delta: timedelta) -> str:
     minutes = int(delta.total_seconds() // SECONDS_PER_MINUTE)
     if minutes <= 0:
@@ -535,6 +591,8 @@ def format_age(delta: timedelta) -> str:
     if hours < HOURS_SHOWN_BEFORE_DAYS:
         return f"{hours}h"
     return f"{hours // HOURS_PER_DAY}d"
+
+
 def flatten_text(text, limit: int) -> str:
     flattened = " ".join(str(text).split())
     if len(flattened) <= limit:
@@ -542,6 +600,8 @@ def flatten_text(text, limit: int) -> str:
     if limit <= 0:
         return ""
     return flattened[: limit - 1] + ELLIPSIS
+
+
 def build_snapshot(pull_requests: list[PullRequest], title: str, now: datetime) -> dict:
     review = _sorted_by_creation(pull for pull in pull_requests if pull.section == REVIEW_SECTION)
     mine = _sorted_by_creation(pull for pull in pull_requests if pull.section == MINE_SECTION)
@@ -555,8 +615,12 @@ def build_snapshot(pull_requests: list[PullRequest], title: str, now: datetime) 
         "mini": _mini_block(review),
         "alerts": [_alert(pull) for pull in review if pull.state],
     }
+
+
 def _sorted_by_creation(pulls) -> list[PullRequest]:
     return sorted(pulls, key=lambda pull: pull.created_at)
+
+
 def _summary_blocks(review: list[PullRequest], mine: list[PullRequest], now: datetime) -> list[dict]:
     blocks = [_stat_block(review, mine)]
     if review:
@@ -564,6 +628,8 @@ def _summary_blocks(review: list[PullRequest], mine: list[PullRequest], now: dat
     elif not mine:
         blocks.append({"type": "lines", "lines": [{"text": EMPTY_TEXT, "tone": TONE_MUTED}]})
     return blocks
+
+
 def _stat_block(review: list[PullRequest], mine: list[PullRequest]) -> dict:
     return {
         "type": "stat",
@@ -572,13 +638,19 @@ def _stat_block(review: list[PullRequest], mine: list[PullRequest]) -> dict:
             {"value": str(len(mine)), "label": MINE_LABEL},
         ],
     }
+
+
 def _row(pull: PullRequest, now: datetime) -> dict:
     row = {"text": _pull_heading(pull), "time": format_age(now - pull.created_at)}
     if pull.state:
         row["tags"] = [{"text": pull.state, "tone": TONE_BY_STATE[pull.state]}]
     return row
+
+
 def _pull_heading(pull: PullRequest) -> str:
     return f"{pull.repository} {pull.reference} {flatten_text(pull.title, TITLE_TEXT_LIMIT)}"
+
+
 def _detail_item(pull: PullRequest, now: datetime) -> dict:
     item = {
         "id": pull.item_id,
@@ -593,17 +665,23 @@ def _detail_item(pull: PullRequest, now: datetime) -> dict:
     if pull.state == STATE_PUSHED:
         item["flag"] = UPDATED_FLAG
     return item
+
+
 def _detail_text(pull: PullRequest, now: datetime) -> str:
     text = ITEM_SEPARATOR.join((_pull_heading(pull), pull.author, format_age(now - pull.created_at)))
     if pull.state:
         text += f" [{pull.state}]"
     return text
+
+
 def _mini_block(review: list[PullRequest]) -> dict:
     return {
         "value": str(len(review)),
         "text": MINI_TEXT,
         "tone": TONE_WARN if review else TONE_NORMAL,
     }
+
+
 def _alert(pull: PullRequest) -> dict:
     return {
         "id": (ALERT_ID_PREFIX + pull.item_id)[:MAXIMUM_ALERT_ID_LENGTH],
@@ -611,13 +689,19 @@ def _alert(pull: PullRequest) -> dict:
         "body": flatten_text(pull.title, TITLE_TEXT_LIMIT),
         "level": ALERT_LEVEL,
     }
+
+
 def with_offline_notice(snapshot: dict, saved_at: datetime) -> dict:
     summary = snapshot["summary"]
     blocks = [_offline_notice_block(saved_at), *summary["blocks"]]
     return {**snapshot, "summary": {**summary, "blocks": blocks}}
+
+
 def _offline_notice_block(saved_at: datetime) -> dict:
     text = saved_at.astimezone().strftime(OFFLINE_NOTICE_FORMAT)
     return {"type": "lines", "lines": [{"text": text, "tone": TONE_WARN}]}
+
+
 class StateStore:
     def __init__(self, directory: Path, key: str):
         self._directory = directory
@@ -666,6 +750,8 @@ def _token_source(environ: Mapping[str, str]) -> str:
 
 def _empty_state() -> dict:
     return {"reviews": {}, "snapshot": None, "saved_at": None}
+
+
 def _write_atomically(destination: Path, content: str) -> None:
     descriptor, temporary_name = tempfile.mkstemp(dir=destination.parent, suffix=TEMPORARY_FILE_SUFFIX)
     try:
@@ -675,6 +761,8 @@ def _write_atomically(destination: Path, content: str) -> None:
     except OSError:
         Path(temporary_name).unlink(missing_ok=True)
         raise
+
+
 def run_snapshot(
     store: StateStore,
     title: str,
@@ -700,19 +788,27 @@ def run_snapshot(
     store.save({"saved_at": moment.isoformat(), "snapshot": snapshot, "reviews": remembered})
     _print_json(stdout, snapshot)
     return 0
+
+
 def _cached_snapshot(state: dict) -> tuple[dict, datetime] | None:
     snapshot = state.get("snapshot")
     saved_at = parse_timestamp(state.get("saved_at"))
     if not _has_summary_blocks(snapshot) or saved_at is None:
         return None
     return snapshot, saved_at
+
+
 def _has_summary_blocks(snapshot: object) -> bool:
     if not isinstance(snapshot, dict):
         return False
     summary = snapshot.get("summary")
     return isinstance(summary, dict) and isinstance(summary.get("blocks"), list)
+
+
 def _print_json(stdout, document: dict) -> None:
     print(json.dumps(document, ensure_ascii=False), file=stdout)
+
+
 def _fail(stderr, error: Exception) -> int:
     print(f"erro: {error}", file=stderr)
     return FAILURE_EXIT_CODE

@@ -131,6 +131,11 @@ class ClientTests(unittest.TestCase):
             make_client(FakeHttp(error=OSError(f"falha {SECRET}"))).get_json("/x", {})
         self.assertNotIn(SECRET, str(caught.exception))
 
+    def test_sign_in_page_and_redirect_are_auth_errors(self):
+        for status, body in ((203, b"<html>entrar</html>"), (302, b"")):
+            with self.assertRaises(azure_devops.AuthError, msg=status):
+                make_client(FakeHttp([(status, body)])).get_json("/_apis/connectionData", {})
+
     def test_non_object_response_is_unexpected(self):
         with self.assertRaises(azure_devops.UnexpectedResponseError):
             make_client(FakeHttp([(200, [1, 2])])).get_json("/x", {})
@@ -291,6 +296,17 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.stdout.getvalue(), "")
         self.assertTrue(self.stderr.getvalue().startswith("erro: "))
         self.assertNotIn(SECRET, self.stderr.getvalue())
+
+    def test_main_expired_token_with_cache_exits_one(self):
+        for status, body in ((203, b"<html>entrar</html>"), (302, b"")):
+            self.stdout = io.StringIO()
+            self.stderr = io.StringIO()
+            self.assertEqual(self.run_main(self.successful_http()), 0)
+            self.stdout = io.StringIO()
+            code = self.run_main(FakeHttp([(status, body)]))
+            self.assertEqual(code, 1, status)
+            self.assertEqual(self.stdout.getvalue(), "", status)
+            self.assertTrue(self.stderr.getvalue().startswith("erro: "), status)
 
     def test_main_network_error_serves_cache_with_offline_notice(self):
         self.assertEqual(self.run_main(self.successful_http()), 0)
