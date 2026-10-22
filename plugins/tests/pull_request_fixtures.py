@@ -13,39 +13,39 @@ def github_response():
             "viewer": {"login": VIEWER_LOGIN},
             "review": {
                 "nodes": [
-                    _github_pull(10, "acme/api", "2026-10-10T08:00:00Z",
+                    github_pull(10, "acme/api", "2026-10-10T08:00:00Z",
                                  reviews=[(OTHER_LOGIN, "COMMENTED", "2026-10-12T08:00:00Z")],
                                  review_decision="REVIEW_REQUIRED"),
-                    _github_pull(11, "acme/api", "2026-10-11T08:00:00Z",
+                    github_pull(11, "acme/api", "2026-10-11T08:00:00Z",
                                  reviews=[(VIEWER_LOGIN, "CHANGES_REQUESTED", "2026-10-20T10:00:00Z")],
                                  last_commit_at="2026-10-21T09:00:00Z"),
-                    _github_pull(12, "acme/web", "2026-10-12T08:00:00Z",
+                    github_pull(12, "acme/web", "2026-10-12T08:00:00Z",
                                  reviews=[(VIEWER_LOGIN, "APPROVED", "2026-10-20T10:00:00Z")],
                                  last_commit_at="2026-10-19T09:00:00Z"),
-                    _github_pull(13, "acme/api", "2026-10-13T08:00:00Z", is_draft=True),
+                    github_pull(13, "acme/api", "2026-10-13T08:00:00Z", is_draft=True),
                 ],
             },
             "reviewed": {
                 "nodes": [
-                    _github_pull(11, "acme/api", "2026-10-11T08:00:00Z",
+                    github_pull(11, "acme/api", "2026-10-11T08:00:00Z",
                                  reviews=[(VIEWER_LOGIN, "CHANGES_REQUESTED", "2026-10-20T10:00:00Z")],
                                  last_commit_at="2026-10-21T09:00:00Z"),
-                    _github_pull(14, "acme/lib", "2026-10-14T08:00:00Z",
+                    github_pull(14, "acme/lib", "2026-10-14T08:00:00Z",
                                  reviews=[(VIEWER_LOGIN, "CHANGES_REQUESTED", "2026-10-21T10:00:00Z")],
                                  last_commit_at="2026-10-20T10:00:00Z"),
-                    _github_pull(15, "acme/lib", "2026-10-15T08:00:00Z",
+                    github_pull(15, "acme/lib", "2026-10-15T08:00:00Z",
                                  reviews=[(VIEWER_LOGIN, "COMMENTED", "2026-10-21T10:00:00Z")]),
                 ],
             },
             "mine": {
                 "nodes": [
-                    _github_pull(20, "acme/api", "2026-10-16T08:00:00Z", mergeable="CONFLICTING"),
-                    _github_pull(21, "acme/api", "2026-10-17T08:00:00Z",
+                    github_pull(20, "acme/api", "2026-10-16T08:00:00Z", mergeable="CONFLICTING"),
+                    github_pull(21, "acme/api", "2026-10-17T08:00:00Z",
                                  review_decision="CHANGES_REQUESTED"),
-                    _github_pull(22, "acme/api", "2026-10-18T08:00:00Z", review_decision="APPROVED"),
-                    _github_pull(23, "acme/api", "2026-10-19T08:00:00Z",
+                    github_pull(22, "acme/api", "2026-10-18T08:00:00Z", review_decision="APPROVED"),
+                    github_pull(23, "acme/api", "2026-10-19T08:00:00Z",
                                  review_decision="REVIEW_REQUIRED"),
-                    _github_pull(24, "acme/api", "2026-10-19T12:00:00Z", author=None,
+                    github_pull(24, "acme/api", "2026-10-19T12:00:00Z", author=None,
                                  review_decision="REVIEW_REQUIRED"),
                 ],
             },
@@ -53,7 +53,7 @@ def github_response():
     }
 
 
-def _github_pull(number, repository, created_at, *, author="ana", is_draft=False,
+def github_pull(number, repository, created_at, *, author="ana", is_draft=False,
                  mergeable="MERGEABLE", review_decision=None, reviews=(),
                  last_commit_at="2026-10-09T09:00:00Z"):
     return {
@@ -70,12 +70,12 @@ def _github_pull(number, repository, created_at, *, author="ana", is_draft=False
         "reviewDecision": review_decision,
         "commits": {"nodes": [{"commit": {"committedDate": last_commit_at}}]},
         "latestReviews": {
-            "nodes": [_github_review(login, state, submitted_at) for login, state, submitted_at in reviews],
+            "nodes": [github_review(login, state, submitted_at) for login, state, submitted_at in reviews],
         },
     }
 
 
-def _github_review(login, state, submitted_at):
+def github_review(login, state, submitted_at):
     return {"author": {"login": login}, "state": state, "submittedAt": submitted_at}
 
 
@@ -133,20 +133,20 @@ def gitlab_response():
                 "username": VIEWER_LOGIN,
                 "reviewRequestedMergeRequests": {
                     "nodes": [
-                        _gitlab_merge_request(10),
-                        _gitlab_merge_request(11, reviewers=[(VIEWER_LOGIN, "REQUESTED_CHANGES")]),
-                        _gitlab_merge_request(12, reviewers=[(VIEWER_LOGIN, "APPROVED")]),
-                        _gitlab_merge_request(13, draft=True),
+                        gitlab_merge_request(10),
+                        gitlab_merge_request(11, reviewers=[(VIEWER_LOGIN, "REQUESTED_CHANGES")]),
+                        gitlab_merge_request(12, reviewers=[(VIEWER_LOGIN, "APPROVED")]),
+                        gitlab_merge_request(13, draft=True),
                     ],
                 },
                 "authoredMergeRequests": {
                     "nodes": [
-                        _gitlab_merge_request(20, author=VIEWER_LOGIN, conflicts=True),
-                        _gitlab_merge_request(21, author=VIEWER_LOGIN,
+                        gitlab_merge_request(20, author=VIEWER_LOGIN, conflicts=True),
+                        gitlab_merge_request(21, author=VIEWER_LOGIN,
                                               reviewers=[(OTHER_LOGIN, "REQUESTED_CHANGES")]),
-                        _gitlab_merge_request(22, author=VIEWER_LOGIN,
+                        gitlab_merge_request(22, author=VIEWER_LOGIN,
                                               reviewers=[(OTHER_LOGIN, "APPROVED")]),
-                        _gitlab_merge_request(23, author=VIEWER_LOGIN),
+                        gitlab_merge_request(23, author=VIEWER_LOGIN),
                     ],
                 },
             }
@@ -154,7 +154,7 @@ def gitlab_response():
     }
 
 
-def _gitlab_merge_request(number, *, author="ana", draft=False, conflicts=False, reviewers=()):
+def gitlab_merge_request(number, *, author="ana", draft=False, conflicts=False, reviewers=()):
     return {
         "iid": str(number),
         "title": f"Título do MR {number}",

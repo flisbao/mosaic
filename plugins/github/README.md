@@ -17,8 +17,8 @@ Cada item leva uma tag:
 | Aguardando minha revisão | `push novo` | O autor fez push depois da sua última revisão (o item vem com a flag `updated`) |
 | Aguardando minha revisão | nenhuma | Você já revisou e não houve push depois |
 | Meus PRs | `conflito` | O PR tem conflito com a base |
-| Meus PRs | `mudança pedida` | Um revisor pediu mudanças |
-| Meus PRs | `aprovado` | O GitHub marcou o PR como aprovado |
+| Meus PRs | `mudança pedida` | O GitHub marcou o PR como mudança pedida ou, em repositório sem revisão obrigatória, algum revisor (que não seja você) pediu mudanças |
+| Meus PRs | `aprovado` | O GitHub marcou o PR como aprovado ou, em repositório sem revisão obrigatória, algum revisor (que não seja você) aprovou e ninguém pediu mudanças |
 | Meus PRs | `aguardando` | Nenhuma das situações acima |
 
 Drafts nunca aparecem. Em cada seção, os PRs vão do mais antigo para o mais novo. Os PRs sem data de criação são pulados, e autor apagado (conta "ghost") aparece como `desconhecido`.
@@ -123,3 +123,4 @@ Com a sua conta, em um repositório de teste:
 2. Peça mudança e faça o autor enviar um push: aparece `push novo`.
 3. Aprove o PR: ele some da lista.
 4. Abra um PR seu: aparece `aguardando` em **Meus PRs**.
+5. Em um repositório sem revisão obrigatória, peça a outra pessoa para aprovar o seu PR (ou pedir mudanças): a tag vira `aprovado` (ou `mudança pedida`), mesmo sem decisão de revisão do GitHub.

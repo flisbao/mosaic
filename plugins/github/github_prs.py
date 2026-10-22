@@ -474,6 +474,20 @@ def _mine_state(node: dict) -> str:
         return STATE_CHANGES
     if decision == DECISION_APPROVED:
         return STATE_APPROVED
+    return _state_from_reviews(node)
+
+
+def _state_from_reviews(node: dict) -> str:
+    author = _nested_text(node, "author", "login")
+    states = {
+        review.get("state")
+        for review in _connection_nodes(node.get("latestReviews"))
+        if _nested_text(review, "author", "login") != author
+    }
+    if REVIEW_STATE_CHANGES_REQUESTED in states:
+        return STATE_CHANGES
+    if REVIEW_STATE_APPROVED in states:
+        return STATE_APPROVED
     return STATE_WAITING
 
 

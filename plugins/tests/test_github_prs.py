@@ -318,6 +318,40 @@ class NormalizeTests(unittest.TestCase):
             self.assertEqual(self.pulls[item_id].state, state, item_id)
             self.assertEqual(self.pulls[item_id].section, "Meus PRs")
 
+    def test_mine_state_is_derived_from_reviews_without_review_decision(self):
+        approved = fixtures.github_review(fixtures.OTHER_LOGIN, "APPROVED", "2026-10-20T10:00:00Z")
+        changes = fixtures.github_review("terceira", "CHANGES_REQUESTED", "2026-10-20T11:00:00Z")
+        commented = fixtures.github_review(fixtures.OTHER_LOGIN, "COMMENTED", "2026-10-20T10:00:00Z")
+        cases = {
+            "aprovado": [approved],
+            "mudança pedida": [approved, changes],
+            "aguardando": [commented],
+        }
+        for expected, reviews in cases.items():
+            self.assertEqual(self.mine_state(reviews=reviews), expected)
+
+    def test_mine_state_ignores_reviews_by_the_author(self):
+        own_approval = fixtures.github_review("ana", "APPROVED", "2026-10-20T10:00:00Z")
+        own_changes = fixtures.github_review("ana", "CHANGES_REQUESTED", "2026-10-20T10:00:00Z")
+        self.assertEqual(self.mine_state(reviews=[own_approval]), "aguardando")
+        self.assertEqual(self.mine_state(reviews=[own_changes]), "aguardando")
+
+    def test_mine_state_review_decision_wins_when_it_is_decisive(self):
+        changes = fixtures.github_review(fixtures.OTHER_LOGIN, "CHANGES_REQUESTED", "2026-10-20T10:00:00Z")
+        approved = fixtures.github_review(fixtures.OTHER_LOGIN, "APPROVED", "2026-10-20T10:00:00Z")
+        self.assertEqual(self.mine_state(review_decision="APPROVED", reviews=[changes]), "aprovado")
+        self.assertEqual(self.mine_state(review_decision="CHANGES_REQUESTED", reviews=[approved]), "mudança pedida")
+
+    def test_mine_state_conflict_wins_over_reviews(self):
+        approved = fixtures.github_review(fixtures.OTHER_LOGIN, "APPROVED", "2026-10-20T10:00:00Z")
+        self.assertEqual(self.mine_state(mergeable="CONFLICTING", reviews=[approved]), "conflito")
+
+    def mine_state(self, reviews=(), **options):
+        node = fixtures.github_pull(30, "acme/api", "2026-10-20T08:00:00Z", **options)
+        node["latestReviews"] = {"nodes": list(reviews)}
+        data = {"viewer": {"login": fixtures.VIEWER_LOGIN}, "mine": {"nodes": [node]}}
+        return github_prs.normalize(data)[0].state
+
     def test_pull_request_fields_are_mapped(self):
         pull = self.pulls["acme/api#11"]
         self.assertEqual(pull.repository, "acme/api")
