@@ -51,7 +51,7 @@ jobs:
         run: |
           name="mosaic-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "${name}"
-          cp "target/${{ matrix.target }}/release/mosaic" README.md PROTOCOL.md "${name}/"
+          cp "target/${{ matrix.target }}/release/mosaic" README.md PROTOCOL.md LICENSE "${name}/"
           cp -r schema "${name}/schema"
           tar -czf "${name}.tar.gz" "${name}"
           shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
