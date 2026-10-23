@@ -27,6 +27,10 @@ print(json.dumps({"summary": {"title": "Olá", "blocks": [
 
 Valide com `mosaic check python3 meu_widget.py` (o `check` executa o script a partir do diretório atual; só valide widgets em que você confia). O contrato completo está em [`PROTOCOL.md`](PROTOCOL.md) e o esquema JSON em [`schema/protocol.schema.json`](schema/protocol.schema.json). Os widgets `plugins/gallery.py` e `plugins/gallery.js` mostram todos os blocos.
 
+## Contribuindo
+
+Um plugin novo precisa vir com a sua skill (`.claude/skills/mosaic-plugin-<pasta>/`). O passo a passo está em [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Jira
 
 O provider do Jira Cloud (`plugins/jira/jira.py`) é genérico: cada widget define o próprio JQL e como mostrar o resultado. Exemplos, opções, variáveis e como testar com uma conta gratuita estão em [`plugins/jira/README.md`](plugins/jira/README.md).

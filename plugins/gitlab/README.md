@@ -106,7 +106,7 @@ Cada widget guarda o seu estado (memória das revisões e cache offline) num arq
 - Só PAT. Ele vence e não se renova sozinho; quando vencer, o widget mostra o erro até você trocar o token.
 - Cada lista lê no máximo 100 MRs (`first: 100`), sem paginação.
 - Em **Meus PRs**, `aprovado` vem só da aprovação de revisores designados. Em um projeto sem regra de aprovação, um MR sem nenhuma revisão não ganha `aprovado` só por estar pronto para o merge.
-- Se você pedir a sua própria revisão em um MR seu, ele aparece nas duas seções.
+- Se você pedir a sua própria revisão em um MR seu, ele fica só em **Meus PRs**.
 - O `push novo` depende da memória local: ele some só quando a sua revisão muda de valor ou o MR sai da lista. Se você revisar de novo depois de um push sem mudar o seu estado de revisão, a tag `push novo` continua aparecendo até lá.
 
 ## Quando a API não responde

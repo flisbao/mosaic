@@ -12,3 +12,4 @@
 - Ports em `application/ports.rs`: `WidgetSource` (coleta, com supertrait `Cancellable`) e `ActionExecutor` (ações). O adapter com `Command` (`PluginRunner`) fica na infraestrutura, e os testes usam fakes.
 - Antes de concluir: `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test`.
 - Ao final de cada tarefa, depois das checagens: `cargo clean`.
+- Plugin novo só entra com a sua skill em `.claude/skills/mosaic-plugin-<pasta>/SKILL.md`, escrita pelo template de `mosaic-widget-authoring`. Use essa skill ao criar ou alterar qualquer widget; `python3 -m unittest discover -s plugins/tests` falha sem ela.
