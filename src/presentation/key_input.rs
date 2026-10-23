@@ -1,5 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::presentation::shortcuts::RESERVED_SHORTCUT_LETTERS;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyInput {
     Tab,
@@ -34,6 +36,15 @@ pub fn from_crossterm(event: KeyEvent) -> Option<KeyInput> {
         KeyCode::PageDown => Some(KeyInput::PageDown),
         KeyCode::Home => Some(KeyInput::Home),
         KeyCode::End => Some(KeyInput::End),
+        KeyCode::Char(letter)
+            if event.modifiers.contains(KeyModifiers::ALT)
+                && !event.modifiers.contains(KeyModifiers::CONTROL)
+                && letter.is_ascii_alphabetic() =>
+        {
+            let shortcut = letter.to_ascii_uppercase();
+            (!RESERVED_SHORTCUT_LETTERS.contains(&shortcut))
+                .then_some(KeyInput::Character(shortcut))
+        }
         KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(KeyInput::Character('q'))
         }
@@ -126,6 +137,37 @@ mod tests {
             from_crossterm(press(KeyCode::Char('a'))),
             Some(KeyInput::Character('a'))
         );
+    }
+
+    fn alt(character: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(character), KeyModifiers::ALT)
+    }
+
+    #[test]
+    fn alt_letter_becomes_the_uppercase_shortcut() {
+        for (typed, expected) in [('a', 'A'), ('b', 'B'), ('h', 'H'), ('j', 'J')] {
+            assert_eq!(
+                from_crossterm(alt(typed)),
+                Some(KeyInput::Character(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn alt_with_shift_is_the_same_shortcut() {
+        let event = KeyEvent::new(KeyCode::Char('B'), KeyModifiers::ALT | KeyModifiers::SHIFT);
+        assert_eq!(from_crossterm(event), Some(KeyInput::Character('B')));
+    }
+
+    #[test]
+    fn alt_on_a_reserved_letter_is_ignored() {
+        for reserved in RESERVED_SHORTCUT_LETTERS {
+            assert_eq!(
+                from_crossterm(alt(reserved.to_ascii_lowercase())),
+                None,
+                "{reserved}"
+            );
+        }
     }
 
     #[test]

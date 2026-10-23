@@ -45,7 +45,7 @@ const GRID_HINTS: [KeyHint; 6] = [
     hint("Enter", "abrir"),
     hint("Tab", "próxima aba"),
     hint("1-9", "ir para a aba"),
-    hint("A-Z", "ir para o widget"),
+    hint("Shift/Alt+A-Z", "ir para o widget"),
     hint("Shift+Tab", "aba anterior"),
 ];
 
