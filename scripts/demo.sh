@@ -15,7 +15,7 @@ until [ -s "$PORT_FILE" ] && [ -s "$JIRA_PORT_FILE" ]; do sleep 0.1; done
 PORT=$(head -1 "$PORT_FILE")
 JIRA_PORT=$(head -1 "$JIRA_PORT_FILE")
 export FAKE_TOKEN=segredo
-cat > "$DEMO/xdg/mosaic/config.toml" <<TOML
+cat > "$DEMO/xdg/mosaic/mosaic.toml" <<TOML
 [[tabs]]
 name = "PRs"
 
@@ -105,10 +105,45 @@ JIRA_TOKEN_ENV = "FAKE_TOKEN"
 JIRA_STATE_DIR = "$DEMO/state"
 
 [[widgets]]
-id = "gallery-python"
+id = "gallery-1"
 command = "python3"
 args = ["$REPO/plugins/gallery.py"]
-span = 2
+tab = "Galeria"
+
+[[widgets]]
+id = "gallery-2"
+command = "python3"
+args = ["$REPO/plugins/gallery.py"]
+tab = "Galeria"
+
+[[widgets]]
+id = "gallery-3"
+command = "python3"
+args = ["$REPO/plugins/gallery.py"]
+tab = "Galeria"
+
+[[widgets]]
+id = "gallery-4"
+command = "python3"
+args = ["$REPO/plugins/gallery.py"]
+tab = "Galeria"
+
+[[widgets]]
+id = "gallery-5"
+command = "python3"
+args = ["$REPO/plugins/gallery.py"]
+tab = "Galeria"
+
+[[widgets]]
+id = "gallery-6"
+command = "python3"
+args = ["$REPO/plugins/gallery.py"]
+tab = "Galeria"
+
+[[widgets]]
+id = "gallery-7"
+command = "python3"
+args = ["$REPO/plugins/gallery.py"]
 tab = "Galeria"
 
 [pomodoro]

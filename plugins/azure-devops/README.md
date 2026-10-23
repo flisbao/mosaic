@@ -37,7 +37,7 @@ O PAT vence (no máximo um ano) e precisa ser recriado à mão. Veja as limitaç
 
 ## Configurar
 
-Adicione ao `config.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
+Adicione ao `mosaic.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
 
 ```toml
 [[widgets]]

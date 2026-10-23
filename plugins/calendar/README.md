@@ -14,9 +14,9 @@ O plugin usa só a biblioteca padrão do Python 3; não há `pip install`.
 
 ## Instalação
 
-Se o mosaic instalou a configuração padrão agora (não existia `config.toml`), o plugin já está em `~/.config/mosaic/plugins/calendar/calendar_widget.py`. Basta descomentar o bloco "Agenda Google" no `config.toml`.
+Se o mosaic instalou a configuração padrão agora (não existia `mosaic.toml`), o plugin já está em `~/.config/mosaic/plugins/calendar/calendar_widget.py`. Basta descomentar o bloco "Agenda Google" no `mosaic.toml`.
 
-Para quem já tem `~/.config/mosaic/config.toml`, copie o plugin à mão:
+Para quem já tem `~/.config/mosaic/mosaic.toml`, copie o plugin à mão:
 
 ```bash
 mkdir -p ~/.config/mosaic/plugins/calendar && cp plugins/calendar/calendar_widget.py ~/.config/mosaic/plugins/calendar/
@@ -40,7 +40,7 @@ Na fonte `ics` é preciso definir `CALENDAR_ICS_URL_ENV` **ou** `CALENDAR_ICS_UR
 ## Como escolher a fonte
 
 - **ICS**: funciona em qualquer sistema e em qualquer conta, desde que o administrador da conta permita o link ICS. Não depende de nada instalado.
-- **GOA**: não guarda link nem token no `config.toml`, pois usa a conta que você já adicionou no GNOME. Só funciona em Linux com GNOME.
+- **GOA**: não guarda link nem token no `mosaic.toml`, pois usa a conta que você já adicionou no GNOME. Só funciona em Linux com GNOME.
 - **gcalcli**: útil se você já usa o gcalcli e quer as mesmas agendas dele. Exige a autenticação feita uma vez no terminal.
 
 Use uma fonte por widget. Para ver duas fontes, crie dois widgets com `id` diferentes.
@@ -48,7 +48,7 @@ Use uma fonte por widget. Para ver duas fontes, crie dois widgets com `id` difer
 ## Fonte ICS
 
 1. No Google Agenda, abra **Configurações**, escolha a agenda na coluna da esquerda, e em **Integrar agenda** copie o **Endereço secreto em formato iCal**.
-2. O link é um segredo: quem tiver o link lê a sua agenda. Não o coloque no `config.toml` nem em repositórios. Guarde-o numa variável de ambiente, por exemplo no seu `~/.profile`:
+2. O link é um segredo: quem tiver o link lê a sua agenda. Não o coloque no `mosaic.toml` nem em repositórios. Guarde-o numa variável de ambiente, por exemplo no seu `~/.profile`:
 
    ```bash
    export CALENDAR_ICS_PERSONAL="https://calendar.google.com/calendar/ical/.../basic.ics"

@@ -37,7 +37,7 @@ O PAT vence e precisa ser recriado à mão. Veja as limitações.
 
 ## Configurar
 
-Adicione ao `config.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
+Adicione ao `mosaic.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
 
 ```toml
 [[widgets]]

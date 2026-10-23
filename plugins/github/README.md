@@ -40,7 +40,7 @@ O token pode vencer (tokens pessoais têm prazo) e precisa ser recriado à mão 
 
 ## Configurar
 
-Adicione ao `config.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
+Adicione ao `mosaic.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
 
 ```toml
 [[widgets]]

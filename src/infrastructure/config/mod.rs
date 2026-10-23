@@ -1178,7 +1178,7 @@ command = "sh"
         match result {
             Err(ConfigError::Io { path, kind, .. }) => {
                 assert_eq!(kind, std::io::ErrorKind::NotFound);
-                assert!(path.ends_with("config.toml"), "{path}");
+                assert!(path.ends_with("mosaic.toml"), "{path}");
             }
             other => panic!("esperava ConfigError::Io, veio {other:?}"),
         }
@@ -1187,6 +1187,6 @@ command = "sh"
     #[test]
     fn config_file_lives_inside_the_directory() {
         let path = config_file_path(std::path::Path::new("/etc/panel"));
-        assert_eq!(path, std::path::PathBuf::from("/etc/panel/config.toml"));
+        assert_eq!(path, std::path::PathBuf::from("/etc/panel/mosaic.toml"));
     }
 }

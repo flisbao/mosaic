@@ -288,7 +288,7 @@ fn check_config_without_path_reads_the_default_config_file() {
     let config_directory = directory.path().join("mosaic");
     fs::create_dir_all(&config_directory).unwrap();
     fs::write(
-        config_directory.join("config.toml"),
+        config_directory.join("mosaic.toml"),
         "[[widgets]]\nid = \"jira\"\ncommand = \"python3\"\n",
     )
     .unwrap();

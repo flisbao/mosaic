@@ -2,12 +2,14 @@ use std::path::{Path, PathBuf};
 
 use super::ConfigError;
 
+const CONFIG_FILE_NAME: &str = "mosaic.toml";
+
 pub fn config_directory() -> Result<PathBuf, ConfigError> {
     crate::infrastructure::app_paths::config_directory().ok_or(ConfigError::MissingConfigDirectory)
 }
 
 pub fn config_file_path(directory: &Path) -> PathBuf {
-    directory.join("config.toml")
+    directory.join(CONFIG_FILE_NAME)
 }
 
 pub fn read_config_file(path: &Path) -> Result<String, ConfigError> {

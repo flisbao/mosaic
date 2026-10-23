@@ -65,10 +65,10 @@ Teclas (modo grade, com os widgets visíveis):
 | `Tab` / `BackTab` | Próxima / aba anterior |
 | `←` `↑` `→` `↓` ou `h` `j` `k` `l` | Move o foco entre os widgets |
 | `Enter` | Expande o widget focado |
-| `A` a `Z` (Shift+letra, exceto `R`) | Foca o widget com essa letra de atalho |
+| `Shift+letra` ou `Alt+letra` (`A` a `Z`, exceto `R`) | Foca o widget com essa letra de atalho. `Alt` exige que o terminal envie `Esc` antes da letra (no macOS, ative "Option como Meta") |
 | `a` | Abre o menu de ações do widget focado |
 | `r` | Atualiza todos os widgets agora |
-| `R` | Recarrega o `config.toml` |
+| `R` | Recarrega o `mosaic.toml` |
 | `i` | Pede uma recomendação à IA (se `[llm]` estiver ligado) |
 | `p` / `x` | Inicia ou pausa / reinicia o pomodoro |
 | `q` ou `Ctrl+C` | Sai |
@@ -83,7 +83,7 @@ Após editar a configuração, `R` recarrega widgets, abas e intervalos. Mudanç
 Valide o arquivo sem abrir o painel:
 
 ```sh
-mosaic check --config            # usa ~/.config/mosaic/config.toml
+mosaic check --config            # usa ~/.config/mosaic/mosaic.toml
 mosaic check --config caminho.toml
 ```
 
