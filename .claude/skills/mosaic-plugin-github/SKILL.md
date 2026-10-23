@@ -9,6 +9,8 @@ description: Use quando for configurar, depurar ou alterar o widget de pull requ
 
 `plugins/github/github_prs.py` mostra os PRs que esperam por você no **GitHub.com**: a seção "Aguardando minha revisão" e a seção "Meus PRs". Só leitura (GraphQL sem mutation), só `https://api.github.com`, sem ações. Detalhes, tabela de tags e roteiro manual: `plugins/github/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
+> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
 ## Configurar com a pessoa
 
 1. **Token**: PAT fine-grained (recomendado: `Pull requests: Read` e `Metadata: Read` nos repositórios acompanhados) ou classic com escopo `repo` (o único que alcança repositórios privados). A pessoa o cria em github.com/settings/tokens. **Nunca peça o valor no chat**; ela o guarda numa variável (`GITHUB_TOKEN_PRS`, por exemplo) ou num arquivo `chmod 600` (`GITHUB_TOKEN_FILE`). O token vence e se troca à mão.

@@ -1,117 +1,181 @@
-# Mosaic
+<h1 align="center">🧩 Mosaic</h1>
 
-Mosaic é um painel de terminal (TUI) feito de peças independentes. Cada widget é um programa, em Python, Node, shell ou qualquer linguagem, que imprime um JSON seguindo um protocolo simples e versionado. O Mosaic desenha o resultado em widgets (linhas, agenda, indicadores, tabelas), avisa quando algo muda e traz um pomodoro e uma integração opcional com LLMs.
+<p align="center">
+  <b>A terminal dashboard built from tiny programs.</b><br>
+  If it can print JSON, it can be a widget.
+</p>
 
-> A terminal dashboard built from pluggable widgets. Any program that prints JSON becomes a widget.
+<p align="center">
+  <a href="https://github.com/flisbao/mosaic/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/flisbao/mosaic?color=cyan"></a>
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
+  <img alt="platforms" src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue">
+  <img alt="made with" src="https://img.shields.io/badge/made%20with-Rust%20%F0%9F%A6%80-orange">
+</p>
 
-## Uso
-
-```sh
-cargo run --release
+```text
+ 10:42  Fri 23/10                                              🍅 18:31 focus
+  1 PRs   2 Jira   3 Gallery
+ ┌ GitHub ───────────────────────┐ ┌ Agenda ───────────────────────┐
+ │ 3 to review · 2 mine          │ │ 10:30 Code review         now │
+ │ 12d acme/api #10 …     [novo] │ │ 12:00 Lunch                   │
+ │ 11d acme/api #11 … [push novo]│ │ 14:00 1:1 with the boss       │
+ └───────────────────────────────┘ └───────────────────────────────┘
+ ┌ GitLab ───────────────────────┐ ┌ Jira ─────────────────────────┐
+ │ 1 to review · 4 mine          │ │ PROJ-12 Fix the flaky test    │
+ │ 9d  group/web !42 …    [novo] │ │ PROJ-15 Ship the thing        │
+ └───────────────────────────────┘ └───────────────────────────────┘
+  ←↑↓→ move  Enter open  Tab next tab  1-9 go to tab  A-Z jump  ? help  q quit
 ```
 
-Na primeira execução o Mosaic cria `~/.config/mosaic/` com a configuração, os widgets de exemplo (kanban, Jira, galeria) e o prompt de prioridade. Se você já usava a versão anterior, copie `~/.config/panel-tui/` para `~/.config/mosaic/`.
+<p align="center"><i>(An artist's impression. Run <code>scripts/demo.sh</code> to see the real thing, with fake data. Heads-up: the interface text is in Portuguese for now.)</i></p>
 
-O prompt é enviado ao `claude` e ao `opencode` pela entrada padrão, nunca como argumento, para não aparecer em `ps`.
+## Why
 
-## Escrevendo um widget
+Your day lives in a dozen tabs: pull requests waiting for you, tickets, meetings, that one kanban folder you swore you'd keep tidy. Mosaic puts all of it in one terminal, refreshes it in the background, and **taps you on the shoulder only when something actually changed**.
 
-Um widget responde ao argumento `snapshot` imprimindo um JSON:
+And because every widget is just a program that prints JSON, adding a new one takes about five minutes and zero frameworks.
+
+## Install
+
+**Ubuntu 24.04 or newer** (the `.deb` from the [latest release](https://github.com/flisbao/mosaic/releases/latest)):
+
+```sh
+sudo dpkg -i mosaic_*_amd64.deb
+```
+
+**Linux x86_64, macOS (Apple Silicon and Intel)**: grab the matching `.tar.gz` from the release, check it against the `.sha256`, and drop `mosaic` somewhere in your `PATH`.
+
+**From source** (Rust 1.88+):
+
+```sh
+git clone https://github.com/flisbao/mosaic && cd mosaic
+cargo install --path .
+```
+
+Then just run:
+
+```sh
+mosaic
+```
+
+On the first run Mosaic creates `~/.config/mosaic/` with a `mosaic.toml`, a few example widgets and **ready-to-uncomment blocks** for Jira, Google Calendar, GitHub, GitLab and Azure DevOps. Edit, press `R`, done.
+
+> **Just want to look around?** `scripts/demo.sh` (from the repo) starts Mosaic with fake data and an isolated config. It never touches `~/.config/mosaic`.
+
+## Keys
+
+Press `?` at any time: the help is always one key away, and the bottom line shows the keys that make sense right now.
+
+| Key | What it does |
+| --- | --- |
+| `1`-`9` | Jump to that tab |
+| `Tab` / `BackTab` | Next / previous tab |
+| `←` `↑` `→` `↓` or `h` `j` `k` `l` | Move between widgets (or items, when one is open) |
+| `Enter` | Open the focused widget |
+| `Shift+letter` or `Alt+letter` | Jump straight to the widget with that shortcut letter (`A`-`Z`, except `R`) |
+| `a` | Actions menu for the focused widget or item |
+| `r` | Refresh everything now |
+| `R` | Reload `mosaic.toml` |
+| `p` / `x` | Start or pause the pomodoro / reset it |
+| `i` | Ask an AI what to do next (if `[llm]` is on) |
+| `PgUp` `PgDn` `Home` `End` | Move faster inside an open widget |
+| `Esc` | Back |
+| `?` | Help |
+| `q` or `Ctrl+C` | Quit (gracefully: providers are cleaned up) |
+
+`Alt` needs your terminal to send `Esc` before the letter (on macOS, enable "Option as Meta").
+
+## Batteries included
+
+| Widget | What it shows | Setup guide |
+| --- | --- | --- |
+| **Jira** | Any JQL you like: lines, tables or just counters, grouped by assignee, status or priority | [`plugins/jira`](plugins/jira/README.md) |
+| **GitHub** | PRs waiting for your review and your own PRs, tagged `novo`, `push novo`, `aprovado`, `conflito`… | [`plugins/github`](plugins/github/README.md) |
+| **GitLab** | Same idea for merge requests | [`plugins/gitlab`](plugins/gitlab/README.md) |
+| **Azure DevOps** | Same idea for Azure PRs | [`plugins/azure-devops`](plugins/azure-devops/README.md) |
+| **Calendar** | Your week, from Google Calendar via secret ICS link, GNOME Online Accounts or `gcalcli` | [`plugins/calendar`](plugins/calendar/README.md) |
+| **Kanban** | A folder of Markdown files per column, with a "move task" action | `plugins/kanban.py` |
+| **Gallery** | Every block type, for the curious (and for copy-pasting) | `plugins/gallery.py` |
+
+The pull request widgets remember what you have already reviewed, so a fresh push to a PR you reviewed lights up as `push novo`. If the network drops, they show the last good data with an `(offline)` note instead of an empty box.
+
+## Write your own widget
+
+A widget answers `snapshot` by printing a JSON document. That's the whole contract:
 
 ```python
 import json
-print(json.dumps({"summary": {"title": "Olá", "blocks": [
-    {"type": "lines", "lines": [{"text": "tudo certo", "tone": "ok"}]}
+print(json.dumps({"summary": {"title": "Hello", "blocks": [
+    {"type": "lines", "lines": [{"text": "all good", "tone": "ok"}]}
 ]}}))
 ```
 
-Valide com `mosaic check python3 meu_widget.py` (o `check` executa o script a partir do diretório atual; só valide widgets em que você confia). O contrato completo está em [`PROTOCOL.md`](PROTOCOL.md) e o esquema JSON em [`schema/protocol.schema.json`](schema/protocol.schema.json). Os widgets `plugins/gallery.py` e `plugins/gallery.js` mostram todos os blocos.
-
-## Contribuindo
-
-Um plugin novo precisa vir com a sua skill (`.claude/skills/mosaic-plugin-<pasta>/`). O passo a passo está em [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-## Jira
-
-O provider do Jira Cloud (`plugins/jira/jira.py`) é genérico: cada widget define o próprio JQL e como mostrar o resultado. Exemplos, opções, variáveis e como testar com uma conta gratuita estão em [`plugins/jira/README.md`](plugins/jira/README.md).
-
-## Abas e atalhos
-
-Sem `[[tabs]]` na configuração, todos os widgets ficam numa aba única. Para separar em abas, declare cada aba com `name` e aponte os widgets para ela com `tab`. `max_items` limita quantos itens o widget mostra:
-
 ```toml
-[[tabs]]
-name = "Trabalho"
-
-[[tabs]]
-name = "Pessoal"
-
 [[widgets]]
-id = "jira-minhas-tarefas"
+id = "hello"
 command = "python3"
-args = ["plugins/jira/jira.py", "--jql", "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC", "--title", "Minhas tarefas"]
-interval_seconds = 120
-tab = "Trabalho"
-max_items = 5
-
-[[widgets]]
-id = "galeria"
-command = "python3"
-args = ["plugins/gallery.py"]
-tab = "Pessoal"
+args = ["hello.py"]
+interval_seconds = 60
 ```
 
-Teclas (modo grade, com os widgets visíveis):
+Four block types (`lines`, `rows`, `stat`, `table`), six tones, two flags, optional drill-down `detail` with selectable items, `actions`, `alerts` that notify once, and a tiny `mini` summary. Any language works: Python, Node, shell, Go, a binary you wrote on a Tuesday.
 
-| Tecla | Ação |
-| --- | --- |
-| `1` a `9` | Vai para a aba de mesmo número |
-| `Tab` / `BackTab` | Próxima / aba anterior |
-| `←` `↑` `→` `↓` ou `h` `j` `k` `l` | Move o foco entre os widgets |
-| `Enter` | Expande o widget focado |
-| `Shift+letra` ou `Alt+letra` (`A` a `Z`, exceto `R`) | Foca o widget com essa letra de atalho. `Alt` exige que o terminal envie `Esc` antes da letra (no macOS, ative "Option como Meta") |
-| `a` | Abre o menu de ações do widget focado |
-| `r` | Atualiza todos os widgets agora |
-| `R` | Recarrega o `mosaic.toml` |
-| `i` | Pede uma recomendação à IA (se `[llm]` estiver ligado) |
-| `p` / `x` | Inicia ou pausa / reinicia o pomodoro |
-| `q` ou `Ctrl+C` | Sai |
-| `?` | Abre a ajuda com as teclas da tela atual (`Esc` ou `?` fecham) |
-
-Com um widget expandido, as setas (ou `h` `j` `k` `l`) movem entre os itens, `PageUp`/`PageDown` pulam vários itens, `Home`/`End` vão ao primeiro e ao último, e `Esc` volta à grade. No menu de ações, `Enter` escolhe a ação, `s` confirma e `n` ou `Esc` cancela. A tecla `1` a `9` troca de aba só na grade. A última linha do terminal mostra as dicas de teclas do contexto (a partir de 21 linhas de altura) e cada aba exibe o número que a abre. `Enter` em um widget sem `detail` mostra um aviso em vez de expandir.
-
-Após editar a configuração, `R` recarrega widgets, abas e intervalos. Mudanças em `[llm]`, `[pomodoro]` e notificações só valem após reiniciar o Mosaic, mesmo com a recarga.
-
-`Ctrl+C` (ou `SIGTERM`/`SIGHUP`) encerra o Mosaic com calma: restaura o terminal e finaliza os providers em execução. Um **segundo** sinal enquanto ele ainda encerra força a saída imediata (código 1): o terminal pode ficar em modo bruto, bastando rodar `reset`, e providers que ainda estavam em execução podem continuar vivos até terminarem sozinhos.
-
-Valide o arquivo sem abrir o painel:
+Check your work without opening the TUI:
 
 ```sh
-mosaic check --config            # usa ~/.config/mosaic/mosaic.toml
-mosaic check --config caminho.toml
+mosaic check python3 hello.py
 ```
 
-Por padrão, todo widget herda o ambiente do Mosaic (compatível com versões anteriores). Para que um widget receba só o necessário, liste as variáveis em `inherit_env`: `PATH`, `HOME`, `LC_*`, `XDG_*` e algumas outras básicas sempre passam, o resto é removido, e `[widgets.env]` sempre vale. Exemplo para o Jira, que lê o token pela variável nomeada em `JIRA_TOKEN_ENV`:
+It validates the output against the protocol and prints a 60-column preview. It exits `0`, `1` or `2`, so it works in CI too. The full contract is in [`PROTOCOL.md`](PROTOCOL.md) (in Portuguese for now) and the JSON Schema in [`schema/protocol.schema.json`](schema/protocol.schema.json).
+
+## Tabs and layout
 
 ```toml
-[[widgets]]
-id = "jira-empresa"
-command = "python3"
-args = ["plugins/jira/jira.py", "--jql", "assignee = currentUser() AND statusCategory != Done"]
-inherit_env = ["JIRA_TOKEN_EMPRESA"]
+[[tabs]]
+name = "Work"
 
-[widgets.env]
-JIRA_SITE = "empresa.atlassian.net"
-JIRA_EMAIL = "voce@empresa.com"
-JIRA_TOKEN_ENV = "JIRA_TOKEN_EMPRESA"
+[[tabs]]
+name = "Personal"
+
+[[widgets]]
+id = "jira-mine"
+command = "python3"
+args = ["plugins/jira/jira.py", "--jql", "assignee = currentUser() AND statusCategory != Done", "--title", "My tasks"]
+interval_seconds = 120
+tab = "Work"
+max_items = 5
 ```
 
-O `notify_command` e a CLI da IA ainda herdam o ambiente inteiro.
+Without `[[tabs]]` everything lives on a single tab. Check the file any time with `mosaic check --config`.
 
-Título e corpo vêm do provider: o Mosaic limita cada um a 200 caracteres, acrescenta um espaço na frente de textos que começam com `-` e escapa `&`, `<` e `>` no corpo. Ainda assim, prefira programas que não interpretem o texto de outras formas.
+## Pomodoro and AI
 
-`[pomodoro] notify_command` é uma lista de argumentos (ex.: `["notify-send", "--urgency=low"]`); o Mosaic acrescenta título e corpo como os **dois últimos argumentos**, sem shell. Cada notificação tem limite de 5 s e no máximo 4 rodam ao mesmo tempo. Título e corpo vêm do provider: não use programas que interpretem argumentos começando com `-` de forma perigosa.
+- **Pomodoro**: `p` starts it, a bell and an optional `notify_command` tell you when to stand up. Configure it under `[pomodoro]`.
+- **AI recommendation**: press `i` and Mosaic sends a summary of your widgets to `claude` or `opencode` (via stdin, never as an argument) and shows you a recommendation. It asks before sending anything unless you turn that off. Widgets choose what the AI sees with `llm_sections`.
 
-## Licença
+## Built to be a good citizen
 
-MIT
+- **No daemon.** Each refresh runs your program, reads its JSON and lets it exit. Timeouts and the 1 MiB output cap end it with `SIGKILL` (the whole process group).
+- **A broken widget breaks only itself.** It shows its error and keeps the last good data.
+- **Secrets stay out of sight.** Providers read the *name* of an environment variable or a token file, never a token in the command line, and `inherit_env` lets a widget see only the variables it needs.
+- **The UI never waits for a provider.** Each widget has its own thread.
+
+## Claude Code skills
+
+Mosaic ships [Claude Code](https://claude.com/claude-code) skills that interview you and configure each widget for you (without ever asking you to paste a token), plus one for writing new widgets. The `.deb` puts them in `/usr/share/mosaic/skills`. Link them into your Claude Code with:
+
+```sh
+mosaic skills install
+```
+
+It creates symlinks in `~/.claude/skills/`, never overwrites anything of yours and is safe to run again. Without the package, they live in [`.claude/skills`](.claude/skills) in this repository.
+
+## Contributing
+
+Want to add a plugin? Welcome! There is one house rule: **a new plugin comes with its own skill**, so the next person (or agent) can configure and maintain it. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the recipe, and `python3 -m unittest discover -s plugins/tests` will remind you if you forget.
+
+Portuguese readers: [`README.pt-BR.md`](README.pt-BR.md) has the original, more detailed notes.
+
+## License
+
+[MIT](LICENSE)

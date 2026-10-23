@@ -9,6 +9,8 @@ description: Use quando for configurar, depurar ou alterar o widget de pull requ
 
 `plugins/azure-devops/azure_devops.py` mostra os PRs ativos do **Azure DevOps Services** (`dev.azure.com`) que esperam por você: "Aguardando minha revisão" e "Meus PRs". Só leitura (`GET` na API REST `api-version` 7.1), sem ações. Detalhes e roteiro manual: `plugins/azure-devops/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
+> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
 ## Configurar com a pessoa
 
 1. **Organização**: só o nome (`minha-org`), nunca a URL → `AZDO_ORGANIZATION` (obrigatória).

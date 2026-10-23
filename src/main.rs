@@ -1,6 +1,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod check_command;
+mod skills_command;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -67,6 +68,7 @@ const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório 
 const NO_STATE_DIRECTORY_STORE_WARNING: &str =
     "recomendações não serão salvas: não há diretório de estado do usuário";
 const CHECK_SUBCOMMAND: &str = "check";
+const SKILLS_SUBCOMMAND: &str = "skills";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 
@@ -115,6 +117,9 @@ fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().map(String::as_str) == Some(CHECK_SUBCOMMAND) {
         return check_command::run(&arguments[1..]);
+    }
+    if arguments.first().map(String::as_str) == Some(SKILLS_SUBCOMMAND) {
+        return skills_command::run(&arguments[1..]);
     }
     match run() {
         Ok(()) => ExitCode::SUCCESS,

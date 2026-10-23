@@ -37,7 +37,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os: macos-14
             target: aarch64-apple-darwin
@@ -55,12 +55,19 @@ jobs:
           cp -r schema "${name}/schema"
           tar -czf "${name}.tar.gz" "${name}"
           shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+      - name: Montar o .deb
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          deb="$(scripts/build-deb.sh "${GITHUB_REF_NAME}" "target/${{ matrix.target }}/release/mosaic" .)"
+          sha256sum "$(basename "${deb}")" > "$(basename "${deb}").sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: mosaic-${{ matrix.target }}
           path: |
             mosaic-*.tar.gz
             mosaic-*.tar.gz.sha256
+            mosaic_*.deb
+            mosaic_*.deb.sha256
 
   release:
     name: Publicar a release

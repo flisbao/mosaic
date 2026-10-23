@@ -9,6 +9,8 @@ description: Use quando for configurar, depurar ou alterar o widget de agenda (p
 
 `plugins/calendar/calendar_widget.py` mostra a agenda de **agora até a próxima segunda-feira às 00:00** (fuso local); o que já terminou some a cada leitura. Só leitura, sem ações, só biblioteca padrão. Três fontes, uma por widget, escolhidas com `CALENDAR_SOURCE`: `ics`, `goa`, `gcalcli`. Passo a passo e mensagens de erro: `plugins/calendar/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
+> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
 ## Configurar com a pessoa
 
 Pergunte primeiro **que fonte usar**:

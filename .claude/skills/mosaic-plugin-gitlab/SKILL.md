@@ -9,6 +9,8 @@ description: Use quando for configurar, depurar ou alterar o widget de merge req
 
 `plugins/gitlab/gitlab_mrs.py` mostra os merge requests do **GitLab.com** que esperam por você: "Aguardando minha revisão" e "Meus PRs" (o nome da seção é "PRs" mesmo para MRs, igual nos outros plugins de pull request). Só leitura (GraphQL sem mutation em `/api/graphql`), sem ações. Detalhes e roteiro manual: `plugins/gitlab/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
+> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
 ## Configurar com a pessoa
 
 1. **Token**: PAT em `https://gitlab.com/-/user_settings/personal_access_tokens`, escopo mínimo `read_api`. **Nunca peça o valor no chat**: ela o guarda numa variável (`GITLAB_TOKEN_MRS`) ou num arquivo `chmod 600` (`GITLAB_TOKEN_FILE`). O PAT vence e se troca à mão.

@@ -9,6 +9,8 @@ description: Use quando for configurar, depurar ou alterar o widget do Jira (plu
 
 `plugins/jira/jira.py` é um provider genérico do **Jira Cloud**, só leitura (sem ações): cada widget traz o próprio JQL em `args` e escolhe como mostrar o resultado. Autenticação Basic com e-mail e token de API clássico. Detalhes e exemplos: `plugins/jira/README.md`. Requisitos gerais de widget: `mosaic-widget-authoring`.
 
+> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
 ## Configurar com a pessoa
 
 Pergunte uma coisa por vez:

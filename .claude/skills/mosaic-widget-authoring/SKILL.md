@@ -9,6 +9,8 @@ description: Use quando for criar, alterar ou revisar um widget ou plugin do Mos
 
 Um widget é um comando completo (script + argumentos) que o Mosaic executa em intervalos, lê um JSON da saída padrão e desenha. Um plugin é uma pasta em `plugins/` com o código, o README, os testes e a skill desse widget. O contrato está em `PROTOCOL.md` e em `schema/protocol.schema.json`: leia o `PROTOCOL.md` antes de escrever o código e não copie o contrato para outros arquivos.
 
+> Instalada pelo pacote (`mosaic skills install`), esta skill serve a quem cria um widget próprio em `~/.config/mosaic/`. Os passos de registro (`default_files.rs`), `CONTRIBUTING.md` e o teste de skills só existem no repositório.
+
 ## Pré-requisito de contribuição
 
 **Plugin novo só é aceito com a sua skill** `.claude/skills/mosaic-plugin-<pasta>/SKILL.md`, escrita a partir de [plugin-skill-template.md](plugin-skill-template.md). `python3 -m unittest discover -s plugins/tests` falha se uma pasta de plugin não tiver skill, se a skill estiver mal formada ou se citar uma variável que o código do plugin não conhece.
