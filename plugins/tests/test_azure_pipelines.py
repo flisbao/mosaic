@@ -63,8 +63,10 @@ class FakeHttp:
 class FixtureHttp:
     """Responde como a API de builds, a partir de pipeline_fixtures."""
 
-    def __init__(self, missing_timelines=()):
+    def __init__(self, missing_timelines=(), timeline_responses=None, timeline_errors=None):
         self.missing_timelines = set(missing_timelines)
+        self.timeline_responses = timeline_responses or {}
+        self.timeline_errors = timeline_errors or {}
         self.calls = []
 
     def __call__(self, url, method, headers, body, timeout):
@@ -77,9 +79,19 @@ class FixtureHttp:
             raw = fixtures.builds_of(builds.group(1))
             return self._ok({"count": len(raw), "value": raw})
         timeline = re.fullmatch(r"/org/[^/]+/_apis/build/builds/(\d+)/timeline", path)
-        if timeline and int(timeline.group(1)) not in self.missing_timelines:
-            return self._ok(fixtures.raw_timeline(int(timeline.group(1))))
+        if timeline:
+            return self._timeline(int(timeline.group(1)))
         return 404, b"{}"
+
+    def _timeline(self, build_id):
+        if build_id in self.timeline_errors:
+            raise self.timeline_errors[build_id]
+        if build_id in self.timeline_responses:
+            status, payload = self.timeline_responses[build_id]
+            return status, json.dumps(payload).encode("utf-8")
+        if build_id in self.missing_timelines:
+            return 404, b"{}"
+        return self._ok(fixtures.raw_timeline(build_id))
 
     @staticmethod
     def _ok(payload):
@@ -109,6 +121,20 @@ def all_runs():
 
 def step(name, seconds):
     return pipelines.StepDuration(name, seconds)
+
+
+def timings(run=1200.0, queue=0.0, maximum_queue=0.0):
+    return pipelines.SampleTimings(run, queue, maximum_queue)
+
+
+class SteppingClock:
+    def __init__(self, step):
+        self.step = step
+        self.now = 0.0
+
+    def __call__(self):
+        self.now += self.step
+        return self.now
 
 
 def statistic(**overrides):
@@ -339,6 +365,12 @@ class CollectionTests(unittest.TestCase):
         records = [fixtures.timeline_record("t", None, "Task", "Volta", started, started - timedelta(seconds=3))]
         self.assertEqual(pipelines.parse_timeline({"records": records}), [])
 
+    def test_fetch_step_durations_rejects_a_timeline_without_records(self):
+        for payload in ({}, {"records": None}, {"records": "x"}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(pipelines.UnexpectedResponseError):
+                    pipelines.fetch_step_durations(make_client(FakeHttp([(200, payload)])), build_run(101))
+
     def test_timeline_with_wrong_shape_is_empty(self):
         for payload in ({}, {"records": "x"}, {"records": [None, 3]}):
             with self.subTest(payload=payload):
@@ -393,7 +425,7 @@ class AggregationTests(unittest.TestCase):
             1: [step("Compile › build", 600), step("Test › unit", 100)],
             2: [step("Compile › build", 200)],
         }
-        result = pipelines.aggregate_steps(statistic(average_queue_seconds=0.0), durations)
+        result = pipelines.aggregate_steps(statistic(), durations, timings())
         by_name = {item.name: item for item in result.steps}
         self.assertEqual(by_name["Compile › build"].average_seconds, 400)
         self.assertEqual(by_name["Compile › build"].maximum_seconds, 600)
@@ -403,34 +435,54 @@ class AggregationTests(unittest.TestCase):
 
     def test_same_step_name_twice_in_a_run_is_summed(self):
         durations = {1: [step("Job › retry", 30), step("Job › retry", 30)]}
-        result = pipelines.aggregate_steps(statistic(average_queue_seconds=0.0), durations)
+        result = pipelines.aggregate_steps(statistic(), durations, timings())
         self.assertEqual(result.steps[0].average_seconds, 60)
 
     def test_steps_are_sorted_by_average_and_cut(self):
         durations = {1: [step(f"Job › {number}", number) for number in range(1, 16)]}
-        result = pipelines.aggregate_steps(statistic(average_queue_seconds=0.0), durations)
+        result = pipelines.aggregate_steps(statistic(), durations, timings())
         self.assertEqual(len(result.steps), pipelines.STEPS_PER_PIPELINE)
         self.assertEqual(result.steps[0].name, "Job › 15")
 
     def test_queue_wait_appears_as_a_step(self):
         durations = {1: [step("Job › build", 1000)]}
-        result = pipelines.aggregate_steps(statistic(average_queue_seconds=60.0, maximum_queue_seconds=90.0), durations)
+        result = pipelines.aggregate_steps(statistic(), durations, timings(queue=60.0, maximum_queue=90.0))
         queue = next(item for item in result.steps if item.name == pipelines.QUEUE_STEP_NAME)
         self.assertEqual((queue.average_seconds, queue.maximum_seconds), (60, 90))
         self.assertEqual(result.steps[-1].name, pipelines.QUEUE_STEP_NAME)
 
     def test_share_is_relative_to_queue_plus_run(self):
         durations = {1: [step("Job › build", 630)]}
-        result = pipelines.aggregate_steps(statistic(average_seconds=1200.0, average_queue_seconds=60.0), durations)
+        result = pipelines.aggregate_steps(statistic(), durations, timings(run=1200.0, queue=60.0))
         self.assertAlmostEqual(result.steps[0].share, 630 / 1260)
+
+    def test_share_uses_the_sampled_runs_not_the_window_average(self):
+        window_average = 510.0
+        durations = {1: [step("Job › build", 600)]}
+        result = pipelines.aggregate_steps(statistic(average_seconds=window_average), durations, timings(run=600.0))
+        self.assertEqual(result.steps[0].share, 1.0)
+
+    def test_queue_row_uses_the_sampled_queue_not_the_window_average(self):
+        durations = {1: [step("Job › build", 100)]}
+        pipeline = statistic(average_queue_seconds=999.0, maximum_queue_seconds=999.0)
+        result = pipelines.aggregate_steps(pipeline, durations, timings(run=100.0, queue=10.0, maximum_queue=20.0))
+        queue = next(item for item in result.steps if item.name == pipelines.QUEUE_STEP_NAME)
+        self.assertEqual((queue.average_seconds, queue.maximum_seconds), (10, 20))
+
+    def test_sample_timings_average_the_given_runs(self):
+        runs = [build_run(101), build_run(102)]
+        result = pipelines.sample_timings(runs)
+        self.assertEqual(result.average_run_seconds, 1350)
+        self.assertEqual((result.average_queue_seconds, result.maximum_queue_seconds), (45, 60))
+        self.assertEqual(pipelines.sample_timings([]), timings(0.0, 0.0, 0.0))
 
     def test_share_with_zero_total_is_zero(self):
         durations = {1: [step("Job › build", 10)]}
-        result = pipelines.aggregate_steps(statistic(average_seconds=0.0, average_queue_seconds=0.0), durations)
+        result = pipelines.aggregate_steps(statistic(), durations, timings(0.0, 0.0, 0.0))
         self.assertEqual(result.steps[0].share, 0)
 
     def test_aggregate_without_durations_has_no_steps(self):
-        result = pipelines.aggregate_steps(statistic(average_queue_seconds=0.0), {})
+        result = pipelines.aggregate_steps(statistic(), {}, timings())
         self.assertEqual((result.steps, result.sampled_runs), ((), 0))
 
 
@@ -484,13 +536,65 @@ class CollectOverviewTests(unittest.TestCase):
             _, timelines, _ = self.collect()
         self.assertEqual(set(timelines), {"301", "202"})
 
-    def test_failed_timeline_skips_only_that_build(self):
+    def test_permanently_missing_timeline_is_remembered_and_not_requested_again(self):
         overview, timelines, _ = self.collect(http=FixtureHttp(missing_timelines={102}))
         top = overview.ranked[0]
         self.assertEqual(top.sampled_runs, 2)
-        self.assertTrue(top.partial)
+        self.assertFalse(top.partial)
         self.assertEqual(top.steps[0].average_seconds, 450)
+        self.assertIn("102", timelines)
+        self.assertIsNone(timelines["102"])
+        _, _, second = self.collect(http=FixtureHttp(missing_timelines={102}), cache=timelines)
+        self.assertEqual(second.timeline_calls(), [])
+
+    def test_server_error_on_a_timeline_is_retried_next_time(self):
+        http = FixtureHttp(timeline_responses={102: (500, {})})
+        overview, timelines, _ = self.collect(http=http)
+        top = overview.ranked[0]
+        self.assertEqual(top.sampled_runs, 2)
+        self.assertTrue(top.partial)
         self.assertNotIn("102", timelines)
+
+    def test_malformed_timeline_is_not_cached_nor_counted(self):
+        http = FixtureHttp(timeline_responses={102: (200, {"records": None})})
+        overview, timelines, _ = self.collect(http=http)
+        self.assertNotIn("102", timelines)
+        self.assertEqual(overview.ranked[0].sampled_runs, 2)
+        self.assertTrue(overview.ranked[0].partial)
+
+    def test_empty_timeline_is_remembered_as_unavailable(self):
+        http = FixtureHttp(timeline_responses={102: (200, {"records": []})})
+        overview, timelines, _ = self.collect(http=http)
+        self.assertIsNone(timelines["102"])
+        self.assertEqual(overview.ranked[0].sampled_runs, 2)
+        self.assertFalse(overview.ranked[0].partial)
+
+    def test_network_failure_on_a_timeline_keeps_what_was_collected(self):
+        http = FixtureHttp(timeline_errors={202: OSError("sem rede")})
+        overview, timelines, _ = self.collect(http=http)
+        self.assertEqual(len(http.timeline_calls()), 4)
+        self.assertEqual(set(timelines), {"101", "102", "103"})
+        ranked = {item.pipeline_name: item for item in overview.ranked}
+        self.assertEqual(ranked["Build API"].sampled_runs, 3)
+        self.assertTrue(ranked["Deploy"].partial)
+        self.assertTrue(ranked["Lint"].partial)
+
+    def test_rate_limit_on_a_timeline_stops_further_requests(self):
+        http = FixtureHttp(timeline_responses={202: (429, {})})
+        overview, timelines, _ = self.collect(http=http)
+        self.assertEqual(len(http.timeline_calls()), 4)
+        self.assertEqual(set(timelines), {"101", "102", "103"})
+        self.assertTrue(overview.ranked[1].partial)
+
+    def test_time_deadline_stops_new_timeline_requests(self):
+        config = make_config()
+        http = FixtureHttp()
+        clock = SteppingClock(10.0)
+        with mock.patch.object(pipelines, "TIMELINE_DEADLINE_SECONDS", 40):
+            overview, timelines = pipelines.collect_overview(make_client(http, config), config, NOW, {}, clock=clock)
+        self.assertEqual(len(http.timeline_calls()), 3)
+        self.assertEqual(len(timelines), 3)
+        self.assertTrue(overview.ranked[0].partial or overview.ranked[1].partial)
 
     def test_auth_failure_while_reading_a_timeline_propagates(self):
         class ForbiddenTimelines(FixtureHttp):
@@ -562,8 +666,9 @@ class SnapshotTests(unittest.TestCase):
 
     def test_bottleneck_in_the_detail_ignores_the_queue_wait(self):
         pipeline = pipelines.aggregate_steps(
-            statistic(average_queue_seconds=5000.0, maximum_queue_seconds=6000.0),
+            statistic(),
             {1: [step("Job › build", 100)]},
+            timings(run=100.0, queue=5000.0, maximum_queue=6000.0),
         )
         detail = snapshot_for(pipelines.Overview(1, 3, (pipeline,)))["detail"][0]
         self.assertEqual(detail["items"][0]["meta"]["gargalo"], "Job › build")
@@ -578,7 +683,7 @@ class SnapshotTests(unittest.TestCase):
             [(item["label"], item["value"]) for item in stat["items"]],
             [("média", "20m00s"), ("máximo", "25m00s"), ("fila média", "1m00s"), ("falhas", "33%")],
         )
-        self.assertEqual(stat["hint"], "amostra de 3 execuções")
+        self.assertEqual(stat["hint"], "média de 3 execuções na janela; passos: amostra de 3 execuções")
         self.assertEqual([column["title"] for column in table["columns"]], ["Passo", "Média", "% do total", "Máximo"])
         self.assertEqual([column.get("align") for column in table["columns"]], [None, "right", "right", "right"])
         names = [row[0]["text"] if isinstance(row[0], dict) else row[0] for row in table["rows"]]
@@ -614,13 +719,17 @@ class SnapshotTests(unittest.TestCase):
     def test_partial_sample_is_flagged_in_the_hint(self):
         item = pipelines.replace(statistic(), sampled_runs=2, partial=True)
         stat = snapshot_for(pipelines.Overview(1, 3, (item,)))["detail"][0]["blocks"][0]
-        self.assertEqual(stat["hint"], "amostra de 2 execuções (parcial)")
+        self.assertEqual(
+            stat["hint"], "média de 3 execuções na janela; passos: amostra de 2 execuções (parcial)"
+        )
 
     def test_pipeline_without_steps_still_has_a_detail_section(self):
         item = pipelines.replace(statistic(), partial=True)
         detail = snapshot_for(pipelines.Overview(1, 3, (item,)))["detail"]
         self.assertEqual(len(detail), 1)
-        self.assertEqual(detail[0]["blocks"][0]["hint"], "amostra de 0 execuções (parcial)")
+        self.assertEqual(
+            detail[0]["blocks"][0]["hint"], "média de 3 execuções na janela; passos: amostra de 0 execuções (parcial)"
+        )
         self.assertEqual(len(detail[0]["blocks"]), 2)
 
     def test_empty_window_shows_muted_line(self):
@@ -656,7 +765,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertLessEqual(len(snapshot["detail"][0]["heading"]), 80)
 
     def test_long_step_names_are_cut_in_the_table(self):
-        item = pipelines.aggregate_steps(statistic(average_queue_seconds=0.0), {1: [step("J › " + "x" * 600, 50)]})
+        item = pipelines.aggregate_steps(statistic(), {1: [step("J › " + "x" * 600, 50)]}, timings())
         table = snapshot_for(pipelines.Overview(1, 1, (item,)))["detail"][0]["blocks"][1]
         self.assertLessEqual(len(table["rows"][0][0]["text"]), 80)
 
@@ -751,6 +860,17 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.run_main(second), 0)
         self.assertEqual(len(first.timeline_calls()), 6)
         self.assertEqual(second.timeline_calls(), [])
+
+    def test_cold_start_network_failure_still_saves_the_timelines_read(self):
+        http = FixtureHttp(timeline_errors={202: OSError("sem rede")})
+        self.assertEqual(self.run_main(http), 0, self.stderr.getvalue())
+        (state_file,) = list(self.state_dir.iterdir())
+        saved = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertEqual(set(saved["timelines"]), {"101", "102", "103"})
+        self.reset_streams()
+        retry = FixtureHttp()
+        self.assertEqual(self.run_main(retry), 0)
+        self.assertEqual(len(retry.timeline_calls()), 3)
 
     def test_corrupt_state_file_is_treated_as_empty(self):
         self.assertEqual(self.run_main(FixtureHttp()), 0)

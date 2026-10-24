@@ -16,10 +16,10 @@ No **detalhe** (Enter), há uma seção por pipeline do ranking, com a média, o
 | --- | --- |
 | Passo | `Job › Tarefa`, tirado da timeline do build; a espera na fila aparece como `espera na fila` |
 | Média | Soma da duração do passo em cada execução da amostra, dividida pelo número de execuções da amostra |
-| % do total | Média do passo dividida pela média da execução somada à da fila |
+| % do total | Média do passo dividida pela média (execução + fila) das mesmas execuções da amostra |
 | Máximo | A maior soma do passo numa só execução |
 
-O passo mais lento (sem contar a fila) vai destacado com `⚠`. A dica do quadro diz de quantas execuções vem a amostra e, se o cache ainda está esquentando, `(parcial)`.
+O passo mais lento (sem contar a fila) vai destacado com `⚠`. O quadro do topo (média, máximo, fila e falhas) vale para **todas** as execuções da janela; a tabela, só para a amostra, e a dica diz de quantas execuções vem cada uma e, se alguma timeline ainda não foi lida, `(parcial)`.
 
 ## Autenticação
 
@@ -119,7 +119,7 @@ kill "$PID_AZURE" "$PID_ENTRA"
 
 ## Estado e cache
 
-O widget guarda, em `AZDO_STATE_DIR`, o último resultado bom (cache offline) e as **timelines** dos builds já lidos. Um build concluído não muda, então a timeline dele é pedida uma vez só. Cada leitura pede no máximo 30 timelines novas; o cache guarda até 300 builds (os de maior id). Na primeira leitura, uma pipeline com muitas execuções pode mostrar a amostra `(parcial)` até o cache esquentar nas leituras seguintes. O nome do arquivo é um hash da URL base, da organização, dos projetos, da janela, do ranking, da amostra, do método de autenticação, do tenant, do client id e de `AZDO_TITLE`. Nenhum token nem segredo entra na chave nem no arquivo.
+O widget guarda, em `AZDO_STATE_DIR`, o último resultado bom (cache offline) e as **timelines** dos builds já lidos. Um build concluído não muda, então a timeline dele é pedida uma vez só. Cada leitura pede no máximo 30 timelines novas e para de pedir após 40 segundos (para terminar e gravar o cache antes do `timeout_seconds`); o cache guarda até 300 builds (os de maior id). Um build sem timeline (404 ou sem tarefas) é lembrado como indisponível e não conta na amostra. Na primeira leitura, uma pipeline com muitas execuções pode mostrar a amostra `(parcial)` até o cache esquentar nas leituras seguintes. O nome do arquivo é um hash da URL base, da organização, dos projetos, da janela, do ranking, da amostra, do método de autenticação, do tenant, do client id e de `AZDO_TITLE`. Nenhum token nem segredo entra na chave nem no arquivo.
 
 ## Limitações
 
@@ -132,4 +132,4 @@ O widget guarda, em `AZDO_STATE_DIR`, o último resultado bom (cache offline) e 
 
 ## Quando a API não responde
 
-Se a rede falhar, a API responder com erro inesperado ou o limite de requisições estourar, o widget mostra o último resultado bom com o aviso `dados de HH:MM (offline)`. Sem nenhum resultado guardado, mostra o erro. Erros permanentes **não** usam o cache e aparecem como `erro: ...`: credencial inválida ou sem permissão, identidade que não foi adicionada à organização, `az` sem sessão, `login` pendente e requisição recusada (HTTP 400, 404 ou 410; um 404 indica `AZDO_ORGANIZATION` ou `AZDO_PROJECTS` errados). Um erro na timeline de **um** build só pula aquele build.
+Se a rede falhar, a API responder com erro inesperado ou o limite de requisições estourar, o widget mostra o último resultado bom com o aviso `dados de HH:MM (offline)`. Sem nenhum resultado guardado, mostra o erro. Erros permanentes **não** usam o cache e aparecem como `erro: ...`: credencial inválida ou sem permissão, identidade que não foi adicionada à organização, `az` sem sessão, `login` pendente e requisição recusada (HTTP 400, 404 ou 410; um 404 indica `AZDO_ORGANIZATION` ou `AZDO_PROJECTS` errados). Um erro na timeline de **um** build só pula aquele build; falha de rede ou limite de requisições nas timelines interrompe só os pedidos de timeline, e o que já foi lido é guardado.

@@ -95,6 +95,7 @@ PROTOCOL_VERSION = 1
 MAXIMUM_PROJECTS = 50
 MAXIMUM_BUILDS_PER_PROJECT = 1000
 MAXIMUM_TIMELINE_REQUESTS_PER_RUN = 30
+TIMELINE_DEADLINE_SECONDS = 40
 MAXIMUM_CACHED_TIMELINES = 300
 STEPS_PER_PIPELINE = 10
 PROJECTS_PATH = "/_apis/projects"
@@ -119,7 +120,7 @@ MINI_VALUE_LIMIT = 8
 MINI_OVERFLOW_TEXT = "999h+"
 MINI_TEXT = "pipeline mais lenta"
 EMPTY_TEXT_FORMAT = "nenhuma execução concluída nos últimos {window}"
-STEPS_UNAVAILABLE_TEXT = "passos indisponíveis nesta leitura"
+STEPS_UNAVAILABLE_TEXT = "passos indisponíveis para as execuções recentes"
 PIPELINE_HEADING_SEPARATOR = "/"
 ITEM_ID_SEPARATOR = ":"
 
@@ -1009,7 +1010,10 @@ def fetch_runs(client: AzureClient, project: str, since: datetime) -> list[Build
 
 def fetch_step_durations(client: AzureClient, run: BuildRun) -> list[StepDuration]:
     path = TIMELINE_PATH_FORMAT.format(project=_quoted(run.project), build_id=run.build_id)
-    return parse_timeline(client.get_json(path, {API_VERSION_PARAMETER: API_VERSION}))
+    payload = client.get_json(path, {API_VERSION_PARAMETER: API_VERSION})
+    if not isinstance(payload.get(RECORDS_KEY), list):
+        raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
+    return parse_timeline(payload)
 
 
 def _quoted(project: str) -> str:
@@ -1111,32 +1115,64 @@ def select_sample(runs: list[BuildRun], sample: int) -> list[BuildRun]:
     return sorted(runs, key=lambda run: run.finished_at, reverse=True)[:sample]
 
 
+@dataclass(frozen=True)
+class SampleTimings:
+    average_run_seconds: float
+    average_queue_seconds: float
+    maximum_queue_seconds: float
+
+
+def sample_timings(runs: list[BuildRun]) -> SampleTimings:
+    if not runs:
+        return SampleTimings(average_run_seconds=0.0, average_queue_seconds=0.0, maximum_queue_seconds=0.0)
+    queues = [run.queue_seconds for run in runs]
+    return SampleTimings(
+        average_run_seconds=sum(run.duration_seconds for run in runs) / len(runs),
+        average_queue_seconds=sum(queues) / len(runs),
+        maximum_queue_seconds=max(queues),
+    )
+
+
 def aggregate_steps(
-    pipeline: PipelineStatistic, durations_by_run: dict[int, list[StepDuration]]
+    pipeline: PipelineStatistic,
+    durations_by_run: dict[int, list[StepDuration]],
+    timings: SampleTimings,
 ) -> PipelineStatistic:
     sampled_runs = len(durations_by_run)
     if sampled_runs == 0:
         return pipeline
+    total_seconds = timings.average_run_seconds + timings.average_queue_seconds
+    steps = _step_statistics(durations_by_run, total_seconds)
+    if timings.average_queue_seconds > 0:
+        steps.append(_queue_step(timings, total_seconds))
+    steps.sort(key=lambda step: (-step.average_seconds, step.name))
+    return replace(pipeline, steps=tuple(steps[:STEPS_PER_PIPELINE]), sampled_runs=sampled_runs)
+
+
+def _step_statistics(durations_by_run: dict[int, list[StepDuration]], total_seconds: float) -> list[StepStatistic]:
+    sampled_runs = len(durations_by_run)
     totals_by_name: dict[str, list[float]] = {}
     for durations in durations_by_run.values():
         for name, total in _sum_by_name(durations).items():
             totals_by_name.setdefault(name, []).append(total)
-    total_seconds = pipeline.average_seconds + pipeline.average_queue_seconds
-    steps = [
-        StepStatistic(name, sum(totals) / sampled_runs, max(totals), _share(sum(totals) / sampled_runs, total_seconds))
+    return [
+        StepStatistic(
+            name=name,
+            average_seconds=sum(totals) / sampled_runs,
+            maximum_seconds=max(totals),
+            share=_share(sum(totals) / sampled_runs, total_seconds),
+        )
         for name, totals in totals_by_name.items()
     ]
-    if pipeline.average_queue_seconds > 0:
-        steps.append(
-            StepStatistic(
-                QUEUE_STEP_NAME,
-                pipeline.average_queue_seconds,
-                pipeline.maximum_queue_seconds,
-                _share(pipeline.average_queue_seconds, total_seconds),
-            )
-        )
-    steps.sort(key=lambda step: (-step.average_seconds, step.name))
-    return replace(pipeline, steps=tuple(steps[:STEPS_PER_PIPELINE]), sampled_runs=sampled_runs)
+
+
+def _queue_step(timings: SampleTimings, total_seconds: float) -> StepStatistic:
+    return StepStatistic(
+        name=QUEUE_STEP_NAME,
+        average_seconds=timings.average_queue_seconds,
+        maximum_seconds=timings.maximum_queue_seconds,
+        share=_share(timings.average_queue_seconds, total_seconds),
+    )
 
 
 def _sum_by_name(durations: list[StepDuration]) -> dict[str, float]:
@@ -1151,19 +1187,39 @@ def _share(seconds: float, total_seconds: float) -> float:
 
 
 class RequestBudget:
-    def __init__(self, limit: int):
+    def __init__(self, limit: int, clock: Callable[[], float], deadline: float):
         self._remaining = limit
+        self._clock = clock
+        self._deadline = deadline
 
     def take(self) -> bool:
-        if self._remaining <= 0:
+        if self._remaining <= 0 or self._clock() >= self._deadline:
             return False
         self._remaining -= 1
         return True
 
+    def exhaust(self) -> None:
+        self._remaining = 0
+
+
+@dataclass(frozen=True)
+class TimelineLookup:
+    durations: list[StepDuration] | None
+    is_final: bool
+
+
+PENDING_TIMELINE = TimelineLookup(durations=None, is_final=False)
+UNAVAILABLE_TIMELINE = TimelineLookup(durations=None, is_final=True)
+
 
 def collect_overview(
-    client: AzureClient, config: PipelinesConfig, now: datetime, timeline_cache: dict
+    client: AzureClient,
+    config: PipelinesConfig,
+    now: datetime,
+    timeline_cache: object,
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[Overview, dict]:
+    deadline = clock() + TIMELINE_DEADLINE_SECONDS
     since = now - timedelta(days=config.days)
     runs: list[BuildRun] = []
     for project in fetch_projects(client, config):
@@ -1171,7 +1227,7 @@ def collect_overview(
     overview = summarize(runs, config.top)
     groups = group_runs(runs)
     timelines = _valid_timelines(timeline_cache)
-    budget = RequestBudget(MAXIMUM_TIMELINE_REQUESTS_PER_RUN)
+    budget = RequestBudget(MAXIMUM_TIMELINE_REQUESTS_PER_RUN, clock, deadline)
     ranked = tuple(
         _with_steps(
             client,
@@ -1192,29 +1248,50 @@ def _with_steps(
     timelines: dict,
     budget: RequestBudget,
 ) -> PipelineStatistic:
-    durations_by_run = {}
-    for run in sample:
-        durations = _durations_of(client, run, timelines, budget)
-        if durations is not None:
-            durations_by_run[run.build_id] = durations
-    aggregated = aggregate_steps(pipeline, durations_by_run)
-    return replace(aggregated, partial=len(durations_by_run) < len(sample))
+    lookups = {run.build_id: _lookup_timeline(client, run, timelines, budget) for run in sample}
+    durations_by_run = {
+        build_id: lookup.durations for build_id, lookup in lookups.items() if lookup.durations is not None
+    }
+    sampled = [run for run in sample if run.build_id in durations_by_run]
+    aggregated = aggregate_steps(pipeline, durations_by_run, sample_timings(sampled))
+    return replace(aggregated, partial=any(not lookup.is_final for lookup in lookups.values()))
 
 
-def _durations_of(
+def _lookup_timeline(
     client: AzureClient, run: BuildRun, timelines: dict, budget: RequestBudget
-) -> list[StepDuration] | None:
-    cached = _durations_from_cache(timelines.get(str(run.build_id)))
+) -> TimelineLookup:
+    cached = _lookup_cached(timelines, run.build_id)
     if cached is not None:
         return cached
     if not budget.take():
-        return None
+        return PENDING_TIMELINE
+    key = str(run.build_id)
     try:
         durations = fetch_step_durations(client, run)
-    except (RequestRejectedError, UnexpectedResponseError):
+    except RequestRejectedError:
+        timelines[key] = None
+        return UNAVAILABLE_TIMELINE
+    except UnexpectedResponseError:
+        return PENDING_TIMELINE
+    except (RateLimitError, NetworkError):
+        budget.exhaust()
+        return PENDING_TIMELINE
+    if not durations:
+        timelines[key] = None
+        return UNAVAILABLE_TIMELINE
+    timelines[key] = [[item.name, item.seconds] for item in durations]
+    return TimelineLookup(durations=durations, is_final=True)
+
+
+def _lookup_cached(timelines: dict, build_id: int) -> TimelineLookup | None:
+    key = str(build_id)
+    if key not in timelines:
         return None
-    timelines[str(run.build_id)] = [[item.name, item.seconds] for item in durations]
-    return durations
+    entry = timelines[key]
+    if entry is None:
+        return UNAVAILABLE_TIMELINE
+    durations = _durations_from_cache(entry)
+    return None if durations is None else TimelineLookup(durations=durations, is_final=True)
 
 
 def _durations_from_cache(entry: object) -> list[StepDuration] | None:
@@ -1240,9 +1317,11 @@ def _valid_timelines(raw: object) -> dict:
         return {}
     valid = {}
     for key, entry in raw.items():
+        if not (isinstance(key, str) and key.isdigit()):
+            continue
         durations = _durations_from_cache(entry)
-        if isinstance(key, str) and key.isdigit() and durations is not None:
-            valid[key] = [[item.name, item.seconds] for item in durations]
+        if entry is None or durations is not None:
+            valid[key] = None if durations is None else [[item.name, item.seconds] for item in durations]
     return valid
 
 
@@ -1354,7 +1433,10 @@ def _detail_section(pipeline: PipelineStatistic) -> dict:
 
 
 def _pipeline_stat_block(pipeline: PipelineStatistic) -> dict:
-    hint = f"amostra de {_run_count_text(pipeline.sampled_runs)}"
+    hint = (
+        f"média de {_run_count_text(pipeline.run_count)} na janela; "
+        f"passos: amostra de {_run_count_text(pipeline.sampled_runs)}"
+    )
     return {
         "type": "stat",
         "items": [
@@ -1516,7 +1598,7 @@ def _empty_state() -> dict:
 def run_snapshot(
     store: StateStore,
     config: PipelinesConfig,
-    collect: Callable[[dict], tuple[Overview, dict]],
+    collect: Callable[[object], tuple[Overview, dict]],
     moment: datetime,
     stdout,
     stderr,
@@ -1560,6 +1642,7 @@ def main(
     http=urllib_http,
     run_command=subprocess.run,
     sleep=time.sleep,
+    clock=time.monotonic,
     now=None,
     stdout=None,
     stderr=None,
@@ -1583,7 +1666,7 @@ def main(
     return run_snapshot(
         store,
         config,
-        lambda timelines: collect_overview(client, config, moment, timelines),
+        lambda timelines: collect_overview(client, config, moment, timelines, clock=clock),
         moment,
         stdout,
         stderr,
