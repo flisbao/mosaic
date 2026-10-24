@@ -1506,4 +1506,20 @@ mod tests {
         );
         assert!(without.recommendation_record().is_none());
     }
+
+    #[test]
+    fn replacing_the_theme_keeps_the_rest_of_the_state() {
+        use crate::domain::theme::Theme;
+        use crate::infrastructure::terminal_capabilities::ColorDepth;
+        let mut app = app();
+        press(&mut app, &[KeyInput::Down, KeyInput::Enter]);
+        let focus = app.focused_entry();
+        let expanded = app.is_expanded();
+        let styles = ThemeStyles::new(&Theme::preset("nord").unwrap(), ColorDepth::TrueColor);
+        app.set_theme_styles(styles.clone());
+        assert_eq!(app.styles(), &styles);
+        assert_eq!(app.focused_entry(), focus);
+        assert_eq!(app.is_expanded(), expanded);
+        assert_eq!(app.tabs().len(), 2);
+    }
 }

@@ -4,6 +4,7 @@ use crate::domain::theme::{Palette, Rgb, Theme};
 use crate::domain::widget_content::Tone;
 use crate::infrastructure::terminal_capabilities::ColorDepth;
 
+pub const BASIC_TERMINAL_WARNING: &str = "terminal sem 256 cores: usando o tema default";
 const INDEXED_CUBE_START: u8 = 16;
 const INDEXED_CUBE_SIDE: usize = 6;
 const INDEXED_CUBE_LEVELS: [u8; INDEXED_CUBE_SIDE] = [0, 95, 135, 175, 215, 255];
@@ -114,6 +115,20 @@ impl ThemeStyles {
 
     pub fn key_hint(&self) -> Style {
         self.warn().add_modifier(Modifier::BOLD)
+    }
+}
+
+pub struct ThemeResolution {
+    pub styles: ThemeStyles,
+    pub warning: Option<String>,
+}
+
+pub fn resolve_theme(theme: &Theme, depth: ColorDepth) -> ThemeResolution {
+    let is_colored_on_basic_terminal =
+        matches!(theme, Theme::Colored { .. }) && depth == ColorDepth::Basic;
+    ThemeResolution {
+        styles: ThemeStyles::new(theme, depth),
+        warning: is_colored_on_basic_terminal.then(|| BASIC_TERMINAL_WARNING.to_string()),
     }
 }
 
@@ -398,6 +413,35 @@ mod tests {
                     file.display()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn colored_theme_on_a_basic_terminal_falls_back_with_a_warning() {
+        let resolution = resolve_theme(&colored("dracula"), ColorDepth::Basic);
+        assert_eq!(resolution.styles, ThemeStyles::ansi());
+        assert_eq!(resolution.warning.as_deref(), Some(BASIC_TERMINAL_WARNING));
+    }
+
+    #[test]
+    fn colored_theme_on_truecolor_or_256_colors_has_no_warning() {
+        for depth in [ColorDepth::TrueColor, ColorDepth::Indexed256] {
+            let resolution = resolve_theme(&colored("dracula"), depth);
+            assert_eq!(resolution.warning, None);
+            assert!(resolution.styles.paints_background());
+        }
+    }
+
+    #[test]
+    fn ansi_theme_never_warns() {
+        for depth in [
+            ColorDepth::TrueColor,
+            ColorDepth::Indexed256,
+            ColorDepth::Basic,
+        ] {
+            let resolution = resolve_theme(&Theme::Ansi, depth);
+            assert_eq!(resolution.warning, None);
+            assert_eq!(resolution.styles, ThemeStyles::ansi());
         }
     }
 }

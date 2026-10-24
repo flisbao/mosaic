@@ -47,6 +47,7 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
+use mosaic::infrastructure::terminal_capabilities::ColorDepth;
 use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime};
 use mosaic::presentation::app_events::{
     apply_event, stored_recommendation_result, AppEvent, EventContext,
@@ -59,6 +60,7 @@ use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
 };
+use mosaic::presentation::theme_styles::resolve_theme;
 use ratatui::crossterm::event::{self, Event};
 use thiserror::Error;
 
@@ -100,6 +102,7 @@ struct Services {
     notifier: CompositeNotifier,
     config_directory: PathBuf,
     config: AppConfig,
+    color_depth: ColorDepth,
 }
 
 struct EventChannel {
@@ -141,7 +144,14 @@ fn run() -> Result<(), AppError> {
     let config = load_config(&directory)?;
     let termination = termination_requested()?;
     let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
-    let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
+    let color_depth = ColorDepth::detect(|name| std::env::var(name).ok());
+    let services = build_services(
+        &config,
+        &directory,
+        &sender,
+        Arc::clone(&termination),
+        color_depth,
+    );
     let (state, spans) = initial_state(&config, &services, &SystemClock);
     let mut app = App {
         state,
@@ -177,7 +187,11 @@ fn initial_state(
         recommendation_record,
     );
     let mut state = AppState::new(entries, tabs);
-    if let Some(notice) = startup_notice(&startup_warnings(config, services)) {
+    let theme = resolve_theme(&config.theme, services.color_depth);
+    state.set_theme_styles(theme.styles);
+    let mut warnings = startup_warnings(config, services);
+    warnings.extend(theme.warning);
+    if let Some(notice) = startup_notice(&warnings) {
         state.show_notice(notice);
     }
     if config.pomodoro.enabled {
@@ -224,6 +238,7 @@ fn build_services(
     directory: &Path,
     sender: &SyncSender<AppEvent>,
     termination: Arc<AtomicBool>,
+    color_depth: ColorDepth,
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
     let working_directory = directory.to_path_buf();
@@ -272,6 +287,7 @@ fn build_services(
         notifier,
         config_directory: directory.to_path_buf(),
         config: config.clone(),
+        color_depth,
     }
 }
 
@@ -484,7 +500,11 @@ fn apply_reloaded_config(
     next: AppConfig,
     plan: &ReloadPlan,
 ) {
-    let notice = reload_notice(&restart_sections(&services.config, &next), &next.warnings);
+    let theme = resolve_theme(&next.theme, services.color_depth);
+    let mut warnings = next.warnings.clone();
+    warnings.extend(theme.warning);
+    let notice = reload_notice(&restart_sections(&services.config, &next), &warnings);
+    state.set_theme_styles(theme.styles);
     let TabLayout {
         entries,
         tabs,
