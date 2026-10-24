@@ -1,8 +1,8 @@
-import base64
 import io
 import json
 import sys
 import tempfile
+import types
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,11 +22,7 @@ NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 
 def base_environment(**overrides):
-    environment = {
-        "AZDO_ORGANIZATION": ORGANIZATION,
-        "AZDO_TOKEN_ENV": "MEU_TOKEN",
-        "MEU_TOKEN": SECRET,
-    }
+    environment = {"AZDO_ORGANIZATION": ORGANIZATION}
     environment.update(overrides)
     return {key: value for key, value in environment.items() if value is not None}
 
@@ -49,8 +45,26 @@ class FakeHttp:
         return status, payload
 
 
-def make_client(http, **overrides):
-    return azure_devops.AzureClient(azure_devops.load_config(base_environment(**overrides)), http)
+class StaticTokenProvider:
+    def __init__(self, token=SECRET):
+        self.token = token
+        self.calls = 0
+
+    def access_token(self):
+        self.calls += 1
+        return self.token
+
+
+def fake_azure_cli(token=SECRET):
+    def run(command, **options):
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"accessToken": token}), stderr="")
+
+    return run
+
+
+def make_client(http, token_provider=None, **overrides):
+    config = azure_devops.load_config(base_environment(**overrides))
+    return azure_devops.AzureClient(config, http, token_provider or StaticTokenProvider())
 
 
 def fetch_with_pages(review_page, mine_page=(), **overrides):
@@ -87,7 +101,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.organization, ORGANIZATION)
         self.assertEqual(config.projects, ())
         self.assertEqual(config.title, "Azure DevOps")
-        self.assertEqual(config.token, SECRET)
+        self.assertEqual(config.auth.method, "azure-cli")
         self.assertTrue(str(config.state_dir).endswith(".local/state/mosaic/azure-devops"))
 
     def test_projects_are_split_and_trimmed(self):
@@ -101,23 +115,51 @@ class ConfigTests(unittest.TestCase):
         local = azure_devops.load_config(base_environment(AZDO_BASE_URL="http://127.0.0.1:8080/"))
         self.assertEqual(local.base_url, "http://127.0.0.1:8080")
 
-    def test_token_error_does_not_leak_the_value(self):
+    def test_pat_variables_are_rejected_with_guidance(self):
         with self.assertRaises(azure_devops.ConfigError) as caught:
-            azure_devops.load_config(base_environment(MEU_TOKEN="a b"))
-        self.assertNotIn("a b", str(caught.exception))
+            azure_devops.load_config(base_environment(AZDO_TOKEN_ENV="MEU_TOKEN", MEU_TOKEN=SECRET))
+        self.assertIn("AZDO_AUTH_METHOD", str(caught.exception))
+        self.assertNotIn(SECRET, str(caught.exception))
 
 
 class ClientTests(unittest.TestCase):
-    def test_basic_auth_uses_empty_user(self):
+    def test_requests_use_bearer_token(self):
         http = FakeHttp([(200, fixtures.azure_connection_data())])
-        make_client(http).get_json("/_apis/connectionData", {})
+        make_client(http, StaticTokenProvider("tok")).get_json("/_apis/connectionData", {})
         call = http.calls[0]
-        expected = "Basic " + base64.b64encode(f":{SECRET}".encode("utf-8")).decode("ascii")
-        self.assertEqual(call["headers"]["Authorization"], expected)
+        self.assertEqual(call["headers"]["Authorization"], "Bearer tok")
         self.assertEqual(call["headers"]["Accept"], "application/json")
         self.assertEqual(call["method"], "GET")
         self.assertIsNone(call["body"])
         self.assertEqual(call["url"], "https://dev.azure.com/org/_apis/connectionData")
+
+    def test_token_is_requested_once_per_client(self):
+        provider = StaticTokenProvider()
+        http = FakeHttp([(200, {}), (200, {})])
+        client = make_client(http, provider)
+        client.get_json("/a", {})
+        client.get_json("/b", {})
+        self.assertEqual(provider.calls, 1)
+
+    def test_token_provider_errors_propagate_unchanged(self):
+        class FailingProvider:
+            def access_token(self):
+                raise azure_devops.AuthError("sem sessão")
+
+        http = FakeHttp()
+        with self.assertRaises(azure_devops.AuthError):
+            make_client(http, FailingProvider()).get_json("/x", {})
+        self.assertEqual(http.calls, [])
+
+    def test_identity_not_in_organization_message(self):
+        body = b'{"message": "TF401444: Please sign-in at least once to this organization"}'
+        with self.assertRaises(azure_devops.AuthError) as caught:
+            make_client(FakeHttp([(401, body)])).get_json("/_apis/connectionData", {})
+        self.assertEqual(
+            str(caught.exception),
+            "a identidade não foi adicionada à organização no Azure DevOps "
+            "(Organization settings > Users)",
+        )
 
     def test_error_messages_never_contain_the_token(self):
         for status in (401, 403, 429, 500):
@@ -319,6 +361,7 @@ class MainTests(unittest.TestCase):
             list(arguments),
             environ=environment,
             http=http,
+            run_command=fake_azure_cli(),
             now=NOW,
             stdout=self.stdout,
             stderr=self.stderr,
@@ -342,7 +385,7 @@ class MainTests(unittest.TestCase):
 
     def test_main_usage_error_exits_two(self):
         self.assertEqual(self.run_main(FakeHttp(), arguments=("outra",)), 2)
-        self.assertEqual(self.stderr.getvalue(), "uso: azure_devops.py snapshot\n")
+        self.assertEqual(self.stderr.getvalue(), "uso: azure_devops.py snapshot|login\n")
 
     def test_main_config_error_exits_one(self):
         code = self.run_main(FakeHttp(), AZDO_ORGANIZATION=None)
@@ -394,12 +437,32 @@ class MainTests(unittest.TestCase):
         self.assertNotIn(SECRET, self.stdout.getvalue())
         self.assertNotIn(SECRET, self.stderr.getvalue())
 
-    def test_state_key_uses_token_source_not_value(self):
-        environment = base_environment()
+    def test_main_azure_cli_missing_exits_one(self):
+        def missing(command, **options):
+            raise FileNotFoundError()
+
+        environment = base_environment(AZDO_STATE_DIR=str(self.state_dir))
+        code = azure_devops.main(
+            ["snapshot"], environ=environment, http=FakeHttp(), run_command=missing,
+            now=NOW, stdout=self.stdout, stderr=self.stderr,
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertIn("Azure CLI", self.stderr.getvalue())
+
+    def test_state_key_uses_identity_not_secret(self):
+        environment = base_environment(
+            AZDO_AUTH_METHOD="service-principal",
+            AZDO_TENANT_ID="tenant-1",
+            AZDO_CLIENT_ID="client-1",
+            AZDO_CLIENT_SECRET_ENV="SP_SECRET",
+            SP_SECRET=SECRET,
+        )
         config = azure_devops.load_config(environment)
         key = azure_devops.state_key(config, environment)
         self.assertNotIn(SECRET, key)
-        self.assertIn("env:MEU_TOKEN", key)
+        for part in ("service-principal", "tenant-1", "client-1"):
+            self.assertIn(part, key)
 
 
 if __name__ == "__main__":

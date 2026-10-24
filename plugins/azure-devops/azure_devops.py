@@ -3,21 +3,24 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import http.client
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPException
 from pathlib import Path
+from typing import Protocol
 
 DEFAULT_BASE_URL = "https://dev.azure.com"
 DEFAULT_TITLE = "Azure DevOps"
@@ -31,9 +34,6 @@ ORGANIZATION_VARIABLE = "AZDO_ORGANIZATION"
 PROJECTS_VARIABLE = "AZDO_PROJECTS"
 TITLE_VARIABLE = "AZDO_TITLE"
 STATE_DIRECTORY_VARIABLE = "AZDO_STATE_DIR"
-TOKEN_PREFIX = "AZDO"
-TOKEN_VARIABLE_KEY = f"{TOKEN_PREFIX}_TOKEN_ENV"
-TOKEN_FILE_KEY = f"{TOKEN_PREFIX}_TOKEN_FILE"
 ORGANIZATION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 FRACTION_BEYOND_MICROSECONDS = re.compile(r"(\.\d{6})\d+")
 LIST_SEPARATOR = ","
@@ -60,6 +60,10 @@ BRANCH_REFERENCE_PREFIX = "refs/heads/"
 WEB_PATH_SEGMENT = "_git"
 PULL_REQUEST_PATH_SEGMENT = "pullrequest"
 HTTP_SIGN_IN_PAGE = 203
+IDENTITY_NOT_IN_ORGANIZATION_MARKER = b"TF401444"
+IDENTITY_NOT_IN_ORGANIZATION_MESSAGE = (
+    "a identidade não foi adicionada à organização no Azure DevOps (Organization settings > Users)"
+)
 ORGANIZATION_NOT_FOUND_MESSAGE = "organização não encontrada no Azure DevOps; confira AZDO_ORGANIZATION"
 HTTP_CLIENT_ERROR_FLOOR = 400
 REQUEST_TIMEOUT_SECONDS = 20
@@ -129,8 +133,10 @@ TEMPORARY_FILE_SUFFIX = ".tmp"
 STATE_DIRECTORY_MODE = 0o700
 ARGUMENT_ERROR_EXIT_CODE = 2
 FAILURE_EXIT_CODE = 1
-USAGE_MESSAGE = "uso: azure_devops.py snapshot"
+USAGE_MESSAGE = "uso: azure_devops.py snapshot|login"
 SNAPSHOT_COMMAND = ["snapshot"]
+LOGIN_COMMAND = ["login"]
+LOGIN_INSTRUCTION = "python3 plugins/azure-devops/azure_devops.py login"
 STATE_KEY_SEPARATOR = "\n"
 
 
@@ -143,7 +149,7 @@ class AzureConfig:
     base_url: str
     organization: str
     projects: tuple[str, ...]
-    token: str
+    auth: EntraConfig
     title: str
     state_dir: Path
 
@@ -153,7 +159,7 @@ def load_config(environ: Mapping[str, str]) -> AzureConfig:
         base_url=read_base_url(environ, BASE_URL_VARIABLE, DEFAULT_BASE_URL),
         organization=_read_organization(environ),
         projects=_read_projects(environ),
-        token=read_token(environ, TOKEN_PREFIX),
+        auth=load_entra_config(environ),
         title=environ.get(TITLE_VARIABLE, "").strip() or DEFAULT_TITLE,
         state_dir=read_state_dir(environ, STATE_DIRECTORY_VARIABLE, DEFAULT_STATE_DIRECTORY),
     )
@@ -188,55 +194,6 @@ def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> st
 def read_state_dir(environ: Mapping[str, str], variable: str, default: str) -> Path:
     raw = environ.get(variable, "").strip() or default
     return Path(raw).expanduser()
-
-
-def read_token(environ: Mapping[str, str], prefix: str) -> str:
-    return _ensure_token_is_header_safe(_read_token_source(environ, prefix), prefix)
-
-
-def _ensure_token_is_header_safe(value: str, prefix: str) -> str:
-    if any(character.isspace() or not character.isprintable() for character in value) or not _is_latin1(value):
-        raise ConfigError(
-            f"o token de {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contém caracteres inválidos"
-        )
-    return value
-
-
-def _is_latin1(value: str) -> bool:
-    try:
-        value.encode("latin-1")
-    except UnicodeEncodeError:
-        return False
-    return True
-
-
-def _read_token_source(environ: Mapping[str, str], prefix: str) -> str:
-    variable_key = f"{prefix}_TOKEN_ENV"
-    file_key = f"{prefix}_TOKEN_FILE"
-    variable = environ.get(variable_key, "").strip()
-    if variable:
-        return _read_token_variable(environ, variable, variable_key)
-    path = environ.get(file_key, "").strip()
-    if path:
-        return _read_token_file(path, file_key)
-    raise ConfigError(f"defina {variable_key} (nome da variável com o token) ou {file_key}")
-
-
-def _read_token_variable(environ: Mapping[str, str], variable: str, variable_key: str) -> str:
-    value = environ.get(variable, "").strip()
-    if not value:
-        raise ConfigError(f"a variável {variable} ({variable_key}) está vazia ou ausente")
-    return value
-
-
-def _read_token_file(path: str, file_key: str) -> str:
-    try:
-        value = Path(path).expanduser().read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeDecodeError):
-        raise ConfigError(f"não foi possível ler o arquivo de {file_key}") from None
-    if not value:
-        raise ConfigError(f"o arquivo de {file_key} está vazio")
-    return value
 
 
 class ApiError(Exception):
@@ -288,6 +245,504 @@ def _read_limited(stream, limit: int) -> bytes:
     return body
 
 
+# --- entra-auth: início ---
+AZURE_DEVOPS_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798"
+AZURE_DEVOPS_SCOPE = f"{AZURE_DEVOPS_RESOURCE_ID}/.default"
+OFFLINE_ACCESS_SCOPE = "offline_access"
+DEFAULT_LOGIN_URL = "https://login.microsoftonline.com"
+DEFAULT_IMDS_URL = "http://169.254.169.254"
+IMDS_TOKEN_PATH = "/metadata/identity/oauth2/token"
+IMDS_API_VERSION = "2018-02-01"
+IMDS_METADATA_HEADER = "Metadata"
+DEFAULT_TENANT = "organizations"
+UNSPECIFIC_TENANTS = (DEFAULT_TENANT, "common")
+AUTH_METHOD_VARIABLE = "AZDO_AUTH_METHOD"
+TENANT_VARIABLE = "AZDO_TENANT_ID"
+CLIENT_ID_VARIABLE = "AZDO_CLIENT_ID"
+CLIENT_SECRET_VARIABLE_KEY = "AZDO_CLIENT_SECRET_ENV"
+CLIENT_SECRET_FILE_KEY = "AZDO_CLIENT_SECRET_FILE"
+CREDENTIALS_DIRECTORY_VARIABLE = "AZDO_CREDENTIALS_DIR"
+DEFAULT_CREDENTIALS_DIRECTORY = "~/.local/state/mosaic/azure-devops-credentials"
+LOGIN_URL_VARIABLE = "AZDO_LOGIN_URL"
+IMDS_URL_VARIABLE = "AZDO_IMDS_URL"
+LEGACY_TOKEN_VARIABLES = ("AZDO_TOKEN_ENV", "AZDO_TOKEN_FILE")
+AZURE_CLI_EXECUTABLE = "az"
+AZURE_CLI_TIMEOUT_SECONDS = 15
+IMDS_TIMEOUT_SECONDS = 3
+TOKEN_REQUEST_TIMEOUT_SECONDS = 10
+DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+AUTH_METHOD_AZURE_CLI = "azure-cli"
+AUTH_METHOD_DEVICE_CODE = "device-code"
+AUTH_METHOD_SERVICE_PRINCIPAL = "service-principal"
+AUTH_METHOD_MANAGED_IDENTITY = "managed-identity"
+AUTH_METHODS = (
+    AUTH_METHOD_AZURE_CLI,
+    AUTH_METHOD_DEVICE_CODE,
+    AUTH_METHOD_SERVICE_PRINCIPAL,
+    AUTH_METHOD_MANAGED_IDENTITY,
+)
+HTTP_OK = 200
+HTTP_SERVER_ERROR_FLOOR = 500
+IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9.-]+")
+DEFAULT_POLL_INTERVAL_SECONDS = 5
+SLOW_DOWN_INCREMENT_SECONDS = 5
+MAXIMUM_POLL_INTERVAL_SECONDS = 60
+DEFAULT_DEVICE_CODE_LIFETIME_SECONDS = 900
+MAXIMUM_DEVICE_CODE_LIFETIME_SECONDS = 1800
+CREDENTIAL_FILE_PREFIX = "entra-"
+CREDENTIAL_DIRECTORY_MODE = 0o700
+CREDENTIAL_DIRECTORY_FORBIDDEN_BITS = 0o077
+CREDENTIAL_KEY_SEPARATOR = "\n"
+BEARER_PREFIX = "Bearer "
+FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
+JSON_CONTENT_TYPE = "application/json"
+ERROR_KEY = "error"
+ACCESS_TOKEN_KEY = "access_token"
+REFRESH_TOKEN_KEY = "refresh_token"
+REFRESH_TOKEN_GRANT = "refresh_token"
+PENDING_ERROR_CODE = "authorization_pending"
+SLOW_DOWN_ERROR_CODE = "slow_down"
+INVALID_GRANT_ERROR_CODE = "invalid_grant"
+LOGIN_REQUIRED_MESSAGE = f"sem login do Entra; rode: {LOGIN_INSTRUCTION}"
+LOGIN_DONE_MESSAGE = "login concluído"
+LOGIN_ONLY_FOR_DEVICE_CODE_MESSAGE = f"login só é usado com {AUTH_METHOD_VARIABLE}={AUTH_METHOD_DEVICE_CODE}"
+LEGACY_TOKEN_MESSAGE = (
+    "PAT não é mais suportado no Azure DevOps; defina "
+    f"{AUTH_METHOD_VARIABLE} ({', '.join(AUTH_METHODS[:-1])} ou {AUTH_METHODS[-1]}), "
+    "veja plugins/azure-devops/README.md"
+)
+ENTRA_ERROR_MESSAGES = {
+    "invalid_client": "o Entra recusou o client id ou o segredo do app",
+    "unauthorized_client": "o app não tem permissão para esse fluxo no Entra",
+    "invalid_grant": "o login do Entra venceu ou foi revogado",
+    "invalid_scope": "o app não tem o escopo do Azure DevOps no Entra",
+    "interaction_required": "o Entra exige consentimento ou login interativo",
+    "consent_required": "o Entra exige consentimento do administrador para o app",
+    "expired_token": "o código do dispositivo venceu antes da autorização",
+    "authorization_declined": "a autorização do dispositivo foi recusada",
+    "bad_verification_code": "o código do dispositivo é inválido",
+}
+
+
+class TokenProvider(Protocol):
+    def access_token(self) -> str: ...
+
+
+class EntraAuthError(AuthError):
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
+
+
+class AuthorizationPendingError(UnexpectedResponseError):
+    def __init__(self, slow_down: bool):
+        super().__init__("a autorização do dispositivo ainda está pendente")
+        self.slow_down = slow_down
+
+
+@dataclass(frozen=True)
+class EntraConfig:
+    method: str
+    tenant: str
+    client_id: str
+    client_secret: str = field(repr=False)
+    login_url: str
+    imds_url: str
+    credentials_dir: Path
+
+
+def load_entra_config(environ: Mapping[str, str]) -> EntraConfig:
+    _reject_legacy_token(environ)
+    method = environ.get(AUTH_METHOD_VARIABLE, "").strip() or AUTH_METHOD_AZURE_CLI
+    if method not in AUTH_METHODS:
+        raise ConfigError(f"{AUTH_METHOD_VARIABLE} desconhecido; use {', '.join(AUTH_METHODS)}")
+    config = EntraConfig(
+        method=method,
+        tenant=_read_identifier(environ, TENANT_VARIABLE, DEFAULT_TENANT),
+        client_id=_read_identifier(environ, CLIENT_ID_VARIABLE, ""),
+        client_secret="",
+        login_url=read_base_url(environ, LOGIN_URL_VARIABLE, DEFAULT_LOGIN_URL),
+        imds_url=read_base_url(environ, IMDS_URL_VARIABLE, DEFAULT_IMDS_URL),
+        credentials_dir=read_state_dir(
+            environ, CREDENTIALS_DIRECTORY_VARIABLE, DEFAULT_CREDENTIALS_DIRECTORY
+        ),
+    )
+    return _complete_for_method(config, environ)
+
+
+def _reject_legacy_token(environ: Mapping[str, str]) -> None:
+    if any(environ.get(variable, "").strip() for variable in LEGACY_TOKEN_VARIABLES):
+        raise ConfigError(LEGACY_TOKEN_MESSAGE)
+
+
+def _read_identifier(environ: Mapping[str, str], variable: str, default: str) -> str:
+    value = environ.get(variable, "").strip() or default
+    if value and IDENTIFIER_PATTERN.fullmatch(value) is None:
+        raise ConfigError(f"{variable} contém caracteres inválidos")
+    return value
+
+
+def _complete_for_method(config: EntraConfig, environ: Mapping[str, str]) -> EntraConfig:
+    needs_client = config.method in (AUTH_METHOD_DEVICE_CODE, AUTH_METHOD_SERVICE_PRINCIPAL)
+    if needs_client and not config.client_id:
+        raise ConfigError(
+            f"defina {CLIENT_ID_VARIABLE} com o Application (client) ID do app registrado no Entra"
+        )
+    if config.method != AUTH_METHOD_SERVICE_PRINCIPAL:
+        return config
+    if config.tenant in UNSPECIFIC_TENANTS:
+        raise ConfigError(
+            f"defina {TENANT_VARIABLE} com o Directory (tenant) ID; "
+            f"'{DEFAULT_TENANT}' e 'common' não servem ao service principal"
+        )
+    secret = read_secret(environ, CLIENT_SECRET_VARIABLE_KEY, CLIENT_SECRET_FILE_KEY)
+    return replace(config, client_secret=secret)
+
+
+def read_secret(environ: Mapping[str, str], variable_key: str, file_key: str) -> str:
+    value = _read_secret_source(environ, variable_key, file_key)
+    if _has_unsafe_characters(value):
+        raise ConfigError(f"o segredo de {variable_key}/{file_key} contém caracteres inválidos")
+    return value
+
+
+def _read_secret_source(environ: Mapping[str, str], variable_key: str, file_key: str) -> str:
+    variable = environ.get(variable_key, "").strip()
+    if variable:
+        value = environ.get(variable, "").strip()
+        if not value:
+            raise ConfigError(f"a variável {variable} ({variable_key}) está vazia ou ausente")
+        return value
+    path = environ.get(file_key, "").strip()
+    if path:
+        return _read_secret_file(path, file_key)
+    raise ConfigError(f"defina {variable_key} (nome da variável com o segredo) ou {file_key}")
+
+
+def _read_secret_file(path: str, file_key: str) -> str:
+    try:
+        value = Path(path).expanduser().read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        raise ConfigError(f"não foi possível ler o arquivo de {file_key}") from None
+    if not value:
+        raise ConfigError(f"o arquivo de {file_key} está vazio")
+    return value
+
+
+def _has_unsafe_characters(value: str) -> bool:
+    if any(character.isspace() or not character.isprintable() for character in value):
+        return True
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
+def bearer_authorization(token: str) -> str:
+    if _has_unsafe_characters(token):
+        raise ConfigError("o token de acesso recebido contém caracteres inválidos")
+    return BEARER_PREFIX + token
+
+
+def decode_entra_response(status: int, body: bytes) -> dict:
+    if status == HTTP_TOO_MANY_REQUESTS:
+        raise RateLimitError("limite de requisições do Entra; tento de novo na próxima leitura")
+    if status >= HTTP_SERVER_ERROR_FLOOR:
+        raise NetworkError(f"o Entra está indisponível (HTTP {status})")
+    payload = _parse_json_object(body)
+    if status == HTTP_OK:
+        if payload is None:
+            raise UnexpectedResponseError("a resposta do Entra não é um objeto JSON")
+        return payload
+    _raise_for_entra_error(status, payload or {})
+
+
+def _parse_json_object(body: bytes) -> dict | None:
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _raise_for_entra_error(status: int, payload: dict) -> None:
+    code = payload.get(ERROR_KEY)
+    if code in (PENDING_ERROR_CODE, SLOW_DOWN_ERROR_CODE):
+        raise AuthorizationPendingError(slow_down=code == SLOW_DOWN_ERROR_CODE)
+    if isinstance(code, str) and code in ENTRA_ERROR_MESSAGES:
+        raise EntraAuthError(ENTRA_ERROR_MESSAGES[code], code)
+    raise UnexpectedResponseError(f"resposta inesperada do Entra (HTTP {status})")
+
+
+def _send_to_entra(http, url: str, method: str, headers: dict, body: bytes | None, timeout: int) -> dict:
+    try:
+        status, payload = http(url, method, headers, body, timeout)
+    except (OSError, HTTPException):
+        raise NetworkError("falha de rede ao falar com o Entra") from None
+    return decode_entra_response(status, payload)
+
+
+def _post_form(http, url: str, fields: dict) -> dict:
+    headers = {"Content-Type": FORM_CONTENT_TYPE, "Accept": JSON_CONTENT_TYPE}
+    body = urllib.parse.urlencode(fields).encode("ascii")
+    return _send_to_entra(http, url, "POST", headers, body, TOKEN_REQUEST_TIMEOUT_SECONDS)
+
+
+def _token_url(config: EntraConfig) -> str:
+    return f"{config.login_url}/{config.tenant}/oauth2/v2.0/token"
+
+
+def _device_code_url(config: EntraConfig) -> str:
+    return f"{config.login_url}/{config.tenant}/oauth2/v2.0/devicecode"
+
+
+def _read_access_token(payload: dict) -> str:
+    token = payload.get(ACCESS_TOKEN_KEY)
+    if not isinstance(token, str) or not token:
+        raise UnexpectedResponseError("a resposta do Entra não traz o token de acesso")
+    return token
+
+
+class AzureCliTokenProvider:
+    def __init__(self, config: EntraConfig, run_command):
+        self._config = config
+        self._run_command = run_command
+
+    def access_token(self) -> str:
+        completed = self._run_azure_cli()
+        if completed.returncode != 0:
+            raise AuthError("o az não tem sessão válida; rode az login")
+        try:
+            token = json.loads(completed.stdout).get("accessToken")
+        except (ValueError, TypeError, AttributeError):
+            token = None
+        if not isinstance(token, str) or not token:
+            raise UnexpectedResponseError("resposta inesperada do az")
+        return token
+
+    def _run_azure_cli(self):
+        try:
+            return self._run_command(
+                self._command(),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=AZURE_CLI_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except FileNotFoundError:
+            raise ConfigError(
+                f"Azure CLI ({AZURE_CLI_EXECUTABLE}) não encontrado; "
+                f"instale-o ou escolha outro {AUTH_METHOD_VARIABLE}"
+            ) from None
+        except subprocess.TimeoutExpired:
+            raise NetworkError("o az demorou demais para responder") from None
+        except OSError:
+            raise ConfigError(f"não foi possível executar o Azure CLI ({AZURE_CLI_EXECUTABLE})") from None
+
+    def _command(self) -> list[str]:
+        command = [
+            AZURE_CLI_EXECUTABLE,
+            "account",
+            "get-access-token",
+            "--resource",
+            AZURE_DEVOPS_RESOURCE_ID,
+            "--output",
+            "json",
+        ]
+        if self._config.tenant != DEFAULT_TENANT:
+            command += ["--tenant", self._config.tenant]
+        return command
+
+
+class ServicePrincipalTokenProvider:
+    def __init__(self, config: EntraConfig, http):
+        self._config = config
+        self._http = http
+
+    def access_token(self) -> str:
+        fields = {
+            "grant_type": "client_credentials",
+            "client_id": self._config.client_id,
+            "client_secret": self._config.client_secret,
+            "scope": AZURE_DEVOPS_SCOPE,
+        }
+        return _read_access_token(_post_form(self._http, _token_url(self._config), fields))
+
+
+class ManagedIdentityTokenProvider:
+    def __init__(self, config: EntraConfig, http):
+        self._config = config
+        self._http = http
+
+    def access_token(self) -> str:
+        headers = {IMDS_METADATA_HEADER: "true", "Accept": JSON_CONTENT_TYPE}
+        try:
+            payload = _send_to_entra(
+                self._http, self._url(), "GET", headers, None, IMDS_TIMEOUT_SECONDS
+            )
+        except NetworkError:
+            raise NetworkError(
+                "IMDS indisponível; managed-identity só funciona numa VM do Azure"
+            ) from None
+        return _read_access_token(payload)
+
+    def _url(self) -> str:
+        parameters = {"api-version": IMDS_API_VERSION, "resource": AZURE_DEVOPS_RESOURCE_ID}
+        if self._config.client_id:
+            parameters["client_id"] = self._config.client_id
+        return self._config.imds_url + IMDS_TOKEN_PATH + "?" + urllib.parse.urlencode(parameters)
+
+
+class CredentialStore:
+    def __init__(self, config: EntraConfig):
+        key = CREDENTIAL_KEY_SEPARATOR.join((config.login_url, config.tenant, config.client_id))
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        self._directory = config.credentials_dir
+        self._path = self._directory / (CREDENTIAL_FILE_PREFIX + digest + STATE_FILE_SUFFIX)
+
+    def load_refresh_token(self) -> str | None:
+        try:
+            document = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        token = document.get(REFRESH_TOKEN_KEY) if isinstance(document, dict) else None
+        return token if isinstance(token, str) and token else None
+
+    def save_refresh_token(self, token: str) -> None:
+        try:
+            self._prepare_directory()
+            self._write_private(json.dumps({REFRESH_TOKEN_KEY: token}))
+        except OSError:
+            raise ConfigError("não foi possível gravar a credencial do login do Entra") from None
+
+    def delete(self) -> None:
+        self._path.unlink(missing_ok=True)
+
+    def _prepare_directory(self) -> None:
+        self._directory.mkdir(mode=CREDENTIAL_DIRECTORY_MODE, parents=True, exist_ok=True)
+        if self._directory.stat().st_mode & CREDENTIAL_DIRECTORY_FORBIDDEN_BITS:
+            raise ConfigError(
+                f"a pasta de {CREDENTIALS_DIRECTORY_VARIABLE} precisa ser privada (chmod 700)"
+            )
+
+    def _write_private(self, content: str) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(dir=self._directory, suffix=TEMPORARY_FILE_SUFFIX)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(temporary_name, self._path)
+        except OSError:
+            Path(temporary_name).unlink(missing_ok=True)
+            raise
+
+
+class DeviceCodeTokenProvider:
+    def __init__(self, config: EntraConfig, http, store: CredentialStore):
+        self._config = config
+        self._http = http
+        self._store = store
+
+    def access_token(self) -> str:
+        refresh_token = self._store.load_refresh_token()
+        if refresh_token is None:
+            raise AuthError(LOGIN_REQUIRED_MESSAGE)
+        payload = self._refresh(refresh_token)
+        self._remember_rotated_token(payload)
+        return _read_access_token(payload)
+
+    def _refresh(self, refresh_token: str) -> dict:
+        fields = {
+            "grant_type": REFRESH_TOKEN_GRANT,
+            "refresh_token": refresh_token,
+            "client_id": self._config.client_id,
+            "scope": f"{AZURE_DEVOPS_SCOPE} {OFFLINE_ACCESS_SCOPE}",
+        }
+        try:
+            return _post_form(self._http, _token_url(self._config), fields)
+        except EntraAuthError as error:
+            if error.code != INVALID_GRANT_ERROR_CODE:
+                raise
+            self._store.delete()
+            raise AuthError(LOGIN_REQUIRED_MESSAGE) from None
+
+    def _remember_rotated_token(self, payload: dict) -> None:
+        rotated = payload.get(REFRESH_TOKEN_KEY)
+        if isinstance(rotated, str) and rotated:
+            try:
+                self._store.save_refresh_token(rotated)
+            except ConfigError:
+                return
+
+
+def run_device_code_login(config: EntraConfig, http, sleep, stderr) -> None:
+    if config.method != AUTH_METHOD_DEVICE_CODE:
+        raise ConfigError(LOGIN_ONLY_FOR_DEVICE_CODE_MESSAGE)
+    grant = _post_form(
+        http,
+        _device_code_url(config),
+        {"client_id": config.client_id, "scope": f"{AZURE_DEVOPS_SCOPE} {OFFLINE_ACCESS_SCOPE}"},
+    )
+    print(_printable(grant.get("message")), file=stderr)
+    payload = _poll_for_authorization(config, http, sleep, grant)
+    refresh_token = payload.get(REFRESH_TOKEN_KEY)
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise UnexpectedResponseError("o Entra não devolveu o refresh token do login")
+    CredentialStore(config).save_refresh_token(refresh_token)
+    print(LOGIN_DONE_MESSAGE, file=stderr)
+
+
+def _printable(value: object) -> str:
+    text = value if isinstance(value, str) else ""
+    return "".join(character for character in text if character.isprintable())
+
+
+def _poll_for_authorization(config: EntraConfig, http, sleep, grant: dict) -> dict:
+    device_code = grant.get("device_code")
+    if not isinstance(device_code, str) or not device_code:
+        raise UnexpectedResponseError("a resposta do Entra não traz o código do dispositivo")
+    interval = _bounded_seconds(grant.get("interval"), DEFAULT_POLL_INTERVAL_SECONDS, MAXIMUM_POLL_INTERVAL_SECONDS)
+    lifetime = _bounded_seconds(
+        grant.get("expires_in"), DEFAULT_DEVICE_CODE_LIFETIME_SECONDS, MAXIMUM_DEVICE_CODE_LIFETIME_SECONDS
+    )
+    fields = {"grant_type": DEVICE_CODE_GRANT, "client_id": config.client_id, "device_code": device_code}
+    waited = 0
+    while True:
+        try:
+            return _post_form(http, _token_url(config), fields)
+        except AuthorizationPendingError as pending:
+            if pending.slow_down:
+                interval = min(interval + SLOW_DOWN_INCREMENT_SECONDS, MAXIMUM_POLL_INTERVAL_SECONDS)
+        waited += interval
+        if waited >= lifetime:
+            raise EntraAuthError(ENTRA_ERROR_MESSAGES["expired_token"], "expired_token")
+        sleep(interval)
+
+
+def _bounded_seconds(value: object, default: int, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return default
+    return min(value, maximum)
+
+
+AUTH_PROVIDER_FACTORIES = {
+    AUTH_METHOD_AZURE_CLI: lambda config, http, run_command: AzureCliTokenProvider(config, run_command),
+    AUTH_METHOD_DEVICE_CODE: lambda config, http, run_command: DeviceCodeTokenProvider(
+        config, http, CredentialStore(config)
+    ),
+    AUTH_METHOD_SERVICE_PRINCIPAL: lambda config, http, run_command: ServicePrincipalTokenProvider(config, http),
+    AUTH_METHOD_MANAGED_IDENTITY: lambda config, http, run_command: ManagedIdentityTokenProvider(config, http),
+}
+
+
+def token_provider_for(config: EntraConfig, http, run_command) -> TokenProvider:
+    return AUTH_PROVIDER_FACTORIES[config.method](config, http, run_command)
+
+
+# --- entra-auth: fim ---
+
+
 def decode_response(status: int, body: bytes, service: str) -> object:
     if status == HTTP_UNAUTHORIZED:
         raise AuthError(_auth_message(service))
@@ -320,13 +775,11 @@ def _rejected_message(service: str, status: int) -> str:
 
 
 class AzureClient:
-    def __init__(self, config: AzureConfig, http):
+    def __init__(self, config: AzureConfig, http, token_provider: TokenProvider):
         self._config = config
         self._http = http
-        self._headers = {
-            "Authorization": _basic_authorization(config.token),
-            "Accept": "application/json",
-        }
+        self._token_provider = token_provider
+        self._headers: dict | None = None
 
     @property
     def config(self) -> AzureConfig:
@@ -337,13 +790,15 @@ class AzureClient:
         if params:
             url += "?" + urllib.parse.urlencode(params, safe="$")
         try:
-            status, body = self._http(url, "GET", self._headers, None, REQUEST_TIMEOUT_SECONDS)
+            status, body = self._http(url, "GET", self._request_headers(), None, REQUEST_TIMEOUT_SECONDS)
         except (OSError, http.client.HTTPException) as error:
             raise NetworkError(
                 f"falha de rede ao falar com {SERVICE_NAME} ({type(error).__name__})"
             ) from None
         if _signals_invalid_credentials(status):
             raise AuthError(_auth_message(SERVICE_NAME))
+        if status == HTTP_UNAUTHORIZED and IDENTITY_NOT_IN_ORGANIZATION_MARKER in body:
+            raise AuthError(IDENTITY_NOT_IN_ORGANIZATION_MESSAGE)
         if path == CONNECTION_DATA_PATH and status == HTTP_NOT_FOUND:
             raise RequestRejectedError(ORGANIZATION_NOT_FOUND_MESSAGE)
         payload = decode_response(status, body, SERVICE_NAME)
@@ -351,10 +806,14 @@ class AzureClient:
             raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
         return payload
 
-
-def _basic_authorization(token: str) -> str:
-    credentials = base64.b64encode(f":{token}".encode("utf-8")).decode("ascii")
-    return f"Basic {credentials}"
+    def _request_headers(self) -> dict:
+        if self._headers is None:
+            token = self._token_provider.access_token()
+            self._headers = {
+                "Authorization": bearer_authorization(token),
+                "Accept": "application/json",
+            }
+        return self._headers
 
 
 def _signals_invalid_credentials(status: int) -> bool:
@@ -756,17 +1215,14 @@ def state_key(config: AzureConfig, environ: Mapping[str, str]) -> str:
             config.base_url,
             config.organization,
             LIST_SEPARATOR.join(config.projects),
-            _token_source(environ),
+            _auth_identity(config.auth),
             config.title,
         )
     )
 
 
-def _token_source(environ: Mapping[str, str]) -> str:
-    variable = environ.get(TOKEN_VARIABLE_KEY, "").strip()
-    if variable:
-        return f"env:{variable}"
-    return f"file:{environ.get(TOKEN_FILE_KEY, '').strip()}"
+def _auth_identity(auth: EntraConfig) -> str:
+    return STATE_KEY_SEPARATOR.join((auth.method, auth.tenant, auth.client_id))
 
 
 def _empty_state() -> dict:
@@ -795,7 +1251,7 @@ def run_snapshot(
     state = store.load()
     try:
         pull_requests = fetch()
-    except (AuthError, RequestRejectedError) as error:
+    except (AuthError, RequestRejectedError, ConfigError) as error:
         return _fail(stderr, error)
     except (RateLimitError, NetworkError, UnexpectedResponseError) as error:
         cached = _cached_snapshot(state)
@@ -839,6 +1295,8 @@ def main(
     arguments: list[str],
     environ=None,
     http=urllib_http,
+    run_command=subprocess.run,
+    sleep=time.sleep,
     now=None,
     stdout=None,
     stderr=None,
@@ -854,7 +1312,7 @@ def main(
     except ConfigError as error:
         return _fail(stderr, error)
     store = StateStore(config.state_dir, state_key(config, environ))
-    client = AzureClient(config, http)
+    client = AzureClient(config, http, token_provider_for(config.auth, http, run_command))
     moment = now if now is not None else datetime.now(timezone.utc)
     return run_snapshot(
         store,
