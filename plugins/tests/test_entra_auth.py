@@ -1,7 +1,11 @@
 import importlib.util
+import io
 import json
+import os
+import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -138,8 +142,6 @@ class EntraAuthTests:
         self.assertNotIn("a b", str(caught.exception))
 
     def test_secret_can_come_from_a_file(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "segredo"
             path.write_text(SECRET + "\n", encoding="utf-8")
@@ -334,11 +336,191 @@ class EntraAuthTests:
                 self.assertIsInstance(provider, provider_class)
 
 
+REFRESH_TOKEN = "REFRESH-SECRETO-456"
+DEVICE_CODE = "DEVICE-CODE-789"
+LOGIN_MESSAGE = "Abra https://microsoft.com/devicelogin e digite o código ABC123"
+
+
+def device_code_grant(**overrides):
+    grant = {
+        "device_code": DEVICE_CODE,
+        "user_code": "ABC123",
+        "message": LOGIN_MESSAGE,
+        "interval": 5,
+        "expires_in": 900,
+    }
+    grant.update(overrides)
+    return grant
+
+
+class DeviceCodeTests:
+    module = None
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.credentials_dir = Path(temporary.name) / "credenciais"
+        self.config = self.module.load_entra_config(
+            {
+                "AZDO_AUTH_METHOD": "device-code",
+                "AZDO_CLIENT_ID": CLIENT_ID,
+                "AZDO_CREDENTIALS_DIR": str(self.credentials_dir),
+            }
+        )
+        self.stderr = io.StringIO()
+        self.sleeps = []
+
+    def login(self, responses):
+        http = FakeHttp(responses)
+        self.module.run_device_code_login(self.config, http, self.sleeps.append, self.stderr)
+        return http
+
+    def store(self):
+        return self.module.CredentialStore(self.config)
+
+    def authorized(self):
+        return (200, {"access_token": ACCESS_TOKEN, "refresh_token": REFRESH_TOKEN})
+
+    def pending(self, code="authorization_pending"):
+        return (400, {"error": code})
+
+    def test_login_prints_only_the_message_to_stderr(self):
+        self.login([(200, device_code_grant()), self.authorized()])
+        self.assertEqual(self.stderr.getvalue(), LOGIN_MESSAGE + "\nlogin concluído\n")
+        for secret in (DEVICE_CODE, REFRESH_TOKEN, ACCESS_TOKEN):
+            self.assertNotIn(secret, self.stderr.getvalue())
+
+    def test_login_requests_device_code_with_offline_access(self):
+        http = self.login([(200, device_code_grant()), self.authorized()])
+        call = http.calls[0]
+        self.assertEqual(call["url"], "https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode")
+        fields = urllib.parse.parse_qs(call["body"].decode("ascii"))
+        self.assertEqual(fields["client_id"], [CLIENT_ID])
+        self.assertEqual(fields["scope"], [f"{AZURE_DEVOPS_RESOURCE}/.default offline_access"])
+
+    def test_login_polls_until_authorized(self):
+        http = self.login(
+            [(200, device_code_grant()), self.pending(), self.pending(), self.authorized()]
+        )
+        self.assertEqual(self.sleeps, [5, 5])
+        poll = urllib.parse.parse_qs(http.calls[1]["body"].decode("ascii"))
+        self.assertEqual(poll["grant_type"], ["urn:ietf:params:oauth:grant-type:device_code"])
+        self.assertEqual(poll["device_code"], [DEVICE_CODE])
+        self.assertEqual(poll["client_id"], [CLIENT_ID])
+
+    def test_login_slow_down_increases_interval(self):
+        self.login(
+            [
+                (200, device_code_grant()),
+                self.pending("slow_down"),
+                self.pending(),
+                self.authorized(),
+            ]
+        )
+        self.assertEqual(self.sleeps, [10, 10])
+
+    def test_login_expired_is_auth_error(self):
+        responses = [(200, device_code_grant(expires_in=10))] + [self.pending()] * 5
+        with self.assertRaises(self.module.AuthError):
+            self.login(responses)
+        self.assertIsNone(self.store().load_refresh_token())
+
+    def test_login_expired_token_error_is_auth_error(self):
+        with self.assertRaises(self.module.AuthError):
+            self.login([(200, device_code_grant()), self.pending("expired_token")])
+
+    def test_login_declined_is_auth_error(self):
+        with self.assertRaises(self.module.AuthError):
+            self.login([(200, device_code_grant()), self.pending("authorization_declined")])
+
+    def test_login_without_refresh_token_is_unexpected(self):
+        with self.assertRaises(self.module.UnexpectedResponseError):
+            self.login([(200, device_code_grant()), (200, {"access_token": ACCESS_TOKEN})])
+
+    def test_login_saves_refresh_token_with_private_mode(self):
+        self.login([(200, device_code_grant()), self.authorized()])
+        self.assertEqual(stat.S_IMODE(self.credentials_dir.stat().st_mode), 0o700)
+        files = list(self.credentials_dir.iterdir())
+        self.assertEqual(len(files), 1)
+        self.assertEqual(stat.S_IMODE(files[0].stat().st_mode), 0o600)
+        self.assertEqual(self.store().load_refresh_token(), REFRESH_TOKEN)
+
+    def test_credentials_directory_must_be_private(self):
+        self.credentials_dir.mkdir(mode=0o755)
+        os.chmod(self.credentials_dir, 0o755)
+        with self.assertRaises(self.module.ConfigError):
+            self.store().save_refresh_token(REFRESH_TOKEN)
+        self.assertEqual(list(self.credentials_dir.iterdir()), [])
+
+    def test_login_with_other_method_is_config_error(self):
+        config = self.module.load_entra_config({})
+        with self.assertRaises(self.module.ConfigError) as caught:
+            self.module.run_device_code_login(config, FakeHttp(), self.sleeps.append, self.stderr)
+        self.assertIn("device-code", str(caught.exception))
+
+    def test_snapshot_without_login_asks_to_login(self):
+        provider = self.module.DeviceCodeTokenProvider(self.config, FakeHttp(), self.store())
+        with self.assertRaises(self.module.AuthError) as caught:
+            provider.access_token()
+        self.assertIn("login", str(caught.exception))
+
+    def test_refresh_returns_access_token_and_rotates_refresh_token(self):
+        self.store().save_refresh_token("antigo")
+        http = FakeHttp([(200, {"access_token": ACCESS_TOKEN, "refresh_token": "novo"})])
+        provider = self.module.DeviceCodeTokenProvider(self.config, http, self.store())
+        self.assertEqual(provider.access_token(), ACCESS_TOKEN)
+        fields = urllib.parse.parse_qs(http.calls[0]["body"].decode("ascii"))
+        self.assertEqual(fields["grant_type"], ["refresh_token"])
+        self.assertEqual(fields["refresh_token"], ["antigo"])
+        self.assertEqual(fields["client_id"], [CLIENT_ID])
+        self.assertEqual(self.store().load_refresh_token(), "novo")
+
+    def test_refresh_without_rotation_keeps_the_stored_token(self):
+        self.store().save_refresh_token("antigo")
+        http = FakeHttp([(200, {"access_token": ACCESS_TOKEN})])
+        self.module.DeviceCodeTokenProvider(self.config, http, self.store()).access_token()
+        self.assertEqual(self.store().load_refresh_token(), "antigo")
+
+    def test_invalid_grant_removes_credential_and_asks_to_login(self):
+        self.store().save_refresh_token("antigo")
+        http = FakeHttp([(400, {"error": "invalid_grant", "error_description": SECRET})])
+        provider = self.module.DeviceCodeTokenProvider(self.config, http, self.store())
+        with self.assertRaises(self.module.AuthError) as caught:
+            provider.access_token()
+        self.assertIn("login", str(caught.exception))
+        self.assertNotIn(SECRET, str(caught.exception))
+        self.assertIsNone(self.store().load_refresh_token())
+
+    def test_other_entra_errors_keep_the_credential(self):
+        self.store().save_refresh_token("antigo")
+        http = FakeHttp([(401, {"error": "invalid_client"})])
+        provider = self.module.DeviceCodeTokenProvider(self.config, http, self.store())
+        with self.assertRaises(self.module.AuthError):
+            provider.access_token()
+        self.assertEqual(self.store().load_refresh_token(), "antigo")
+
+    def test_credential_file_is_keyed_by_login_tenant_and_client(self):
+        other = self.module.load_entra_config(
+            {
+                "AZDO_AUTH_METHOD": "device-code",
+                "AZDO_CLIENT_ID": "outro-cliente",
+                "AZDO_CREDENTIALS_DIR": str(self.credentials_dir),
+            }
+        )
+        self.store().save_refresh_token("antigo")
+        self.assertIsNone(self.module.CredentialStore(other).load_refresh_token())
+
+    def test_token_provider_for_device_code(self):
+        provider = self.module.token_provider_for(self.config, FakeHttp(), FakeRun())
+        self.assertIsInstance(provider, self.module.DeviceCodeTokenProvider)
+
+
 for _name in ENTRA_MODULES:
-    globals()[f"EntraAuthTests_{_name}"] = type(
-        f"EntraAuthTests_{_name}", (EntraAuthTests, unittest.TestCase), {"module": load_module(_name)}
-    )
-del _name
+    _module = load_module(_name)
+    for _mixin in (EntraAuthTests, DeviceCodeTests):
+        _test_name = f"{_mixin.__name__}_{_name}"
+        globals()[_test_name] = type(_test_name, (_mixin, unittest.TestCase), {"module": _module})
+del _name, _module, _mixin, _test_name
 
 
 if __name__ == "__main__":

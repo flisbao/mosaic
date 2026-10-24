@@ -14,6 +14,7 @@ import azure_devops  # noqa: E402
 import pull_request_fixtures as fixtures  # noqa: E402
 
 SECRET = "TOKEN-SECRETO-123"
+REFRESH_TOKEN = "REFRESH-SECRETO-456"
 ORGANIZATION = "org"
 VIEWER_ID = fixtures.AZURE_VIEWER_ID
 REVIEW = azure_devops.REVIEW_SECTION
@@ -449,6 +450,75 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(self.stdout.getvalue(), "")
         self.assertIn("Azure CLI", self.stderr.getvalue())
+
+    def device_code_environment(self):
+        return base_environment(
+            AZDO_STATE_DIR=str(self.state_dir),
+            AZDO_AUTH_METHOD="device-code",
+            AZDO_CLIENT_ID="cliente-1",
+            AZDO_CREDENTIALS_DIR=str(Path(self.temporary.name) / "credenciais"),
+        )
+
+    def test_main_login_saves_credential_and_snapshot_never_leaks_it(self):
+        environment = self.device_code_environment()
+        login_http = FakeHttp([
+            (200, {"device_code": "dc", "message": "abra o link", "interval": 5, "expires_in": 900}),
+            (200, {"access_token": "at", "refresh_token": REFRESH_TOKEN}),
+        ])
+        code = azure_devops.main(
+            ["login"], environ=environment, http=login_http, sleep=lambda seconds: None,
+            stdout=self.stdout, stderr=self.stderr,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stderr.getvalue(), "abra o link\nlogin concluído\n")
+        snapshot_http = FakeHttp([
+            (200, {"access_token": SECRET, "refresh_token": REFRESH_TOKEN + "-novo"}),
+            (200, fixtures.azure_connection_data()),
+            (200, {"value": fixtures.azure_review_page()}),
+            (200, {"value": fixtures.azure_mine_page()}),
+        ])
+        self.stderr = io.StringIO()
+        code = azure_devops.main(
+            ["snapshot"], environ=environment, http=snapshot_http, now=NOW,
+            stdout=self.stdout, stderr=self.stderr,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(snapshot_http.calls[1]["headers"]["Authorization"], "Bearer " + SECRET)
+        for path in self.state_dir.iterdir():
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(REFRESH_TOKEN, text)
+            self.assertNotIn(SECRET, text)
+        self.assertNotIn(REFRESH_TOKEN, self.stdout.getvalue() + self.stderr.getvalue())
+
+    def test_main_snapshot_without_login_exits_one_asking_for_login(self):
+        code = azure_devops.main(
+            ["snapshot"], environ=self.device_code_environment(), http=FakeHttp(), now=NOW,
+            stdout=self.stdout, stderr=self.stderr,
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertIn("azure_devops.py login", self.stderr.getvalue())
+
+    def test_main_login_with_other_method_exits_one(self):
+        code = azure_devops.main(
+            ["login"], environ=base_environment(), http=FakeHttp(),
+            stdout=self.stdout, stderr=self.stderr,
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("device-code", self.stderr.getvalue())
+
+    def test_main_login_does_not_require_an_organization(self):
+        environment = self.device_code_environment()
+        del environment["AZDO_ORGANIZATION"]
+        http = FakeHttp([
+            (200, {"device_code": "dc", "message": "abra", "interval": 5, "expires_in": 900}),
+            (200, {"access_token": "at", "refresh_token": REFRESH_TOKEN}),
+        ])
+        code = azure_devops.main(
+            ["login"], environ=environment, http=http, sleep=lambda seconds: None,
+            stdout=self.stdout, stderr=self.stderr,
+        )
+        self.assertEqual(code, 0)
 
     def test_state_key_uses_identity_not_secret(self):
         environment = base_environment(

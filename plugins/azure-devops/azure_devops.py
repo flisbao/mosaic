@@ -1291,6 +1291,14 @@ def _fail(stderr, error: Exception) -> int:
     return FAILURE_EXIT_CODE
 
 
+def _run_login(environ: Mapping[str, str], http, sleep, stderr) -> int:
+    try:
+        run_device_code_login(load_entra_config(environ), http, sleep, stderr)
+    except (ApiError, ConfigError) as error:
+        return _fail(stderr, error)
+    return 0
+
+
 def main(
     arguments: list[str],
     environ=None,
@@ -1304,9 +1312,12 @@ def main(
     environ = os.environ if environ is None else environ
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
-    if list(arguments) != SNAPSHOT_COMMAND:
+    command = list(arguments)
+    if command not in (SNAPSHOT_COMMAND, LOGIN_COMMAND):
         print(USAGE_MESSAGE, file=stderr)
         return ARGUMENT_ERROR_EXIT_CODE
+    if command == LOGIN_COMMAND:
+        return _run_login(environ, http, sleep, stderr)
     try:
         config = load_config(environ)
     except ConfigError as error:
