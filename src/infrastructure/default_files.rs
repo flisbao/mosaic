@@ -47,6 +47,11 @@ timeout_seconds = 120
 confirm_before_send = true
 priority_prompt = "prompts/prioridade.md"
 
+# --- Plugins de serviço (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, agenda) ---
+# Eles não vêm no binário: instale-os com `mosaic plugins install` (todos) ou
+# `mosaic plugins install jira github` (só alguns). `--force` atualiza os já instalados.
+# Depois descomente o widget que quiser abaixo.
+
 # --- Jira (descomente e ajuste; passo a passo em plugins/jira/README.md no repositório) ---
 # Cada widget define o próprio JQL em args; o Mosaic acrescenta `snapshot`.
 # Guarde o token numa variável de ambiente, por exemplo:
@@ -165,31 +170,10 @@ priority_prompt = "prompts/prioridade.md"
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
 
-const BUNDLED_PLUGINS: [(&str, &str); 11] = [
+const BUNDLED_PLUGINS: [(&str, &str); 5] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
     ("example.py", include_str!("../../plugins/example.py")),
     ("example.js", include_str!("../../plugins/example.js")),
-    ("jira/jira.py", include_str!("../../plugins/jira/jira.py")),
-    (
-        "calendar/calendar_widget.py",
-        include_str!("../../plugins/calendar/calendar_widget.py"),
-    ),
-    (
-        "github/github_prs.py",
-        include_str!("../../plugins/github/github_prs.py"),
-    ),
-    (
-        "azure-devops/azure_devops.py",
-        include_str!("../../plugins/azure-devops/azure_devops.py"),
-    ),
-    (
-        "azure-pipelines/azure_pipelines.py",
-        include_str!("../../plugins/azure-pipelines/azure_pipelines.py"),
-    ),
-    (
-        "gitlab/gitlab_mrs.py",
-        include_str!("../../plugins/gitlab/gitlab_mrs.py"),
-    ),
     ("gallery.py", include_str!("../../plugins/gallery.py")),
     ("gallery.js", include_str!("../../plugins/gallery.js")),
 ];
@@ -261,6 +245,15 @@ fn write_private_file(path: &Path, content: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SERVICE_PLUGIN_FOLDERS: [&str; 6] = [
+        "jira",
+        "github",
+        "gitlab",
+        "azure-devops",
+        "azure-pipelines",
+        "calendar",
+    ];
     use crate::infrastructure::config::{config_file_path, parse_config};
 
     #[test]
@@ -328,12 +321,30 @@ mod tests {
     }
 
     #[test]
-    fn install_creates_the_jira_plugin() {
+    fn install_creates_only_the_core_plugins() {
         let directory = tempfile::tempdir().unwrap();
         install_defaults_if_missing(directory.path()).unwrap();
-        let installed =
-            std::fs::read_to_string(directory.path().join("plugins/jira/jira.py")).unwrap();
-        assert!(installed.contains("def main("));
+        let plugins = directory.path().join("plugins");
+        for file in [
+            "kanban.py",
+            "example.py",
+            "example.js",
+            "gallery.py",
+            "gallery.js",
+        ] {
+            assert!(plugins.join(file).is_file(), "{file}");
+        }
+        for folder in SERVICE_PLUGIN_FOLDERS {
+            assert!(!plugins.join(folder).exists(), "{folder}");
+        }
+    }
+
+    #[test]
+    fn default_config_tells_how_to_install_the_service_plugins() {
+        let text = default_config_text();
+        assert!(text.contains("mosaic plugins install"));
+        let first_service_block = text.find("# --- Jira").unwrap();
+        assert!(text.find("mosaic plugins install").unwrap() < first_service_block);
     }
 
     #[test]
@@ -378,33 +389,10 @@ mod tests {
     }
 
     #[test]
-    fn install_creates_calendar_plugin_in_its_own_folder() {
-        let directory = tempfile::tempdir().unwrap();
-        assert!(install_defaults_if_missing(directory.path()).unwrap());
-        let plugin = directory.path().join("plugins/calendar/calendar_widget.py");
-        let installed = std::fs::read_to_string(plugin).unwrap();
-        assert!(installed.contains("def main("));
-    }
-
-    #[test]
     fn default_config_has_commented_calendar_widget() {
         let text = default_config_text();
         assert!(text.contains("# args = [\"plugins/calendar/calendar_widget.py\"]"));
         assert!(text.contains("# CALENDAR_SOURCE = \"ics\""));
-    }
-
-    #[test]
-    fn install_creates_pull_request_plugins_in_their_own_folders() {
-        let directory = tempfile::tempdir().unwrap();
-        assert!(install_defaults_if_missing(directory.path()).unwrap());
-        for relative in [
-            "plugins/github/github_prs.py",
-            "plugins/azure-devops/azure_devops.py",
-            "plugins/gitlab/gitlab_mrs.py",
-        ] {
-            let installed = std::fs::read_to_string(directory.path().join(relative)).unwrap();
-            assert!(installed.contains("def main("), "{relative}");
-        }
     }
 
     #[test]
@@ -416,17 +404,6 @@ mod tests {
         assert!(text.contains("# AZDO_ORGANIZATION = \"minha-org\""));
         assert!(text.contains("# AZDO_AUTH_METHOD = \"azure-cli\""));
         assert!(!text.contains("AZDO_TOKEN"));
-    }
-
-    #[test]
-    fn install_creates_the_azure_pipelines_plugin_in_its_own_folder() {
-        let directory = tempfile::tempdir().unwrap();
-        assert!(install_defaults_if_missing(directory.path()).unwrap());
-        let plugin = directory
-            .path()
-            .join("plugins/azure-pipelines/azure_pipelines.py");
-        let installed = std::fs::read_to_string(plugin).unwrap();
-        assert!(installed.contains("def main("));
     }
 
     #[test]
