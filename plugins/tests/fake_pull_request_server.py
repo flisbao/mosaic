@@ -2,11 +2,10 @@
 """Servidor falso das APIs de pull requests para testes de integração do mosaic.
 
 Imprime a porta na primeira linha do stdout e atende até ser encerrado.
-Variável: FAKE_PR_TOKEN define o token aceito (Bearer no GitHub e GitLab,
-Basic com usuário vazio no Azure DevOps).
+Variável: FAKE_PR_TOKEN define o token aceito (Bearer no GitHub, GitLab e
+Azure DevOps).
 """
 
-import base64
 import json
 import os
 import sys
@@ -71,9 +70,7 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self):
         token = os.environ["FAKE_PR_TOKEN"]
         header = self.headers.get("Authorization", "")
-        bearer = f"Bearer {token}"
-        basic = "Basic " + base64.b64encode(f":{token}".encode()).decode()
-        return header in (bearer, basic)
+        return header == f"Bearer {token}"
 
     def _send(self, status, payload):
         body = json.dumps(payload).encode("utf-8")

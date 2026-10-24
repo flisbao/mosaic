@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -533,6 +535,90 @@ class MainTests(unittest.TestCase):
         self.assertNotIn(SECRET, key)
         for part in ("service-principal", "tenant-1", "client-1"):
             self.assertIn(part, key)
+
+
+FAKE_TOKEN = "TOKEN-DO-SERVIDOR-FALSO"
+FAKE_CLIENT_SECRET = "SEGREDO-DO-SERVIDOR-FALSO"
+TESTS_DIRECTORY = Path(__file__).resolve().parent
+
+
+class FakeServersTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        server_environment = dict(os.environ, FAKE_PR_TOKEN=FAKE_TOKEN, FAKE_ENTRA_SECRET=FAKE_CLIENT_SECRET)
+        self.azure_port = self.start_server("fake_pull_request_server.py", server_environment)
+        self.entra_port = self.start_server("fake_entra_server.py", server_environment)
+        self.state_dir = Path(self.temporary.name) / "estado"
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def start_server(self, script, environment):
+        process = subprocess.Popen(
+            [sys.executable, str(TESTS_DIRECTORY / script)],
+            env=environment,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.terminate)
+        self.addCleanup(process.stdout.close)
+        return int(process.stdout.readline())
+
+    def environment(self, **overrides):
+        return base_environment(
+            AZDO_BASE_URL=f"http://127.0.0.1:{self.azure_port}",
+            AZDO_LOGIN_URL=f"http://127.0.0.1:{self.entra_port}",
+            AZDO_IMDS_URL=f"http://127.0.0.1:{self.entra_port}",
+            AZDO_STATE_DIR=str(self.state_dir),
+            AZDO_CREDENTIALS_DIR=str(Path(self.temporary.name) / "credenciais"),
+            **overrides,
+        )
+
+    def snapshot(self, environment):
+        return azure_devops.main(
+            ["snapshot"], environ=environment, now=NOW, stdout=self.stdout, stderr=self.stderr
+        )
+
+    def service_principal_environment(self, secret=FAKE_CLIENT_SECRET):
+        return self.environment(
+            AZDO_AUTH_METHOD="service-principal",
+            AZDO_TENANT_ID="tenant-1",
+            AZDO_CLIENT_ID="client-1",
+            AZDO_CLIENT_SECRET_ENV="SP_SECRET",
+            SP_SECRET=secret,
+        )
+
+    def assert_snapshot_lists_pull_requests(self):
+        snapshot = json.loads(self.stdout.getvalue())
+        review_ids = {item["id"] for item in snapshot["detail"][0]["items"]}
+        self.assertIn("Proj/api#10", review_ids)
+
+    def test_end_to_end_with_service_principal(self):
+        self.assertEqual(self.snapshot(self.service_principal_environment()), 0, self.stderr.getvalue())
+        self.assert_snapshot_lists_pull_requests()
+
+    def test_end_to_end_with_managed_identity(self):
+        environment = self.environment(AZDO_AUTH_METHOD="managed-identity")
+        self.assertEqual(self.snapshot(environment), 0, self.stderr.getvalue())
+        self.assert_snapshot_lists_pull_requests()
+
+    def test_end_to_end_with_device_code_login_then_snapshot(self):
+        environment = self.environment(AZDO_AUTH_METHOD="device-code", AZDO_CLIENT_ID="client-1")
+        code = azure_devops.main(
+            ["login"], environ=environment, sleep=lambda seconds: None,
+            stdout=self.stdout, stderr=self.stderr,
+        )
+        self.assertEqual(code, 0, self.stderr.getvalue())
+        self.assertEqual(self.snapshot(environment), 0, self.stderr.getvalue())
+        self.assert_snapshot_lists_pull_requests()
+
+    def test_wrong_client_secret_fails_without_leaking_it(self):
+        code = self.snapshot(self.service_principal_environment(secret="segredo-errado"))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+        self.assertNotIn("segredo-errado", self.stderr.getvalue())
 
 
 if __name__ == "__main__":
