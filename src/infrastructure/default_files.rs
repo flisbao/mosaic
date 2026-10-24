@@ -100,7 +100,7 @@ priority_prompt = "prompts/prioridade.md"
 # e use inherit_env = ["DBUS_SESSION_BUS_ADDRESS"].
 # gcalcli: CALENDAR_SOURCE = "gcalcli" (rode `gcalcli init` antes).
 
-# --- Pull requests (descomente o seu; passo a passo em plugins/<github|azure-devops|gitlab>/README.md no repositório) ---
+# --- Pull requests (descomente o seu; passo a passo em plugins/<github|azure-devops|azure-pipelines|gitlab>/README.md no repositório) ---
 #   export GITHUB_TOKEN_PRS="..."   export GITLAB_TOKEN_MRS="..."   (Azure DevOps usa az login: sem token)
 # [[widgets]]
 # id = "github-prs"
@@ -123,6 +123,19 @@ priority_prompt = "prompts/prioridade.md"
 #
 # [widgets.env]
 # AZDO_ORGANIZATION = "minha-org"
+# AZDO_AUTH_METHOD = "azure-cli"
+#
+# [[widgets]]
+# id = "azure-pipelines"
+# command = "python3"
+# args = ["plugins/azure-pipelines/azure_pipelines.py"]
+# interval_seconds = 900
+# timeout_seconds = 60
+# inherit_env = []
+#
+# [widgets.env]
+# AZDO_ORGANIZATION = "minha-org"
+# AZDO_PROJECTS = "meu-projeto"
 # AZDO_AUTH_METHOD = "azure-cli"
 #
 # [[widgets]]
@@ -152,7 +165,7 @@ priority_prompt = "prompts/prioridade.md"
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
 
-const BUNDLED_PLUGINS: [(&str, &str); 10] = [
+const BUNDLED_PLUGINS: [(&str, &str); 11] = [
     ("kanban.py", include_str!("../../plugins/kanban.py")),
     ("example.py", include_str!("../../plugins/example.py")),
     ("example.js", include_str!("../../plugins/example.js")),
@@ -168,6 +181,10 @@ const BUNDLED_PLUGINS: [(&str, &str); 10] = [
     (
         "azure-devops/azure_devops.py",
         include_str!("../../plugins/azure-devops/azure_devops.py"),
+    ),
+    (
+        "azure-pipelines/azure_pipelines.py",
+        include_str!("../../plugins/azure-pipelines/azure_pipelines.py"),
     ),
     (
         "gitlab/gitlab_mrs.py",
@@ -399,6 +416,29 @@ mod tests {
         assert!(text.contains("# AZDO_ORGANIZATION = \"minha-org\""));
         assert!(text.contains("# AZDO_AUTH_METHOD = \"azure-cli\""));
         assert!(!text.contains("AZDO_TOKEN"));
+    }
+
+    #[test]
+    fn install_creates_the_azure_pipelines_plugin_in_its_own_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(install_defaults_if_missing(directory.path()).unwrap());
+        let plugin = directory
+            .path()
+            .join("plugins/azure-pipelines/azure_pipelines.py");
+        let installed = std::fs::read_to_string(plugin).unwrap();
+        assert!(installed.contains("def main("));
+    }
+
+    #[test]
+    fn default_config_has_commented_azure_pipelines_widget() {
+        let text = default_config_text();
+        assert!(text.contains("# args = [\"plugins/azure-pipelines/azure_pipelines.py\"]"));
+        assert!(text.contains("# AZDO_PROJECTS = \"meu-projeto\""));
+        let config = parse_config(text).unwrap();
+        assert!(config
+            .widgets
+            .iter()
+            .all(|widget| widget.id.as_str() != "azure-pipelines"));
     }
 
     #[test]

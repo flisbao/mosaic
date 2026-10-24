@@ -1,6 +1,8 @@
 import io
 import json
+import os
 import re
+import subprocess
 import sys
 import tempfile
 import types
@@ -541,7 +543,7 @@ def collected_snapshot(**environment):
 
 
 class SnapshotTests(unittest.TestCase):
-    def test_snapshot_home_lists_top_pipelines_with_duration_and_bottleneck(self):
+    def test_snapshot_home_lists_top_pipelines_with_duration_and_failures(self):
         snapshot = collected_snapshot()
         self.assertEqual(snapshot["protocol"], 1)
         self.assertEqual(snapshot["summary"]["title"], "Pipelines lentas")
@@ -552,19 +554,21 @@ class SnapshotTests(unittest.TestCase):
         )
         first, second, third = rows["rows"]
         self.assertEqual((first["text"], first["time"], first["tone"]), ("Alpha/Build API", "20m00s", "danger"))
-        self.assertEqual([tag["text"] for tag in first["tags"]], ["3 execuções", "Compile › dotnet build", "33% falhas"])
-        self.assertEqual([tag["text"] for tag in second["tags"]], ["2 execuções", "Release › Publish"])
+        self.assertEqual([tag["text"] for tag in first["tags"]], ["3 execuções", "33% falhas"])
+        self.assertEqual([tag["text"] for tag in second["tags"]], ["2 execuções"])
         self.assertEqual((second["tone"], third["tone"]), ("normal", "normal"))
         self.assertEqual(third["text"], "Beta/Lint")
+        self.assertEqual([tag["text"] for tag in third["tags"]], ["1 execução"])
 
-    def test_bottleneck_ignores_the_queue_wait(self):
-        overview = pipelines.Overview(1, 3, (pipelines.aggregate_steps(
+    def test_bottleneck_in_the_detail_ignores_the_queue_wait(self):
+        pipeline = pipelines.aggregate_steps(
             statistic(average_queue_seconds=5000.0, maximum_queue_seconds=6000.0),
             {1: [step("Job › build", 100)]},
-        ),))
-        row = snapshot_for(overview)["summary"]["blocks"][1]["rows"][0]
-        self.assertIn("Job › build", [tag["text"] for tag in row["tags"]])
-        self.assertNotIn(pipelines.QUEUE_STEP_NAME, [tag["text"] for tag in row["tags"]])
+        )
+        detail = snapshot_for(pipelines.Overview(1, 3, (pipeline,)))["detail"][0]
+        self.assertEqual(detail["items"][0]["meta"]["gargalo"], "Job › build")
+        flagged = [row for row in detail["blocks"][1]["rows"] if isinstance(row[0], dict)]
+        self.assertEqual([row[0]["text"] for row in flagged], ["Job › build"])
 
     def test_snapshot_detail_has_one_section_per_pipeline_with_steps_table(self):
         detail = collected_snapshot()["detail"]
@@ -651,10 +655,10 @@ class SnapshotTests(unittest.TestCase):
         self.assertTrue(row["text"].endswith("…"))
         self.assertLessEqual(len(snapshot["detail"][0]["heading"]), 80)
 
-    def test_long_step_names_are_cut_in_the_tag(self):
-        item = pipelines.aggregate_steps(statistic(average_queue_seconds=0.0), {1: [step("J › " + "x" * 200, 50)]})
-        row = snapshot_for(pipelines.Overview(1, 1, (item,)))["summary"]["blocks"][1]["rows"][0]
-        self.assertTrue(all(len(tag["text"]) <= 30 for tag in row["tags"]))
+    def test_long_step_names_are_cut_in_the_table(self):
+        item = pipelines.aggregate_steps(statistic(average_queue_seconds=0.0), {1: [step("J › " + "x" * 600, 50)]})
+        table = snapshot_for(pipelines.Overview(1, 1, (item,)))["detail"][0]["blocks"][1]
+        self.assertLessEqual(len(table["rows"][0][0]["text"]), 80)
 
     def test_snapshot_respects_protocol_row_limit(self):
         items = tuple(statistic(pipeline_id=number, pipeline_name=f"P{number}") for number in range(20))
@@ -788,6 +792,59 @@ class MainTests(unittest.TestCase):
         code = pipelines.main(["login"], environ=base_environment(), stdout=self.stdout, stderr=self.stderr)
         self.assertEqual(code, 1)
         self.assertIn("device-code", self.stderr.getvalue())
+
+
+FAKE_TOKEN = "TOKEN-DO-SERVIDOR-FALSO"
+FAKE_CLIENT_SECRET = "SEGREDO-DO-SERVIDOR-FALSO"
+TESTS_DIRECTORY = Path(__file__).resolve().parent
+
+
+class FakeServersTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        server_environment = dict(os.environ, FAKE_PR_TOKEN=FAKE_TOKEN, FAKE_ENTRA_SECRET=FAKE_CLIENT_SECRET)
+        self.azure_port = self.start_server("fake_pipeline_server.py", server_environment)
+        self.entra_port = self.start_server("fake_entra_server.py", server_environment)
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def start_server(self, script, environment):
+        process = subprocess.Popen(
+            [sys.executable, str(TESTS_DIRECTORY / script)], env=environment, stdout=subprocess.PIPE, text=True
+        )
+        self.addCleanup(process.wait)
+        self.addCleanup(process.terminate)
+        self.addCleanup(process.stdout.close)
+        return int(process.stdout.readline())
+
+    def snapshot(self, secret=FAKE_CLIENT_SECRET):
+        environment = base_environment(
+            AZDO_BASE_URL=f"http://127.0.0.1:{self.azure_port}",
+            AZDO_LOGIN_URL=f"http://127.0.0.1:{self.entra_port}",
+            AZDO_STATE_DIR=str(Path(self.temporary.name) / "estado"),
+            AZDO_AUTH_METHOD="service-principal",
+            AZDO_TENANT_ID="tenant-1",
+            AZDO_CLIENT_ID="client-1",
+            AZDO_CLIENT_SECRET_ENV="SP_SECRET",
+            SP_SECRET=secret,
+        )
+        return pipelines.main(["snapshot"], environ=environment, now=NOW, stdout=self.stdout, stderr=self.stderr)
+
+    def test_end_to_end_with_service_principal(self):
+        self.assertEqual(self.snapshot(), 0, self.stderr.getvalue())
+        snapshot = json.loads(self.stdout.getvalue())
+        self.assertEqual(
+            [section["heading"] for section in snapshot["detail"]],
+            ["Alpha/Build API", "Alpha/Deploy", "Beta/Lint"],
+        )
+        steps = snapshot["detail"][0]["blocks"][1]["rows"]
+        self.assertEqual(steps[0][0]["text"], "Compile › dotnet build")
+
+    def test_wrong_client_secret_fails_without_leaking_it(self):
+        self.assertEqual(self.snapshot(secret="segredo-errado"), 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertNotIn("segredo-errado", self.stderr.getvalue())
 
 
 if __name__ == "__main__":

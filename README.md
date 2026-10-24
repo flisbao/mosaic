@@ -93,9 +93,12 @@ Press `?` at any time: the help is always one key away, and the bottom line show
 | **GitHub** | PRs waiting for your review and your own PRs, tagged `novo`, `push novo`, `aprovado`, `conflito`… | [`plugins/github`](plugins/github/README.md) |
 | **GitLab** | Same idea for merge requests | [`plugins/gitlab`](plugins/gitlab/README.md) |
 | **Azure DevOps** | Same idea for Azure PRs | [`plugins/azure-devops`](plugins/azure-devops/README.md) |
+| **Azure Pipelines** | Your slowest build pipelines (average duration) and, on Enter, the steps that take the longest in each | [`plugins/azure-pipelines`](plugins/azure-pipelines/README.md) |
 | **Calendar** | Your week, from Google Calendar via secret ICS link, GNOME Online Accounts or `gcalcli` | [`plugins/calendar`](plugins/calendar/README.md) |
 | **Kanban** | A folder of Markdown files per column, with a "move task" action | `plugins/kanban.py` |
 | **Gallery** | Every block type, for the curious (and for copy-pasting) | `plugins/gallery.py` |
+
+The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 
 The pull request widgets remember what you have already reviewed, so a fresh push to a PR you reviewed lights up as `push novo`. If the network drops, they show the last good data with an `(offline)` note instead of an empty box.
 

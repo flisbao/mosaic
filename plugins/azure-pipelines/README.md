@@ -7,7 +7,7 @@
 Na Home, o widget lista as pipelines com maior **duração média** (de `startTime` a `finishTime`) entre as execuções **concluídas** nos últimos `AZDO_PIPELINE_DAYS` dias, da mais lenta para a mais rápida. Execuções canceladas ficam de fora.
 
 - Um quadro com o número de pipelines, o de execuções e a janela.
-- Uma linha por pipeline do ranking (`projeto/pipeline`), com a duração média à direita e etiquetas: número de execuções, o passo mais lento e a taxa de falhas (quando existe).
+- Uma linha por pipeline do ranking (`projeto/pipeline`), com a duração média à direita e etiquetas: número de execuções e taxa de falhas (quando existe). O passo mais lento fica no detalhe (Enter).
 - A pipeline mais lenta fica em vermelho e vai para a coluna do modo foco (`mini`).
 
 No **detalhe** (Enter), há uma seção por pipeline do ranking, com a média, o máximo, a fila média e a taxa de falhas, e uma tabela dos passos que mais demoram:

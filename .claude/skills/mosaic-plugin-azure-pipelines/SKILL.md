@@ -49,7 +49,7 @@ mosaic check --cwd ~/.config/mosaic \
   python3 plugins/azure-pipelines/azure_pipelines.py
 ```
 
-A prévia mostra o título "Pipelines lentas", as pipelines mais lentas com a duração média à direita e, nas etiquetas, o número de execuções, o passo mais lento e a taxa de falhas, mais a linha `mini: <duração> pipeline mais lenta`. Os passos por pipeline só aparecem no detalhe do widget (Enter); o `check` mostra só a Home. Sem conta: `FAKE_PR_TOKEN=token-falso FAKE_ENTRA_SECRET=segredo-falso python3 plugins/tests/fake_pipeline_server.py` e `python3 plugins/tests/fake_entra_server.py` (a porta vem na primeira linha de cada um), depois `AZDO_BASE_URL`/`AZDO_LOGIN_URL` com `service-principal` (roteiro completo no README). `check` não aplica `inherit_env`.
+A prévia mostra o título "Pipelines lentas", as pipelines mais lentas com a duração média à direita e, nas etiquetas, o número de execuções e a taxa de falhas, mais a linha `mini: <duração> pipeline mais lenta`. Os passos por pipeline só aparecem no detalhe do widget (Enter); o `check` mostra só a Home. Sem conta: `FAKE_PR_TOKEN=token-falso FAKE_ENTRA_SECRET=segredo-falso python3 plugins/tests/fake_pipeline_server.py` e `python3 plugins/tests/fake_entra_server.py` (a porta vem na primeira linha de cada um), depois `AZDO_BASE_URL`/`AZDO_LOGIN_URL` com `service-principal` (roteiro completo no README). `check` não aplica `inherit_env`.
 
 ## Mexendo no código
 
@@ -60,7 +60,7 @@ A prévia mostra o título "Pipelines lentas", as pipelines mais lentas com a du
 - Cache de timelines em `AZDO_STATE_DIR` (chave `timelines`): um build concluído não muda, então a timeline dele nunca é pedida de novo. No máximo `MAXIMUM_TIMELINE_REQUESTS_PER_RUN` (30) timelines novas por leitura, o cache guarda no máximo `MAXIMUM_CACHED_TIMELINES` (300) builds (os de maior id) e a pipeline com amostra incompleta mostra `(parcial)` na dica. Na primeira leitura a amostra é parcial até o cache esquentar.
 - Erro de uma timeline (404, resposta inesperada) pula só aquele build; autenticação, rede e limite de requisições interrompem a leitura (rede e limite servem o cache com `dados de HH:MM (offline)`; autenticação e requisição recusada nunca).
 - Arquivo de estado = hash de URL base, organização, projetos, janela, ranking, amostra, método, tenant, client id e `AZDO_TITLE`; nenhum segredo entra.
-- Limites do protocolo: título das linhas e do cabeçalho em 80 caracteres, etiqueta de passo em 30, `mini.value` em 8 (acima disso mostra `999h+`).
+- Limites do protocolo: título das linhas, do cabeçalho e dos passos em 80 caracteres, `mini.value` em 8 (acima disso mostra `999h+`). A Home leva só o ranking (número de execuções e taxa de falhas) para o nome da pipeline caber; o passo mais lento fica no detalhe.
 
 ## Armadilhas
 

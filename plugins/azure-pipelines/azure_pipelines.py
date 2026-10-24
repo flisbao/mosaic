@@ -114,7 +114,6 @@ SECONDS_PER_MINUTE = 60
 SECONDS_PER_HOUR = 3600
 PERCENT = 100
 ROW_TITLE_LIMIT = 80
-TAG_TEXT_LIMIT = 30
 MAXIMUM_BLOCK_ROWS = 200
 MINI_VALUE_LIMIT = 8
 MINI_OVERFLOW_TEXT = "999h+"
@@ -1340,9 +1339,6 @@ def _row(pipeline: PipelineStatistic, is_slowest: bool) -> dict:
 
 def _row_tags(pipeline: PipelineStatistic) -> list[dict]:
     tags = [{"text": _run_count_text(pipeline.run_count), "tone": TONE_MUTED}]
-    bottleneck = _bottleneck(pipeline)
-    if bottleneck is not None:
-        tags.append({"text": flatten_text(bottleneck.name, TAG_TEXT_LIMIT), "tone": TONE_WARN})
     if pipeline.failure_rate > 0:
         percent = max(1, round(pipeline.failure_rate * PERCENT))
         tags.append({"text": f"{percent}% falhas", "tone": TONE_DANGER})
