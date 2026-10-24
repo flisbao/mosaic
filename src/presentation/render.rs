@@ -1887,7 +1887,7 @@ mod tests {
     #[test]
     fn notice_row_keeps_the_theme_background() {
         let mut state = themed_state("dracula");
-        state.show_notice("Cartão movido".to_string());
+        state.show_notice("Widget movido".to_string());
         let expected = palette_color("dracula", |palette| palette.background);
         let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
         let last_row = THEME_HEIGHT - 1;

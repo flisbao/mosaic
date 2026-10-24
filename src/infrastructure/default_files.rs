@@ -52,7 +52,7 @@ priority_prompt = "prompts/prioridade.md"
 # pintam o fundo da tela inteira e pedem um terminal com truecolor ou 256 cores.
 # [theme]
 # name = "tokyo-night"
-# # paint_background = false   # usa as cores do tema sem pintar o fundo
+# # paint_background = false   # não pinta o fundo (o texto normal usa a cor do terminal; os demais papéis seguem o tema)
 # # [theme.colors]             # sobrescreve papéis: foreground, background, muted, ok, warn, danger, accent, on_accent
 # # accent = "#ff9e64"
 
