@@ -15,6 +15,7 @@ ALLOWED_PLUGIN_FILE_NAMES = ("README.md",)
 SKIPPED_PLUGIN_FOLDERS = ("tests", "__pycache__")
 PACKAGED_PLUGINS = "usr/share/mosaic/plugins"
 PACKAGED_SKILLS = "usr/share/mosaic/skills"
+WORKFLOWS = REPOSITORY_ROOT / ".github" / "workflows"
 
 
 def stage(package, destination, repository=None):
@@ -136,6 +137,19 @@ class PackagingTests(unittest.TestCase):
         (repository / "plugins" / "alpha" / "tests" / "test_a.py").write_text("x", encoding="utf-8")
         stage("plugins", self.destination, repository)
         self.assertEqual(listing(self.destination / PACKAGED_PLUGINS / "alpha"), ["README.md", "alpha.py"])
+
+    def test_plugins_release_workflow_is_triggered_only_by_plugins_tags(self):
+        text = (WORKFLOWS / "release-plugins.yml").read_text(encoding="utf-8")
+        self.assertIn('- "plugins-v*"', text)
+        self.assertNotIn('- "v*"', text)
+        self.assertIn('"plugins-v${version}"', text)
+        for step in ("stage-package.sh plugins", "build-plugins-deb.sh", "mosaic plugins install", "unittest discover"):
+            self.assertIn(step, text)
+
+    def test_core_release_workflow_is_not_triggered_by_plugins_tags(self):
+        text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertIn('- "v*"', text)
+        self.assertNotIn("plugins-v", text)
 
     def fake_repository(self):
         repository = Path(self.temporary.name) / "repo"
