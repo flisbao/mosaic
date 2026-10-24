@@ -1,5 +1,7 @@
 # GitHub
 
+> Instalação: `mosaic plugins install github` (o plugin não vem no binário; veja o README da raiz).
+
 `plugins/github/github_prs.py` é um provider do Mosaic que mostra os pull requests que esperam por você no GitHub: os que pediram sua revisão e os que você abriu. Ele só lê (GraphQL, sem mutation) e só fala com `https://api.github.com`. O token nunca vai em argumento: `GITHUB_TOKEN_ENV` guarda o **nome** da variável que contém o token (ou use `GITHUB_TOKEN_FILE`).
 
 ## O que mostra

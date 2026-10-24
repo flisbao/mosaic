@@ -1,5 +1,7 @@
 # Widget de agenda (Google Agenda)
 
+> Instalação: `mosaic plugins install calendar` (o plugin não vem no binário; veja o README da raiz).
+
 Plugin do mosaic que mostra a sua agenda da semana: de **agora** até a **próxima segunda-feira às 00:00** (no fuso local, então domingo à noite ainda mostra os eventos de domingo). Os eventos que já terminaram somem sozinhos a cada atualização.
 
 Há três fontes de dados, escolhidas com `CALENDAR_SOURCE`:

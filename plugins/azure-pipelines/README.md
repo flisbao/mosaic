@@ -1,5 +1,7 @@
 # Azure Pipelines (pipelines lentas)
 
+> Instalação: `mosaic plugins install azure-pipelines` (o plugin não vem no binário; veja o README da raiz).
+
 `plugins/azure-pipelines/azure_pipelines.py` é um provider do Mosaic que mostra as pipelines de build mais lentas do Azure DevOps e, ao abrir o detalhe do widget (Enter), os passos que mais demoram em cada uma. Ele só faz `GET` na API REST (`api-version` 7.1) e só fala com `https://dev.azure.com` e, para autenticar, com o Microsoft Entra ID. Nenhum segredo vai em argumento.
 
 ## O que mostra

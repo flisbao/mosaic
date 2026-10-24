@@ -9,13 +9,13 @@ description: Use quando for criar, alterar ou revisar um widget ou plugin do Mos
 
 Um widget é um comando completo (script + argumentos) que o Mosaic executa em intervalos, lê um JSON da saída padrão e desenha. Um plugin é uma pasta em `plugins/` com o código, o README, os testes e a skill desse widget. O contrato está em `PROTOCOL.md` e em `schema/protocol.schema.json`: leia o `PROTOCOL.md` antes de escrever o código e não copie o contrato para outros arquivos.
 
-> Instalada pelo pacote (`mosaic skills install`), esta skill serve a quem cria um widget próprio em `~/.config/mosaic/`. Os passos de registro (`default_files.rs`), `CONTRIBUTING.md` e o teste de skills só existem no repositório.
+> Instalada pelo pacote (`mosaic skills install`), esta skill serve a quem cria um widget próprio em `~/.config/mosaic/`. Os passos de empacotamento (`scripts/stage-package.sh`), `CONTRIBUTING.md` e o teste de skills só existem no repositório.
 
 ## Pré-requisito de contribuição
 
 **Plugin novo só é aceito com a sua skill** `.claude/skills/mosaic-plugin-<pasta>/SKILL.md`, escrita a partir de [plugin-skill-template.md](plugin-skill-template.md). `python3 -m unittest discover -s plugins/tests` falha se uma pasta de plugin não tiver skill, se a skill estiver mal formada ou se citar uma variável que o código do plugin não conhece.
 
-Skills existentes: `mosaic-plugin-jira`, `-github`, `-gitlab`, `-azure-devops`, `-calendar`. Ao mexer em um deles, use a skill dele junto com esta.
+Skills existentes: `mosaic-plugin-jira`, `-github`, `-gitlab`, `-azure-devops`, `-azure-pipelines`, `-calendar`. Ao mexer em um deles, use a skill dele junto com esta.
 
 ## Requisitos do Mosaic (não negociáveis)
 
@@ -55,7 +55,7 @@ Forma do código (copie de `plugins/github/github_prs.py`):
 2. **REQUIRED SUB-SKILL:** `superpowers:test-driven-development`. Teste primeiro (`plugins/tests/test_<nome>.py`), veja falhar, implemente.
 3. `python3 -m unittest discover -s plugins/tests` (suíte inteira, não só o arquivo novo).
 4. `mosaic check --cwd ~/.config/mosaic ... python3 plugins/<pasta>/<nome>.py` (ou `--config` para validar o `mosaic.toml`). Atenção: `check` passa o ambiente inteiro do shell e **não aplica `inherit_env`**; confira `inherit_env` à mão.
-5. Registrar para a instalação padrão em `src/infrastructure/default_files.rs`: entrada em `BUNDLED_PLUGINS` (e o número no tipo do array `[(&str, &str); N]`) e bloco **comentado** no `DEFAULT_CONFIG`. Mencionar o plugin no `README.md` da raiz.
+5. Empacotar: o plugin entra sozinho no pacote **mosaic-plugins** (`scripts/stage-package.sh plugins`) quando existem `plugins/<pasta>/` e a skill `mosaic-plugin-<pasta>`; o usuário o instala com `mosaic plugins install <pasta>`. Ele **não** é embutido no binário. Opcional: bloco **comentado** no `DEFAULT_CONFIG` (`src/infrastructure/default_files.rs`). Mencionar o plugin no `README.md` da raiz.
 6. Escrever a skill do plugin pelo template e conferir que o teste de skills passa.
 7. `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`; ao final `cargo clean`.
 8. Revisão do plugin pronto por um modelo mais forte que o implementador (a equipe usa Sonnet 5.5, ou gpt-6-sol-1 em harness OpenAI). Critical e Important voltam com teste que falha primeiro.
@@ -70,5 +70,5 @@ Forma do código (copie de `plugins/github/github_prs.py`):
 | `interval_seconds = 5` | Mínimo efetivo é 30; use `r` para forçar |
 | Opção do plugin depois de `snapshot` | O Mosaic acrescenta `snapshot` no fim; opções vão em `args` |
 | Id de alerta com data ou contador | Mesmo evento, mesmo id; senão o aviso repete ou esconde o próximo |
-| Esquecer o número do array `BUNDLED_PLUGINS` | O compilador acusa; acrescente também o teste de instalação do plugin (veja os de Jira e GitLab em `default_files.rs`) |
+| Plugin com pasta mas sem skill, ou com arquivo de teste solto na pasta | Fica fora do pacote (sem skill) ou vira lixo no pacote: o `stage-package.sh` só leva `*.py`, `*.js` e `README.md`; testes ficam em `plugins/tests/` |
 | Plugin sem skill | O teste de skills falha; crie a skill pelo template |
