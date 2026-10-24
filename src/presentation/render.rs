@@ -1809,6 +1809,7 @@ mod tests {
 
     const THEME_WIDTH: u16 = 100;
     const THEME_HEIGHT: u16 = 30;
+    const ACTIVE_TAB_MAXIMUM_CELLS: usize = 20;
 
     fn themed_state(name: &str) -> AppState {
         let mut state = state_with(vec![kanban_entry()]);
@@ -1831,12 +1832,6 @@ mod tests {
         };
         let rgb = pick(&palette);
         Color::Rgb(rgb.red, rgb.green, rgb.blue)
-    }
-
-    fn assert_every_cell_has_background(buffer: &Buffer, expected: Color, context: &str) {
-        for cell in &buffer.content {
-            assert_eq!(cell.bg, expected, "{context}: célula '{}'", cell.symbol());
-        }
     }
 
     #[test]
@@ -1933,17 +1928,13 @@ mod tests {
                 cell.bg
             );
         }
-        assert_every_cell_has_background_except_pill(&buffer);
-    }
-
-    fn assert_every_cell_has_background_except_pill(buffer: &Buffer) {
         let painted = buffer
             .content
             .iter()
             .filter(|cell| cell.bg == Color::Cyan)
             .count();
         assert!(
-            painted > 0 && painted < 20,
+            painted > 0 && painted < ACTIVE_TAB_MAXIMUM_CELLS,
             "só a aba ativa tem fundo: {painted}"
         );
     }
