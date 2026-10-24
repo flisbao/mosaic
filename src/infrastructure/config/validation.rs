@@ -1,4 +1,6 @@
-use super::raw::{RawLlm, RawNotifyCommand, RawPomodoro, RawTab, RawTabSection, RawWidget};
+use super::raw::{
+    RawLlm, RawNotifyCommand, RawPomodoro, RawTab, RawTabSection, RawTheme, RawWidget,
+};
 use super::{
     ConfigError, Harness, LlmConfig, PomodoroConfig, SettingLocation, TabSettings, WidgetSettings,
     DEFAULT_CYCLES_BEFORE_LONG_BREAK, DEFAULT_FOCUS_MINUTES, DEFAULT_INTERVAL_SECONDS,
@@ -8,6 +10,7 @@ use super::{
     MAXIMUM_TIMEOUT_SECONDS, MINIMUM_INTERVAL_SECONDS,
 };
 use crate::application::recommendation::LlmSelection;
+use crate::domain::theme::{preset_names, Rgb, Theme, ThemeError, ThemeRole, DEFAULT_THEME_NAME};
 use crate::domain::widget::WidgetId;
 use crate::infrastructure::child_environment::is_valid_variable_name;
 
@@ -15,6 +18,10 @@ const POMODORO_SECTION: &str = "pomodoro";
 const LEGACY_NOTIFY_COMMAND_WARNING: &str =
     "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
 const LLM_SECTION: &str = "llm";
+const THEME_SECTION: &str = "theme";
+const MAXIMUM_WARNING_VALUE_CHARACTERS: usize = 40;
+const ELLIPSIS: char = '…';
+const THEME_NAME_SEPARATOR: &str = ", ";
 const FIRST_TAB_INDEX: usize = 0;
 
 pub(super) struct TabAssignment {
@@ -289,4 +296,84 @@ fn at_most(
         });
     }
     Ok(value)
+}
+
+pub(super) fn build_theme(raw: RawTheme, warnings: &mut Vec<String>) -> Theme {
+    let requested = raw.name.as_deref().map(str::trim).unwrap_or_default();
+    let name = if requested.is_empty() {
+        DEFAULT_THEME_NAME
+    } else {
+        requested
+    };
+    let (base, resolved) = match Theme::preset(name) {
+        Ok(theme) => (theme, true),
+        Err(error) => {
+            warnings.push(theme_warning(&error));
+            (Theme::Ansi, false)
+        }
+    };
+    if base == Theme::Ansi {
+        if resolved && !raw.colors.is_empty() {
+            warnings.push(format!(
+                "[{THEME_SECTION}.colors] não vale para o tema '{DEFAULT_THEME_NAME}' (ele usa as cores do terminal)"
+            ));
+        }
+        return Theme::Ansi;
+    }
+    let themed = base.with_overrides(&theme_overrides(&raw.colors, warnings));
+    if raw.paint_background == Some(false) {
+        themed.without_background()
+    } else {
+        themed
+    }
+}
+
+fn theme_overrides(
+    colors: &std::collections::BTreeMap<String, String>,
+    warnings: &mut Vec<String>,
+) -> Vec<(ThemeRole, Rgb)> {
+    let mut overrides = Vec::new();
+    for (key, value) in colors {
+        let role = match ThemeRole::from_key(key) {
+            Ok(role) => role,
+            Err(error) => {
+                warnings.push(theme_warning(&error));
+                continue;
+            }
+        };
+        match Rgb::from_hex(value) {
+            Ok(rgb) => overrides.push((role, rgb)),
+            Err(_) => warnings.push(format!(
+                "[{THEME_SECTION}.colors] {key}: cor inválida '{}': use #rrggbb",
+                shortened(value)
+            )),
+        }
+    }
+    overrides
+}
+
+fn theme_warning(error: &ThemeError) -> String {
+    let detail = match error {
+        ThemeError::UnknownTheme { name, .. } => format!(
+            "tema desconhecido '{}'; temas disponíveis: {}",
+            shortened(name),
+            preset_names().join(THEME_NAME_SEPARATOR)
+        ),
+        ThemeError::InvalidHex(value) => {
+            format!("cor inválida '{}': use #rrggbb", shortened(value))
+        }
+        ThemeError::UnknownRole(role) => format!("papel de cor desconhecido '{}'", shortened(role)),
+    };
+    format!("[{THEME_SECTION}] {detail}")
+}
+
+fn shortened(value: &str) -> String {
+    if value.chars().count() <= MAXIMUM_WARNING_VALUE_CHARACTERS {
+        return value.to_string();
+    }
+    let kept: String = value
+        .chars()
+        .take(MAXIMUM_WARNING_VALUE_CHARACTERS - 1)
+        .collect();
+    format!("{kept}{ELLIPSIS}")
 }

@@ -12,6 +12,8 @@ pub(super) struct RawConfig {
     pub(super) pomodoro: RawPomodoro,
     #[serde(default)]
     pub(super) llm: RawLlm,
+    #[serde(default)]
+    pub(super) theme: RawTheme,
 }
 
 #[derive(Deserialize)]
@@ -74,4 +76,12 @@ pub(super) struct RawLlm {
     pub(super) timeout_seconds: Option<u64>,
     pub(super) confirm_before_send: Option<bool>,
     pub(super) priority_prompt: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct RawTheme {
+    pub(super) name: Option<String>,
+    pub(super) paint_background: Option<bool>,
+    #[serde(default)]
+    pub(super) colors: BTreeMap<String, String>,
 }
