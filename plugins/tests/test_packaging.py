@@ -156,7 +156,8 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("mosaic plugins install calendar", calendar)
         portuguese = (REPOSITORY_ROOT / "README.pt-BR.md").read_text(encoding="utf-8")
         first_run = next(line for line in portuguese.splitlines() if "primeira execução" in line)
-        self.assertNotIn("Jira", first_run)
+        self.assertIn("(kanban, example, galeria)", first_run)
+        self.assertNotIn("kanban, Jira", first_run)
         self.assertIn("mosaic plugins install", portuguese)
 
     def test_core_release_workflow_is_not_triggered_by_plugins_tags(self):
