@@ -10,10 +10,14 @@ SERVER=$!
 JIRA_PORT_FILE="$DEMO/jira-port"
 FAKE_JIRA_EMAIL=demo@exemplo.com FAKE_JIRA_TOKEN=segredo python3 "$REPO/plugins/tests/fake_jira_server.py" > "$JIRA_PORT_FILE" &
 JIRA_SERVER=$!
-trap 'kill $SERVER $JIRA_SERVER 2>/dev/null; rm -rf "$DEMO"' EXIT
-until [ -s "$PORT_FILE" ] && [ -s "$JIRA_PORT_FILE" ]; do sleep 0.1; done
+ENTRA_PORT_FILE="$DEMO/entra-port"
+FAKE_PR_TOKEN=segredo FAKE_ENTRA_SECRET=segredo python3 "$REPO/plugins/tests/fake_entra_server.py" > "$ENTRA_PORT_FILE" &
+ENTRA_SERVER=$!
+trap 'kill $SERVER $JIRA_SERVER $ENTRA_SERVER 2>/dev/null; rm -rf "$DEMO"' EXIT
+until [ -s "$PORT_FILE" ] && [ -s "$JIRA_PORT_FILE" ] && [ -s "$ENTRA_PORT_FILE" ]; do sleep 0.1; done
 PORT=$(head -1 "$PORT_FILE")
 JIRA_PORT=$(head -1 "$JIRA_PORT_FILE")
+ENTRA_PORT=$(head -1 "$ENTRA_PORT_FILE")
 export FAKE_TOKEN=segredo
 cat > "$DEMO/xdg/mosaic/mosaic.toml" <<TOML
 [[tabs]]
@@ -59,7 +63,11 @@ inherit_env = ["FAKE_TOKEN"]
 [widgets.env]
 AZDO_BASE_URL = "http://127.0.0.1:$PORT"
 AZDO_ORGANIZATION = "org"
-AZDO_TOKEN_ENV = "FAKE_TOKEN"
+AZDO_AUTH_METHOD = "service-principal"
+AZDO_LOGIN_URL = "http://127.0.0.1:$ENTRA_PORT"
+AZDO_TENANT_ID = "tenant-demo"
+AZDO_CLIENT_ID = "client-demo"
+AZDO_CLIENT_SECRET_ENV = "FAKE_TOKEN"
 AZDO_STATE_DIR = "$DEMO/state"
 
 [[widgets]]
