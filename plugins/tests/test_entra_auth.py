@@ -13,7 +13,24 @@ from pathlib import Path
 PLUGINS_DIRECTORY = Path(__file__).resolve().parent.parent
 ENTRA_MODULES = {
     "azure_devops": "azure-devops/azure_devops.py",
+    "azure_pipelines": "azure-pipelines/azure_pipelines.py",
 }
+BLOCK_START = "# --- entra-auth: início ---"
+BLOCK_END = "# --- entra-auth: fim ---"
+NAMES_THE_BLOCK_EXPECTS_FROM_ITS_MODULE = (
+    "ConfigError",
+    "ApiError",
+    "AuthError",
+    "RateLimitError",
+    "NetworkError",
+    "UnexpectedResponseError",
+    "HTTP_TOO_MANY_REQUESTS",
+    "STATE_FILE_SUFFIX",
+    "TEMPORARY_FILE_SUFFIX",
+    "LOGIN_INSTRUCTION",
+    "read_base_url",
+    "read_state_dir",
+)
 SECRET = "SEGREDO-123"
 ACCESS_TOKEN = "token-de-acesso"
 TENANT = "11111111-2222-3333-4444-555555555555"
@@ -570,6 +587,33 @@ class DeviceCodeTests:
     def test_token_provider_for_device_code(self):
         provider = self.module.token_provider_for(self.config, FakeHttp(), FakeRun())
         self.assertIsInstance(provider, self.module.DeviceCodeTokenProvider)
+
+
+def entra_block_of(name):
+    text = (PLUGINS_DIRECTORY / ENTRA_MODULES[name]).read_text(encoding="utf-8")
+    start = text.index(BLOCK_START)
+    return text[start : text.index(BLOCK_END, start) + len(BLOCK_END)]
+
+
+class SharedBlockTests(unittest.TestCase):
+    def test_entra_auth_blocks_are_identical(self):
+        blocks = {name: entra_block_of(name) for name in ENTRA_MODULES}
+        reference_name, *others = blocks
+        for name in others:
+            with self.subTest(module=name):
+                self.assertEqual(blocks[name], blocks[reference_name])
+
+    def test_every_module_defines_the_names_the_block_expects(self):
+        for name in ENTRA_MODULES:
+            module = load_module(name)
+            for expected in NAMES_THE_BLOCK_EXPECTS_FROM_ITS_MODULE:
+                with self.subTest(module=name, name=expected):
+                    self.assertTrue(hasattr(module, expected))
+
+    def test_login_instruction_points_to_the_module_own_script(self):
+        for name, relative_path in ENTRA_MODULES.items():
+            with self.subTest(module=name):
+                self.assertIn(Path(relative_path).name, load_module(name).LOGIN_INSTRUCTION)
 
 
 for _name in ENTRA_MODULES:
