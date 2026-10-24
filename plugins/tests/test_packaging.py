@@ -1,0 +1,161 @@
+import os
+import re
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+STAGE_SCRIPT = REPOSITORY_ROOT / "scripts" / "stage-package.sh"
+SKILL_PREFIX = "mosaic-plugin-"
+AUTHORING_SKILL = "mosaic-widget-authoring"
+USAGE_EXIT_CODE = 2
+ALLOWED_PLUGIN_SUFFIXES = (".py", ".js")
+ALLOWED_PLUGIN_FILE_NAMES = ("README.md",)
+SKIPPED_PLUGIN_FOLDERS = ("tests", "__pycache__")
+PACKAGED_PLUGINS = "usr/share/mosaic/plugins"
+PACKAGED_SKILLS = "usr/share/mosaic/skills"
+
+
+def stage(package, destination, repository=None):
+    environment = dict(os.environ)
+    if repository is not None:
+        environment["MOSAIC_REPO"] = str(repository)
+    return subprocess.run(
+        ["bash", str(STAGE_SCRIPT), package, str(destination)],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+
+def listing(directory):
+    return sorted(path.name for path in Path(directory).iterdir())
+
+
+def relative_files(root):
+    return {
+        str(path.relative_to(root))
+        for path in Path(root).rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+
+
+def real_service_plugins():
+    plugins = REPOSITORY_ROOT / "plugins"
+    return sorted(
+        folder.name
+        for folder in plugins.iterdir()
+        if folder.is_dir()
+        and folder.name not in SKIPPED_PLUGIN_FOLDERS
+        and (REPOSITORY_ROOT / ".claude" / "skills" / f"{SKILL_PREFIX}{folder.name}").is_dir()
+    )
+
+
+class PackagingTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.destination = Path(self.temporary.name) / "root"
+
+    def test_version_file_is_semver(self):
+        text = (REPOSITORY_ROOT / "plugins" / "VERSION").read_text(encoding="utf-8")
+        self.assertRegex(text, r"^\d+\.\d+\.\d+\n?$")
+
+    def test_stage_core_has_docs_and_only_the_authoring_skill(self):
+        result = stage("core", self.destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        documents = self.destination / "usr/share/doc/mosaic"
+        self.assertEqual(
+            listing(documents), ["PROTOCOL.md", "README.md", "copyright", "protocol.schema.json"]
+        )
+        self.assertEqual(listing(self.destination / PACKAGED_SKILLS), [AUTHORING_SKILL])
+        self.assertTrue((self.destination / PACKAGED_SKILLS / AUTHORING_SKILL / "SKILL.md").is_file())
+        self.assertFalse((self.destination / PACKAGED_PLUGINS).exists())
+
+    def test_stage_plugins_has_every_service_plugin_and_its_skill(self):
+        result = stage("plugins", self.destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = real_service_plugins()
+        self.assertGreaterEqual(len(expected), 6)
+        self.assertEqual(listing(self.destination / PACKAGED_PLUGINS), expected)
+        self.assertEqual(
+            listing(self.destination / PACKAGED_SKILLS), [f"{SKILL_PREFIX}{name}" for name in expected]
+        )
+
+    def test_plugins_package_has_only_runtime_files(self):
+        stage("plugins", self.destination)
+        for relative in relative_files(self.destination / PACKAGED_PLUGINS):
+            path = Path(relative)
+            with self.subTest(file=relative):
+                self.assertEqual(len(path.parts), 2, "só arquivos direto na pasta do plugin")
+                self.assertTrue(
+                    path.name in ALLOWED_PLUGIN_FILE_NAMES or path.suffix in ALLOWED_PLUGIN_SUFFIXES
+                )
+                self.assertFalse(path.name.startswith(("fake_", "test_")))
+                self.assertNotIn(".pyc", path.name)
+
+    def test_plugins_package_carries_version_and_license(self):
+        stage("plugins", self.destination)
+        documents = self.destination / "usr/share/doc/mosaic-plugins"
+        self.assertEqual(listing(documents), ["VERSION", "copyright"])
+        version = (documents / "VERSION").read_text(encoding="utf-8")
+        self.assertEqual(version, (REPOSITORY_ROOT / "plugins" / "VERSION").read_text(encoding="utf-8"))
+
+    def test_core_and_plugins_do_not_overlap(self):
+        core = Path(self.temporary.name) / "core"
+        plugins = Path(self.temporary.name) / "plugins"
+        stage("core", core)
+        stage("plugins", plugins)
+        self.assertEqual(relative_files(core) & relative_files(plugins), set())
+
+    def test_stage_rejects_an_unknown_package_name(self):
+        result = stage("outro", self.destination)
+        self.assertEqual(result.returncode, USAGE_EXIT_CODE)
+        self.assertIn("uso:", result.stderr)
+
+    def test_stage_requires_both_arguments(self):
+        result = subprocess.run(["bash", str(STAGE_SCRIPT)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, USAGE_EXIT_CODE)
+
+    def test_a_plugin_folder_without_a_skill_is_not_packaged(self):
+        repository = self.fake_repository()
+        (repository / "plugins" / "semskill").mkdir()
+        (repository / "plugins" / "semskill" / "x.py").write_text("print()", encoding="utf-8")
+        result = stage("plugins", self.destination, repository)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(listing(self.destination / PACKAGED_PLUGINS), ["alpha"])
+
+    def test_symlinks_and_other_files_are_not_copied(self):
+        repository = self.fake_repository()
+        outside = Path(self.temporary.name) / "segredo.py"
+        outside.write_text("segredo", encoding="utf-8")
+        (repository / "plugins" / "alpha" / "linked.py").symlink_to(outside)
+        (repository / "plugins" / "alpha" / "notes.txt").write_text("x", encoding="utf-8")
+        (repository / "plugins" / "alpha" / "tests").mkdir()
+        (repository / "plugins" / "alpha" / "tests" / "test_a.py").write_text("x", encoding="utf-8")
+        stage("plugins", self.destination, repository)
+        self.assertEqual(listing(self.destination / PACKAGED_PLUGINS / "alpha"), ["README.md", "alpha.py"])
+
+    def fake_repository(self):
+        repository = Path(self.temporary.name) / "repo"
+        (repository / "plugins" / "alpha").mkdir(parents=True)
+        (repository / "plugins" / "alpha" / "alpha.py").write_text("print()", encoding="utf-8")
+        (repository / "plugins" / "alpha" / "README.md").write_text("# a", encoding="utf-8")
+        (repository / "plugins" / "tests").mkdir()
+        (repository / "plugins" / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+        skill = repository / ".claude" / "skills" / f"{SKILL_PREFIX}alpha"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        authoring = repository / ".claude" / "skills" / AUTHORING_SKILL
+        authoring.mkdir()
+        (authoring / "SKILL.md").write_text("---\nname: y\n---\n", encoding="utf-8")
+        for name in ("README.md", "PROTOCOL.md", "LICENSE"):
+            (repository / name).write_text(name, encoding="utf-8")
+        (repository / "schema").mkdir()
+        (repository / "schema" / "protocol.schema.json").write_text("{}", encoding="utf-8")
+        return repository
+
+
+if __name__ == "__main__":
+    unittest.main()
