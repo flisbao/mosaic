@@ -146,6 +146,10 @@ class PackagingTests(unittest.TestCase):
         for step in ("stage-package.sh plugins", "build-plugins-deb.sh", "mosaic plugins install", "unittest discover"):
             self.assertIn(step, text)
 
+    def test_plugins_release_never_takes_the_latest_label(self):
+        text = (WORKFLOWS / "release-plugins.yml").read_text(encoding="utf-8")
+        self.assertIn("--latest=false", text)
+
     def test_core_release_workflow_is_not_triggered_by_plugins_tags(self):
         text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         self.assertIn('- "v*"', text)
