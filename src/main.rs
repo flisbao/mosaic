@@ -3,6 +3,7 @@
 mod check_command;
 mod plugins_command;
 mod skills_command;
+mod themes_command;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -73,6 +74,7 @@ const NO_STATE_DIRECTORY_STORE_WARNING: &str =
 const CHECK_SUBCOMMAND: &str = "check";
 const SKILLS_SUBCOMMAND: &str = "skills";
 const PLUGINS_SUBCOMMAND: &str = "plugins";
+const THEMES_SUBCOMMAND: &str = "themes";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 
@@ -128,6 +130,9 @@ fn main() -> ExitCode {
     }
     if arguments.first().map(String::as_str) == Some(PLUGINS_SUBCOMMAND) {
         return plugins_command::run(&arguments[1..]);
+    }
+    if arguments.first().map(String::as_str) == Some(THEMES_SUBCOMMAND) {
+        return themes_command::run(&arguments[1..]);
     }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
