@@ -16,13 +16,13 @@ O plugin usa só a biblioteca padrão do Python 3; não há `pip install`.
 
 ## Instalação
 
-Se o mosaic instalou a configuração padrão agora (não existia `mosaic.toml`), o plugin já está em `~/.config/mosaic/plugins/calendar/calendar_widget.py`. Basta descomentar o bloco "Agenda Google" no `mosaic.toml`.
-
-Para quem já tem `~/.config/mosaic/mosaic.toml`, copie o plugin à mão:
+O plugin não vem no binário. Instale-o com:
 
 ```bash
-mkdir -p ~/.config/mosaic/plugins/calendar && cp plugins/calendar/calendar_widget.py ~/.config/mosaic/plugins/calendar/
+mosaic plugins install calendar
 ```
+
+Isso copia `calendar_widget.py` para `~/.config/mosaic/plugins/calendar/`. Depois descomente o bloco "Agenda Google" no `mosaic.toml`. Para atualizar uma cópia já instalada, use `mosaic plugins install calendar --force` (sobrescreve edições locais).
 
 ## Variáveis `CALENDAR_*`
 

@@ -150,6 +150,15 @@ class PackagingTests(unittest.TestCase):
         text = (WORKFLOWS / "release-plugins.yml").read_text(encoding="utf-8")
         self.assertIn("--latest=false", text)
 
+    def test_docs_do_not_say_service_plugins_ship_in_the_binary(self):
+        calendar = (REPOSITORY_ROOT / "plugins/calendar/README.md").read_text(encoding="utf-8")
+        self.assertNotIn("o plugin já está em", calendar)
+        self.assertIn("mosaic plugins install calendar", calendar)
+        portuguese = (REPOSITORY_ROOT / "README.pt-BR.md").read_text(encoding="utf-8")
+        first_run = next(line for line in portuguese.splitlines() if "primeira execução" in line)
+        self.assertNotIn("Jira", first_run)
+        self.assertIn("mosaic plugins install", portuguese)
+
     def test_core_release_workflow_is_not_triggered_by_plugins_tags(self):
         text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         self.assertIn('- "v*"', text)
