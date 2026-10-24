@@ -85,6 +85,22 @@ Press `?` at any time: the help is always one key away, and the bottom line show
 
 `Alt` needs your terminal to send `Esc` before the letter (on macOS, enable "Option as Meta").
 
+## Themes
+
+By default Mosaic uses your terminal's own colors. Pick a built-in theme in `mosaic.toml` (press `R` to reload it):
+
+```toml
+[theme]
+name = "tokyo-night"
+# paint_background = false        # keep your terminal background
+# [theme.colors]                   # override single roles
+# accent = "#ff9e64"
+```
+
+Built-in themes: `tokyo-night`, `tokyo-night-storm`, `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `nord`, `catppuccin-mocha`, `one-dark`, `monokai` and `everforest-dark` (plus `default`, the terminal's colors). Run `mosaic themes` to list them with color swatches, or `mosaic themes nord` to see the roles, hex values and contrast ratios.
+
+A colored theme paints the whole screen background and needs a terminal with truecolor (`COLORTERM=truecolor`) or 256 colors; on a basic terminal Mosaic falls back to `default` and tells you. Widgets are unaffected: they only choose a tone (`normal`, `muted`, `ok`, `warn`, `danger`, `current`) and the theme decides how it looks.
+
 ## Batteries included
 
 | Widget | What it shows | Setup guide |

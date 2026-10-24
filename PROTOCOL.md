@@ -68,7 +68,7 @@ Um bloco é um objeto com `type`, empilhado na ordem em que aparece.
   "rows": [ [ "Ana", "3" ], [ { "text": "Bia", "tone": "danger", "flag": "attention" }, "5" ] ] }
 ```
 
-**Tons:** `normal` (padrão do terminal), `muted` (cinza), `ok` (verde), `warn` (amarelo), `danger` (vermelho), `current` (ciano em negrito). As cores são fixas.
+**Tons:** `normal` (padrão do terminal), `muted` (cinza), `ok` (verde), `warn` (amarelo), `danger` (vermelho), `current` (ciano em negrito). As cores vêm do tema do Mosaic (`[theme]` no `mosaic.toml`, veja o README): o widget escolhe só o tom.
 **Flags:** `updated` (`●`) e `attention` (`⚠`).
 
 ## 4. Limites, texto e erros
