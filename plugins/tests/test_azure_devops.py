@@ -164,6 +164,16 @@ class ClientTests(unittest.TestCase):
             "(Organization settings > Users)",
         )
 
+    def test_token_provider_oserror_is_not_reported_as_network_failure(self):
+        class BrokenProvider:
+            def access_token(self):
+                raise PermissionError("sem acesso")
+
+        http = FakeHttp()
+        with self.assertRaises(PermissionError):
+            make_client(http, BrokenProvider()).get_json("/x", {})
+        self.assertEqual(http.calls, [])
+
     def test_error_messages_never_contain_the_token(self):
         for status in (401, 403, 429, 500):
             body = json.dumps({"message": f"bad {SECRET}"}).encode()
@@ -500,6 +510,66 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(self.stdout.getvalue(), "")
         self.assertIn("azure_devops.py login", self.stderr.getvalue())
+
+    def service_principal_environment(self):
+        return base_environment(
+            AZDO_STATE_DIR=str(self.state_dir),
+            AZDO_AUTH_METHOD="service-principal",
+            AZDO_TENANT_ID="tenant-1",
+            AZDO_CLIENT_ID="client-1",
+            AZDO_CLIENT_SECRET_ENV="SP_SECRET",
+            SP_SECRET=SECRET,
+        )
+
+    def run_service_principal(self, http):
+        return azure_devops.main(
+            ["snapshot"], environ=self.service_principal_environment(), http=http, now=NOW,
+            stdout=self.stdout, stderr=self.stderr,
+        )
+
+    def successful_service_principal_http(self):
+        return FakeHttp([(200, {"access_token": SECRET})] + self.successful_http().responses)
+
+    def test_main_unmapped_entra_error_is_not_masked_by_the_cache(self):
+        self.assertEqual(self.run_service_principal(self.successful_service_principal_http()), 0)
+        self.stdout = io.StringIO()
+        refused = {"error": "invalid_request", "error_description": f"AADSTS900144 {SECRET}"}
+        code = self.run_service_principal(FakeHttp([(400, refused)]))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+        self.assertNotIn("offline", self.stderr.getvalue())
+        self.assertNotIn(SECRET, self.stderr.getvalue())
+
+    def test_state_and_cache_never_contain_refresh_token(self):
+        environment = self.device_code_environment()
+        login_http = FakeHttp([
+            (200, {"device_code": "dc", "message": "abra", "interval": 5, "expires_in": 900}),
+            (200, {"access_token": "at", "refresh_token": REFRESH_TOKEN}),
+        ])
+        azure_devops.main(
+            ["login"], environ=environment, http=login_http, sleep=lambda seconds: None,
+            stdout=self.stdout, stderr=self.stderr,
+        )
+        refresh = (200, {"access_token": SECRET, "refresh_token": REFRESH_TOKEN})
+        online = FakeHttp([refresh] + self.successful_http().responses)
+        azure_devops.main(["snapshot"], environ=environment, http=online, now=NOW,
+                          stdout=self.stdout, stderr=self.stderr)
+        refreshes = FakeHttp([refresh])
+
+        def refresh_then_lose_network(url, method, headers, body, timeout):
+            if "oauth2" in url:
+                return refreshes(url, method, headers, body, timeout)
+            raise OSError("sem rede")
+
+        azure_devops.main(["snapshot"], environ=environment, http=refresh_then_lose_network,
+                          now=NOW, stdout=self.stdout, stderr=self.stderr)
+        self.assertIn("(offline)", self.stdout.getvalue().splitlines()[-1])
+        for path in self.state_dir.iterdir():
+            text = path.read_text(encoding="utf-8")
+            for secret in (REFRESH_TOKEN, SECRET):
+                self.assertNotIn(secret, text)
+        self.assertNotIn(REFRESH_TOKEN, self.stdout.getvalue() + self.stderr.getvalue())
 
     def test_main_login_with_other_method_exits_one(self):
         code = azure_devops.main(

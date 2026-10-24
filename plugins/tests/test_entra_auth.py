@@ -279,7 +279,8 @@ class EntraAuthTests:
             (400, {"error": "invalid_grant"}, module.AuthError),
             (429, {}, module.RateLimitError),
             (503, {}, module.NetworkError),
-            (400, {"error": "algo_novo"}, module.UnexpectedResponseError),
+            (400, {"error": "algo_novo"}, module.AuthError),
+            (404, b"", module.AuthError),
             (302, b"", module.UnexpectedResponseError),
         )
         for status, payload, expected in cases:
@@ -287,6 +288,13 @@ class EntraAuthTests:
                 body = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
                 with self.assertRaises(expected):
                     module.decode_entra_response(status, body)
+
+    def test_unmapped_entra_client_error_is_permanent_and_never_echoed(self):
+        body = {"error": "invalid_request", "error_description": f"AADSTS900144 {SECRET}"}
+        with self.assertRaises(self.module.AuthError) as caught:
+            self.module.decode_entra_response(400, json.dumps(body).encode("utf-8"))
+        self.assertNotIn(SECRET, str(caught.exception))
+        self.assertNotIn("invalid_request", str(caught.exception))
 
     def test_entra_success_with_garbage_body_is_unexpected(self):
         with self.assertRaises(self.module.UnexpectedResponseError):
@@ -509,6 +517,55 @@ class DeviceCodeTests:
         )
         self.store().save_refresh_token("antigo")
         self.assertIsNone(self.module.CredentialStore(other).load_refresh_token())
+
+    def test_login_checks_the_credentials_directory_before_requesting_a_code(self):
+        self.credentials_dir.mkdir(mode=0o755)
+        os.chmod(self.credentials_dir, 0o755)
+        http = FakeHttp()
+        with self.assertRaises(self.module.ConfigError):
+            self.module.run_device_code_login(self.config, http, self.sleeps.append, self.stderr)
+        self.assertEqual(http.calls, [])
+
+    def test_refresh_refuses_a_credentials_directory_that_is_not_private(self):
+        self.store().save_refresh_token("antigo")
+        os.chmod(self.credentials_dir, 0o755)
+        http = FakeHttp()
+        provider = self.module.DeviceCodeTokenProvider(self.config, http, self.store())
+        with self.assertRaises(self.module.ConfigError):
+            provider.access_token()
+        self.assertEqual(http.calls, [])
+
+    def test_refresh_refuses_a_credential_file_that_is_not_private(self):
+        self.store().save_refresh_token("antigo")
+        (credential,) = self.credentials_dir.iterdir()
+        os.chmod(credential, 0o644)
+        http = FakeHttp()
+        provider = self.module.DeviceCodeTokenProvider(self.config, http, self.store())
+        with self.assertRaises(self.module.ConfigError):
+            provider.access_token()
+        self.assertEqual(http.calls, [])
+
+    def test_rotation_failure_is_not_swallowed(self):
+        module = self.module
+
+        class UnwritableStore:
+            def load_refresh_token(self):
+                return "antigo"
+
+            def save_refresh_token(self, token):
+                raise module.ConfigError("não foi possível gravar a credencial")
+
+        http = FakeHttp([(200, {"access_token": ACCESS_TOKEN, "refresh_token": "novo"})])
+        with self.assertRaises(module.ConfigError):
+            module.DeviceCodeTokenProvider(self.config, http, UnwritableStore()).access_token()
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignora as permissões da pasta")
+    def test_credential_delete_failure_is_a_config_error(self):
+        self.store().save_refresh_token("antigo")
+        os.chmod(self.credentials_dir, 0o500)
+        self.addCleanup(os.chmod, self.credentials_dir, 0o700)
+        with self.assertRaises(self.module.ConfigError):
+            self.store().delete()
 
     def test_token_provider_for_device_code(self):
         provider = self.module.token_provider_for(self.config, FakeHttp(), FakeRun())

@@ -283,6 +283,7 @@ AUTH_METHODS = (
 )
 HTTP_OK = 200
 HTTP_SERVER_ERROR_FLOOR = 500
+ENTRA_CLIENT_ERROR_FLOOR = 400
 IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9.-]+")
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 SLOW_DOWN_INCREMENT_SECONDS = 5
@@ -291,7 +292,7 @@ DEFAULT_DEVICE_CODE_LIFETIME_SECONDS = 900
 MAXIMUM_DEVICE_CODE_LIFETIME_SECONDS = 1800
 CREDENTIAL_FILE_PREFIX = "entra-"
 CREDENTIAL_DIRECTORY_MODE = 0o700
-CREDENTIAL_DIRECTORY_FORBIDDEN_BITS = 0o077
+CREDENTIAL_FORBIDDEN_BITS = 0o077
 CREDENTIAL_KEY_SEPARATOR = "\n"
 BEARER_PREFIX = "Bearer "
 FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
@@ -305,6 +306,11 @@ SLOW_DOWN_ERROR_CODE = "slow_down"
 INVALID_GRANT_ERROR_CODE = "invalid_grant"
 LOGIN_REQUIRED_MESSAGE = f"sem login do Entra; rode: {LOGIN_INSTRUCTION}"
 LOGIN_DONE_MESSAGE = "login concluído"
+ENTRA_REQUEST_REFUSED_MESSAGE = "o Entra recusou o pedido de token"
+DIRECTORY_NOT_PRIVATE_MESSAGE = f"a pasta de {CREDENTIALS_DIRECTORY_VARIABLE} precisa ser privada (chmod 700)"
+FILE_NOT_PRIVATE_MESSAGE = "o arquivo de credencial do Entra precisa ser privado (chmod 600)"
+CREDENTIAL_WRITE_FAILED_MESSAGE = "não foi possível gravar a credencial do login do Entra"
+CREDENTIAL_DELETE_FAILED_MESSAGE = "não foi possível remover a credencial do login do Entra"
 LOGIN_ONLY_FOR_DEVICE_CODE_MESSAGE = f"login só é usado com {AUTH_METHOD_VARIABLE}={AUTH_METHOD_DEVICE_CODE}"
 LEGACY_TOKEN_MESSAGE = (
     "PAT não é mais suportado no Azure DevOps; defina "
@@ -472,6 +478,8 @@ def _raise_for_entra_error(status: int, payload: dict) -> None:
         raise AuthorizationPendingError(slow_down=code == SLOW_DOWN_ERROR_CODE)
     if isinstance(code, str) and code in ENTRA_ERROR_MESSAGES:
         raise EntraAuthError(ENTRA_ERROR_MESSAGES[code], code)
+    if ENTRA_CLIENT_ERROR_FLOOR <= status < HTTP_SERVER_ERROR_FLOOR:
+        raise EntraAuthError(ENTRA_REQUEST_REFUSED_MESSAGE, code="")
     raise UnexpectedResponseError(f"resposta inesperada do Entra (HTTP {status})")
 
 
@@ -603,6 +611,10 @@ class CredentialStore:
         self._path = self._directory / (CREDENTIAL_FILE_PREFIX + digest + STATE_FILE_SUFFIX)
 
     def load_refresh_token(self) -> str | None:
+        if not self._path.exists():
+            return None
+        self._require_private(self._directory, DIRECTORY_NOT_PRIVATE_MESSAGE)
+        self._require_private(self._path, FILE_NOT_PRIVATE_MESSAGE)
         try:
             document = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -611,21 +623,32 @@ class CredentialStore:
         return token if isinstance(token, str) and token else None
 
     def save_refresh_token(self, token: str) -> None:
+        self.ensure_private_directory()
         try:
-            self._prepare_directory()
             self._write_private(json.dumps({REFRESH_TOKEN_KEY: token}))
         except OSError:
-            raise ConfigError("não foi possível gravar a credencial do login do Entra") from None
+            raise ConfigError(CREDENTIAL_WRITE_FAILED_MESSAGE) from None
 
     def delete(self) -> None:
-        self._path.unlink(missing_ok=True)
+        try:
+            self._path.unlink(missing_ok=True)
+        except OSError:
+            raise ConfigError(CREDENTIAL_DELETE_FAILED_MESSAGE) from None
 
-    def _prepare_directory(self) -> None:
-        self._directory.mkdir(mode=CREDENTIAL_DIRECTORY_MODE, parents=True, exist_ok=True)
-        if self._directory.stat().st_mode & CREDENTIAL_DIRECTORY_FORBIDDEN_BITS:
-            raise ConfigError(
-                f"a pasta de {CREDENTIALS_DIRECTORY_VARIABLE} precisa ser privada (chmod 700)"
-            )
+    def ensure_private_directory(self) -> None:
+        try:
+            self._directory.mkdir(mode=CREDENTIAL_DIRECTORY_MODE, parents=True, exist_ok=True)
+        except OSError:
+            raise ConfigError(CREDENTIAL_WRITE_FAILED_MESSAGE) from None
+        self._require_private(self._directory, DIRECTORY_NOT_PRIVATE_MESSAGE)
+
+    def _require_private(self, path: Path, message: str) -> None:
+        try:
+            is_exposed = path.stat().st_mode & CREDENTIAL_FORBIDDEN_BITS
+        except OSError:
+            raise ConfigError(message) from None
+        if is_exposed:
+            raise ConfigError(message)
 
     def _write_private(self, content: str) -> None:
         descriptor, temporary_name = tempfile.mkstemp(dir=self._directory, suffix=TEMPORARY_FILE_SUFFIX)
@@ -670,15 +693,14 @@ class DeviceCodeTokenProvider:
     def _remember_rotated_token(self, payload: dict) -> None:
         rotated = payload.get(REFRESH_TOKEN_KEY)
         if isinstance(rotated, str) and rotated:
-            try:
-                self._store.save_refresh_token(rotated)
-            except ConfigError:
-                return
+            self._store.save_refresh_token(rotated)
 
 
 def run_device_code_login(config: EntraConfig, http, sleep, stderr) -> None:
     if config.method != AUTH_METHOD_DEVICE_CODE:
         raise ConfigError(LOGIN_ONLY_FOR_DEVICE_CODE_MESSAGE)
+    store = CredentialStore(config)
+    store.ensure_private_directory()
     grant = _post_form(
         http,
         _device_code_url(config),
@@ -689,7 +711,7 @@ def run_device_code_login(config: EntraConfig, http, sleep, stderr) -> None:
     refresh_token = payload.get(REFRESH_TOKEN_KEY)
     if not isinstance(refresh_token, str) or not refresh_token:
         raise UnexpectedResponseError("o Entra não devolveu o refresh token do login")
-    CredentialStore(config).save_refresh_token(refresh_token)
+    store.save_refresh_token(refresh_token)
     print(LOGIN_DONE_MESSAGE, file=stderr)
 
 
@@ -789,8 +811,9 @@ class AzureClient:
         url = self._config.base_url + "/" + self._config.organization + path
         if params:
             url += "?" + urllib.parse.urlencode(params, safe="$")
+        headers = self._request_headers()
         try:
-            status, body = self._http(url, "GET", self._request_headers(), None, REQUEST_TIMEOUT_SECONDS)
+            status, body = self._http(url, "GET", headers, None, REQUEST_TIMEOUT_SECONDS)
         except (OSError, http.client.HTTPException) as error:
             raise NetworkError(
                 f"falha de rede ao falar com {SERVICE_NAME} ({type(error).__name__})"
