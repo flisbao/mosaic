@@ -7,6 +7,7 @@ pub mod llm_cli;
 pub mod notifiers;
 pub mod plugin_protocol;
 pub mod plugin_runner;
+pub mod plugins_installer;
 pub mod priority_prompt;
 pub mod private_directory;
 pub mod process;
