@@ -1806,4 +1806,196 @@ mod tests {
             draw(&state, size, size);
         }
     }
+
+    const THEME_WIDTH: u16 = 100;
+    const THEME_HEIGHT: u16 = 30;
+
+    fn themed_state(name: &str) -> AppState {
+        let mut state = state_with(vec![kanban_entry()]);
+        let theme = crate::domain::theme::Theme::preset(name).unwrap();
+        state.set_theme_styles(ThemeStyles::new(
+            &theme,
+            crate::infrastructure::terminal_capabilities::ColorDepth::TrueColor,
+        ));
+        state
+    }
+
+    fn palette_color(
+        name: &str,
+        pick: fn(&crate::domain::theme::Palette) -> crate::domain::theme::Rgb,
+    ) -> Color {
+        let crate::domain::theme::Theme::Colored { palette, .. } =
+            crate::domain::theme::Theme::preset(name).unwrap()
+        else {
+            panic!("{name} não é colorido");
+        };
+        let rgb = pick(&palette);
+        Color::Rgb(rgb.red, rgb.green, rgb.blue)
+    }
+
+    fn assert_every_cell_has_background(buffer: &Buffer, expected: Color, context: &str) {
+        for cell in &buffer.content {
+            assert_eq!(cell.bg, expected, "{context}: célula '{}'", cell.symbol());
+        }
+    }
+
+    #[test]
+    fn colored_theme_paints_every_cell_background() {
+        for name in ["tokyo-night", "solarized-light"] {
+            let state = themed_state(name);
+            let expected = palette_color(name, |palette| palette.background);
+            let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
+            let accent = palette_color(name, |palette| palette.accent);
+            for cell in &buffer.content {
+                assert!(
+                    cell.bg == expected || cell.bg == accent,
+                    "{name}: {:?}",
+                    cell.bg
+                );
+            }
+            assert!(buffer.content.iter().any(|cell| cell.bg == expected));
+        }
+    }
+
+    #[test]
+    fn popup_cells_keep_the_theme_background() {
+        let mut state = themed_state("tokyo-night");
+        let expected = palette_color("tokyo-night", |palette| palette.background);
+        let accent = palette_color("tokyo-night", |palette| palette.accent);
+        press(&mut state, &[KeyInput::Character('?')]);
+        let help = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
+        for cell in &help.content {
+            assert!(
+                cell.bg == expected || cell.bg == accent,
+                "ajuda: {:?}",
+                cell.bg
+            );
+        }
+        press(&mut state, &[KeyInput::Escape]);
+        state.show_alert(crate::application::ports::AlertMessage {
+            title: "Aviso".to_string(),
+            body: "texto do aviso".to_string(),
+        });
+        let alert = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
+        assert!(draw(&state, THEME_WIDTH, THEME_HEIGHT)
+            .iter()
+            .any(|row| row.contains("texto do aviso")));
+        for cell in &alert.content {
+            assert!(
+                cell.bg == expected || cell.bg == accent,
+                "alerta: {:?}",
+                cell.bg
+            );
+        }
+    }
+
+    #[test]
+    fn notice_row_keeps_the_theme_background() {
+        let mut state = themed_state("dracula");
+        state.show_notice("Cartão movido".to_string());
+        let expected = palette_color("dracula", |palette| palette.background);
+        let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
+        let last_row = THEME_HEIGHT - 1;
+        for column in 0..THEME_WIDTH {
+            assert_eq!(buffer[(column, last_row)].bg, expected, "coluna {column}");
+        }
+    }
+
+    #[test]
+    fn paint_background_false_leaves_the_terminal_background() {
+        let mut state = state_with(vec![kanban_entry()]);
+        let theme = crate::domain::theme::Theme::preset("nord")
+            .unwrap()
+            .without_background();
+        state.set_theme_styles(ThemeStyles::new(
+            &theme,
+            crate::infrastructure::terminal_capabilities::ColorDepth::TrueColor,
+        ));
+        let accent = palette_color("nord", |palette| palette.accent);
+        let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
+        for cell in &buffer.content {
+            assert!(
+                cell.bg == Color::Reset || cell.bg == accent,
+                "{:?}",
+                cell.bg
+            );
+        }
+    }
+
+    #[test]
+    fn ansi_theme_paints_nothing_besides_the_active_tab() {
+        let state = state_with(vec![kanban_entry()]);
+        let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
+        for cell in &buffer.content {
+            assert!(
+                cell.bg == Color::Reset || cell.bg == Color::Cyan,
+                "{:?}",
+                cell.bg
+            );
+        }
+        assert_every_cell_has_background_except_pill(&buffer);
+    }
+
+    fn assert_every_cell_has_background_except_pill(buffer: &Buffer) {
+        let painted = buffer
+            .content
+            .iter()
+            .filter(|cell| cell.bg == Color::Cyan)
+            .count();
+        assert!(
+            painted > 0 && painted < 20,
+            "só a aba ativa tem fundo: {painted}"
+        );
+    }
+
+    #[test]
+    fn text_cells_use_the_theme_foreground_by_default() {
+        let record = ready(snapshot("Teste", vec![plain_line("texto normal")]));
+        let mut state = state_with(vec![entry("w", record)]);
+        let theme = crate::domain::theme::Theme::preset("tokyo-night").unwrap();
+        state.set_theme_styles(ThemeStyles::new(
+            &theme,
+            crate::infrastructure::terminal_capabilities::ColorDepth::TrueColor,
+        ));
+        let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
+        let style = style_of_text(&buffer, "texto normal").unwrap();
+        assert_eq!(
+            style.fg,
+            Some(palette_color("tokyo-night", |palette| palette.foreground))
+        );
+        assert_eq!(
+            style.bg,
+            Some(palette_color("tokyo-night", |palette| palette.background))
+        );
+    }
+
+    #[test]
+    fn render_never_panics_on_zero_sized_frames_for_every_preset() {
+        for name in crate::domain::theme::preset_names() {
+            let mut state = themed_state_or_ansi(name);
+            for (width, height) in [(0, 0), (1, 1), (3, 2), (0, 10), (59, 19), (100, 30)] {
+                assert_eq!(
+                    draw(&state, width, height).len(),
+                    usize::from(height),
+                    "{name}"
+                );
+            }
+            press(&mut state, &[KeyInput::Enter, KeyInput::Character('?')]);
+            for (width, height) in [(0, 0), (1, 1), (59, 19)] {
+                assert_eq!(
+                    draw(&state, width, height).len(),
+                    usize::from(height),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    fn themed_state_or_ansi(name: &str) -> AppState {
+        if name == crate::domain::theme::DEFAULT_THEME_NAME {
+            state_with(vec![kanban_entry()])
+        } else {
+            themed_state(name)
+        }
+    }
 }
