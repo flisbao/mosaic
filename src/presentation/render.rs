@@ -1816,7 +1816,7 @@ mod tests {
         let theme = crate::domain::theme::Theme::preset(name).unwrap();
         state.set_theme_styles(ThemeStyles::new(
             &theme,
-            crate::infrastructure::terminal_capabilities::ColorDepth::TrueColor,
+            crate::domain::color_depth::ColorDepth::TrueColor,
         ));
         state
     }
@@ -1904,7 +1904,7 @@ mod tests {
             .without_background();
         state.set_theme_styles(ThemeStyles::new(
             &theme,
-            crate::infrastructure::terminal_capabilities::ColorDepth::TrueColor,
+            crate::domain::color_depth::ColorDepth::TrueColor,
         ));
         let accent = palette_color("nord", |palette| palette.accent);
         let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
@@ -1946,7 +1946,7 @@ mod tests {
         let theme = crate::domain::theme::Theme::preset("tokyo-night").unwrap();
         state.set_theme_styles(ThemeStyles::new(
             &theme,
-            crate::infrastructure::terminal_capabilities::ColorDepth::TrueColor,
+            crate::domain::color_depth::ColorDepth::TrueColor,
         ));
         let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
         let style = style_of_text(&buffer, "texto normal").unwrap();

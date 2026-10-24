@@ -1,9 +1,9 @@
 use std::process::ExitCode;
 
+use mosaic::domain::color_depth::ColorDepth;
 use mosaic::domain::theme::{
     preset_names, Palette, Rgb, Theme, ThemeError, ThemeRole, DEFAULT_THEME_NAME,
 };
-use mosaic::infrastructure::terminal_capabilities::ColorDepth;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const THEMES_USAGE: &str = "uso: mosaic themes [NOME]";

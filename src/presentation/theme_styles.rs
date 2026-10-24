@@ -1,8 +1,8 @@
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::domain::color_depth::ColorDepth;
 use crate::domain::theme::{Palette, Rgb, Theme};
 use crate::domain::widget_content::Tone;
-use crate::infrastructure::terminal_capabilities::ColorDepth;
 
 pub const BASIC_TERMINAL_WARNING: &str = "terminal sem 256 cores: usando o tema default";
 const INDEXED_CUBE_START: u8 = 16;
@@ -388,6 +388,22 @@ mod tests {
             } else if path.extension().is_some_and(|extension| extension == "rs") {
                 found.push(path);
             }
+        }
+    }
+
+    #[test]
+    fn no_presentation_file_depends_on_infrastructure() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presentation");
+        let mut files = Vec::new();
+        rust_files(&directory, &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let production = text.split(TEST_SECTION_MARKER).next().unwrap();
+            assert!(
+                !production.contains("crate::infrastructure"),
+                "{} importa infrastructure: presentation só enxerga domain e application",
+                file.display()
+            );
         }
     }
 

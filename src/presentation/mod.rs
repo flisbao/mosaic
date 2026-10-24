@@ -11,6 +11,7 @@ pub mod render;
 pub mod shortcuts;
 pub mod tab_layout;
 pub mod text_fit;
+pub mod theme_application;
 pub mod theme_styles;
 pub mod widget_box;
 pub mod widget_view;

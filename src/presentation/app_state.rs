@@ -1509,8 +1509,8 @@ mod tests {
 
     #[test]
     fn replacing_the_theme_keeps_the_rest_of_the_state() {
+        use crate::domain::color_depth::ColorDepth;
         use crate::domain::theme::Theme;
-        use crate::infrastructure::terminal_capabilities::ColorDepth;
         let mut app = app();
         press(&mut app, &[KeyInput::Down, KeyInput::Enter]);
         let focus = app.focused_entry();

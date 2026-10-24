@@ -30,6 +30,7 @@ use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations}
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::domain::action::ConfirmedAction;
+use mosaic::domain::color_depth::ColorDepth;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
@@ -48,7 +49,6 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
-use mosaic::infrastructure::terminal_capabilities::ColorDepth;
 use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime};
 use mosaic::presentation::app_events::{
     apply_event, stored_recommendation_result, AppEvent, EventContext,
@@ -61,7 +61,7 @@ use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
 };
-use mosaic::presentation::theme_styles::resolve_theme;
+use mosaic::presentation::theme_application::apply_theme;
 use ratatui::crossterm::event::{self, Event};
 use thiserror::Error;
 
@@ -192,10 +192,12 @@ fn initial_state(
         recommendation_record,
     );
     let mut state = AppState::new(entries, tabs);
-    let theme = resolve_theme(&config.theme, services.color_depth);
-    state.set_theme_styles(theme.styles);
-    let mut warnings = startup_warnings(config, services);
-    warnings.extend(theme.warning);
+    let warnings = apply_theme(
+        &mut state,
+        &config.theme,
+        services.color_depth,
+        startup_warnings(config, services),
+    );
     if let Some(notice) = startup_notice(&warnings) {
         state.show_notice(notice);
     }
@@ -505,11 +507,13 @@ fn apply_reloaded_config(
     next: AppConfig,
     plan: &ReloadPlan,
 ) {
-    let theme = resolve_theme(&next.theme, services.color_depth);
-    let mut warnings = next.warnings.clone();
-    warnings.extend(theme.warning);
+    let warnings = apply_theme(
+        state,
+        &next.theme,
+        services.color_depth,
+        next.warnings.clone(),
+    );
     let notice = reload_notice(&restart_sections(&services.config, &next), &warnings);
-    state.set_theme_styles(theme.styles);
     let TabLayout {
         entries,
         tabs,
