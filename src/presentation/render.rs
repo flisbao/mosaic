@@ -1,6 +1,6 @@
 use chrono::NaiveDateTime;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
@@ -20,6 +20,7 @@ use crate::presentation::key_hints::{
     context_hints, footer_hints, global_hints, HintContext, KeyHint,
 };
 use crate::presentation::text_fit::{flagged, truncate_to_width};
+use crate::presentation::theme_styles::ThemeStyles;
 use crate::presentation::widget_box::{
     box_block, box_header, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
 };
@@ -56,6 +57,7 @@ pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDate
     if area.width == 0 || area.height == 0 {
         return;
     }
+    fill_background(frame, area, state.styles());
     render_top_bar(frame, state, now, area);
     let body = body_area(area);
     if state.is_expanded() {
@@ -69,31 +71,37 @@ pub fn render(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDate
     render_alert(frame, state, area);
 }
 
+fn fill_background(frame: &mut Frame, area: Rect, styles: &ThemeStyles) {
+    if styles.paints_background() {
+        frame.render_widget(Block::new().style(styles.base()), area);
+    }
+}
+
+fn clear_with_theme(frame: &mut Frame, area: Rect, styles: &ThemeStyles) {
+    frame.render_widget(Clear, area);
+    fill_background(frame, area, styles);
+}
+
 fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
+    let styles = state.styles();
     let bar = Rect::new(area.x, area.y, area.width, TOP_BAR_HEIGHT.min(area.height));
     let mut spans = vec![Span::styled(
         format!(" {}  {} ", now.format("%H:%M"), now.format("%d/%m/%Y")),
-        Style::default().fg(Color::Cyan),
+        styles.accent(),
     )];
     for (position, tab) in state.tabs().iter().enumerate() {
         let style = if position == state.active_tab() {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            styles.active_tab()
         } else {
-            Style::default().fg(Color::DarkGray)
+            styles.muted()
         };
         spans.push(Span::styled(tab_label(position, &tab.name), style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), bar);
     if let Some(timer) = state.pomodoro() {
         frame.render_widget(
-            Paragraph::new(Line::styled(
-                pomodoro_text(timer),
-                Style::default().fg(Color::Green),
-            ))
-            .alignment(Alignment::Right),
+            Paragraph::new(Line::styled(pomodoro_text(timer), styles.ok()))
+                .alignment(Alignment::Right),
             bar,
         );
     }
@@ -123,10 +131,8 @@ fn render_footer(frame: &mut Frame, state: &AppState, area: Rect) {
         return;
     };
     let context = HintContext::from_expanded(state.is_expanded());
-    let key_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let description_style = Style::default().fg(Color::DarkGray);
+    let key_style = state.styles().key_hint();
+    let description_style = state.styles().muted();
     let mut spans = vec![Span::raw(FOOTER_LEADING_PADDING)];
     for hint in footer_hints(context, usize::from(area.width)) {
         spans.push(Span::styled(hint.keys, key_style));
@@ -186,6 +192,7 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
                     },
                     now,
                     warning: None,
+                    styles: state.styles(),
                 };
                 if let Some(entry) = state.entries().get(entry_index) {
                     render_widget_box(frame, entry, to_rect(area, placement.area), &context);
@@ -201,6 +208,7 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
                     emphasis: Emphasis::Focused,
                     now,
                     warning: Some(&warning),
+                    styles: state.styles(),
                 };
                 render_widget_box(frame, entry, to_rect(area, placement.area), &context);
             }
@@ -240,7 +248,7 @@ fn render_focus_column(frame: &mut Frame, state: &AppState, area: Rect) {
         .active_entry_indexes()
         .iter()
         .position(|&index| Some(index) == state.focused_entry());
-    let lines = focus_column_lines(&entries, focused, usize::from(area.width));
+    let lines = focus_column_lines(&entries, focused, usize::from(area.width), state.styles());
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -269,6 +277,7 @@ fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, conten
         state.shortcut_of(index),
         Emphasis::Focused,
         content.width,
+        state.styles(),
     );
     let inner = block.inner(content);
     let width = usize::from(inner.width);
@@ -278,6 +287,7 @@ fn render_detail(frame: &mut Frame, state: &AppState, now: NaiveDateTime, conten
         width,
         usize::from(inner.height),
         now,
+        state.styles(),
     );
     frame.render_widget(block, content);
     frame.render_widget(Paragraph::new(lines), inner);
@@ -289,8 +299,9 @@ fn detail_window(
     width: usize,
     height: usize,
     now: NaiveDateTime,
+    styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
-    let header = box_header(entry, width, now, FailureDetail::Shown);
+    let header = box_header(entry, width, now, FailureDetail::Shown, styles);
     let Some(sections) = entry
         .record
         .snapshot()
@@ -299,13 +310,21 @@ fn detail_window(
         return header;
     };
     let header_height = header.len();
-    let selected_row = selected_row(sections, selected, width).saturating_add(header_height);
+    let selected_row =
+        selected_row(sections, selected, width, styles).saturating_add(header_height);
     let scroll = selected_row.saturating_sub(height.saturating_sub(1));
     let mut window: Vec<Line<'static>> = header.into_iter().skip(scroll).take(height).collect();
     let remaining = height.saturating_sub(window.len());
     if remaining > 0 {
         let first_section_row = scroll.saturating_sub(header_height);
-        let section_lines = section_window(sections, selected, width, first_section_row, remaining);
+        let section_lines = section_window(
+            sections,
+            selected,
+            width,
+            first_section_row,
+            remaining,
+            styles,
+        );
         window.extend(dim_if_stale(section_lines, entry, now));
     }
     window
@@ -322,16 +341,21 @@ fn item_height(item: &DetailItem, wrap_width: usize) -> usize {
     }
 }
 
-fn section_preamble_height(section: &DetailSection, width: usize) -> usize {
-    HEADING_ROWS + render_blocks_limited(&section.display_blocks(), width, 0).total
+fn section_preamble_height(section: &DetailSection, width: usize, styles: &ThemeStyles) -> usize {
+    HEADING_ROWS + render_blocks_limited(&section.display_blocks(), width, 0, styles).total
 }
 
-fn selected_row(sections: &[DetailSection], selected: usize, width: usize) -> usize {
+fn selected_row(
+    sections: &[DetailSection],
+    selected: usize,
+    width: usize,
+    styles: &ThemeStyles,
+) -> usize {
     let wrap_width = item_wrap_width(width);
     let mut row = 0;
     let mut first_item_of_section = 0;
     for section in sections {
-        row += section_preamble_height(section, width);
+        row += section_preamble_height(section, width, styles);
         let last_item_of_section = first_item_of_section + section.items.len();
         if selected < last_item_of_section {
             let before = selected.saturating_sub(first_item_of_section);
@@ -357,6 +381,7 @@ fn section_window(
     width: usize,
     start: usize,
     count: usize,
+    styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
     let end = start.saturating_add(count);
     let wrap_width = item_wrap_width(width);
@@ -368,7 +393,9 @@ fn section_window(
             break;
         }
         let mut preamble = vec![section_heading_line(section, width)];
-        preamble.extend(render_blocks_limited(&section.display_blocks(), width, usize::MAX).lines);
+        preamble.extend(
+            render_blocks_limited(&section.display_blocks(), width, usize::MAX, styles).lines,
+        );
         push_visible(&mut window, &mut row, preamble, start, end);
         for item in &section.items {
             if row >= end {
@@ -384,7 +411,7 @@ fn section_window(
             push_visible(
                 &mut window,
                 &mut row,
-                item_lines(item, is_selected, width),
+                item_lines(item, is_selected, width, styles),
                 start,
                 end,
             );
@@ -451,11 +478,11 @@ struct ItemAppearance {
 }
 
 impl ItemAppearance {
-    fn for_selection(is_selected: bool) -> Self {
+    fn for_selection(is_selected: bool, styles: &ThemeStyles) -> Self {
         if is_selected {
             Self {
                 marker: SELECTION_MARKER,
-                style: Style::default().fg(Color::Cyan),
+                style: styles.accent(),
             }
         } else {
             Self {
@@ -466,8 +493,13 @@ impl ItemAppearance {
     }
 }
 
-fn item_lines(item: &DetailItem, is_selected: bool, width: usize) -> Vec<Line<'static>> {
-    let appearance = ItemAppearance::for_selection(is_selected);
+fn item_lines(
+    item: &DetailItem,
+    is_selected: bool,
+    width: usize,
+    styles: &ThemeStyles,
+) -> Vec<Line<'static>> {
+    let appearance = ItemAppearance::for_selection(is_selected, styles);
     let wrap_width = width.saturating_sub(WRAP_CONTINUATION_INDENT.width());
     wrap_to_width(&flagged(item.flag, &item.text), wrap_width)
         .into_iter()
@@ -490,11 +522,11 @@ fn render_notice(frame: &mut Frame, state: &AppState, area: Rect) {
     let Some(row) = notice_row(area) else {
         return;
     };
-    frame.render_widget(Clear, row);
+    clear_with_theme(frame, row, state.styles());
     frame.render_widget(
         Paragraph::new(Line::styled(
             truncate_to_width(notice, area.width as usize),
-            Style::default().fg(Color::Yellow),
+            state.styles().warn(),
         )),
         row,
     );
@@ -534,7 +566,7 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
             ("Confirmar ação", lines)
         }
     };
-    draw_popup(frame, area, title, &lines);
+    draw_popup(frame, area, title, &lines, state.styles());
 }
 
 fn render_alert(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -544,10 +576,10 @@ fn render_alert(frame: &mut Frame, state: &AppState, area: Rect) {
     let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
     lines.push(String::new());
     lines.push(ALERT_DISMISS_HINT.to_string());
-    draw_popup(frame, area, title, &lines);
+    draw_popup(frame, area, title, &lines, state.styles());
 }
 
-fn draw_popup(frame: &mut Frame, area: Rect, title: &str, lines: &[String]) {
+fn draw_popup(frame: &mut Frame, area: Rect, title: &str, lines: &[String], styles: &ThemeStyles) {
     let width = area.width.min(MODAL_MAXIMUM_WIDTH);
     let height = (lines.len() as u16 + MODAL_FRAME_THICKNESS).min(area.height);
     if width < MINIMUM_DRAWABLE_SIDE || height < MINIMUM_DRAWABLE_SIDE {
@@ -561,13 +593,13 @@ fn draw_popup(frame: &mut Frame, area: Rect, title: &str, lines: &[String]) {
     );
     let block = Block::bordered()
         .title(title.to_string())
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(styles.warn());
     let inner = block.inner(popup);
     let text: Vec<Line> = lines
         .iter()
         .map(|line| Line::from(truncate_to_width(line, inner.width as usize)))
         .collect();
-    frame.render_widget(Clear, popup);
+    clear_with_theme(frame, popup, styles);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(text), inner);
 }
@@ -645,6 +677,7 @@ mod tests {
     };
     use crate::presentation::app_state::{AppState, TabView, WidgetEntry};
     use crate::presentation::key_input::KeyInput;
+    use crate::presentation::theme_styles::ThemeStyles;
     use chrono::{NaiveDate, TimeDelta};
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -679,8 +712,14 @@ mod tests {
     fn item_lines_mark_the_selected_item_and_indent_continuations() {
         let item = detail_item("abcdefghij");
 
-        let selected: Vec<String> = item_lines(&item, true, 8).iter().map(plain).collect();
-        let normal: Vec<String> = item_lines(&item, false, 8).iter().map(plain).collect();
+        let selected: Vec<String> = item_lines(&item, true, 8, &ThemeStyles::ansi())
+            .iter()
+            .map(plain)
+            .collect();
+        let normal: Vec<String> = item_lines(&item, false, 8, &ThemeStyles::ansi())
+            .iter()
+            .map(plain)
+            .collect();
 
         assert_eq!(selected, vec!["> abcdef", "  ghij"]);
         assert_eq!(normal, vec!["  abcdef", "  ghij"]);
@@ -1509,10 +1548,24 @@ mod tests {
     #[test]
     fn section_window_is_the_same_slice_of_the_full_render() {
         let sections = sections_with_items(&[3, 0, 5, 2]);
-        let full = texts_of(&section_window(&sections, 4, 20, 0, usize::MAX));
+        let full = texts_of(&section_window(
+            &sections,
+            4,
+            20,
+            0,
+            usize::MAX,
+            &ThemeStyles::ansi(),
+        ));
         for start in 0..full.len() {
             for count in 1..6 {
-                let window = texts_of(&section_window(&sections, 4, 20, start, count));
+                let window = texts_of(&section_window(
+                    &sections,
+                    4,
+                    20,
+                    start,
+                    count,
+                    &ThemeStyles::ansi(),
+                ));
                 let end = (start + count).min(full.len());
                 assert_eq!(window, full[start..end], "início {start}, contagem {count}");
             }
@@ -1522,10 +1575,24 @@ mod tests {
     #[test]
     fn selected_row_points_at_the_selected_item_marker() {
         let sections = sections_with_items(&[3, 0, 5, 2]);
-        let full = texts_of(&section_window(&sections, 4, 20, 0, usize::MAX));
+        let full = texts_of(&section_window(
+            &sections,
+            4,
+            20,
+            0,
+            usize::MAX,
+            &ThemeStyles::ansi(),
+        ));
         for selected in 0..10 {
-            let full = texts_of(&section_window(&sections, selected, 20, 0, usize::MAX));
-            let row = selected_row(&sections, selected, 20);
+            let full = texts_of(&section_window(
+                &sections,
+                selected,
+                20,
+                0,
+                usize::MAX,
+                &ThemeStyles::ansi(),
+            ));
+            let row = selected_row(&sections, selected, 20, &ThemeStyles::ansi());
             assert!(
                 full[row].starts_with(SELECTION_MARKER),
                 "item {selected}: {full:?}"
@@ -1537,7 +1604,7 @@ mod tests {
     #[test]
     fn selected_row_is_zero_when_the_selection_is_out_of_range() {
         let sections = sections_with_items(&[2]);
-        assert_eq!(selected_row(&sections, 9, 20), 0);
+        assert_eq!(selected_row(&sections, 9, 20, &ThemeStyles::ansi()), 0);
     }
 
     #[test]

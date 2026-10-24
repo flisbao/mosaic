@@ -1,9 +1,9 @@
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 use crate::domain::widget::Flag;
-use crate::domain::widget_content::{Tone, ELLIPSIS};
+use crate::domain::widget_content::ELLIPSIS;
 
 pub const TAG_SEPARATOR: &str = " ";
 
@@ -13,19 +13,6 @@ pub fn display_width(text: &str) -> usize {
     text.chars()
         .map(|character| character.width().unwrap_or(0))
         .sum()
-}
-
-pub fn tone_style(tone: Tone) -> Style {
-    match tone {
-        Tone::Normal => Style::default(),
-        Tone::Muted => Style::default().fg(Color::DarkGray),
-        Tone::Ok => Style::default().fg(Color::Green),
-        Tone::Warn => Style::default().fg(Color::Yellow),
-        Tone::Danger => Style::default().fg(Color::Red),
-        Tone::Current => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    }
 }
 
 pub fn flagged(flag: Option<Flag>, text: &str) -> String {

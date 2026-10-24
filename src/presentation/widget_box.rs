@@ -1,6 +1,6 @@
 use chrono::{NaiveDateTime, TimeDelta};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
@@ -9,30 +9,27 @@ use crate::domain::widget::WidgetRecord;
 use crate::presentation::app_state::WidgetEntry;
 use crate::presentation::grid_layout::{visible_item_capacity, MINIMUM_BOX_HEIGHT};
 use crate::presentation::text_fit::{display_width, truncate_to_width};
+use crate::presentation::theme_styles::ThemeStyles;
 use crate::presentation::widget_view::render_blocks_limited;
 
 const LOADING_TEXT: &str = "carregando…";
 const FAILURE_PREFIX: &str = "⚠ falha: ";
 pub const FAILURE_MARK: &str = "⚠ ";
-pub const FAILURE_COLOR: Color = Color::Red;
-const SELECTED_BORDER_COLOR: Color = Color::Cyan;
-const IDLE_BORDER_COLOR: Color = Color::DarkGray;
 const MINIMUM_BOX_WIDTH: u16 = 3;
 const BORDER_COLUMNS: u16 = 2;
 const REFRESH_INDICATOR: &str = " ⟳";
 const OVERFLOW_PREFIX: &str = "+";
 const OVERFLOW_SUFFIX: &str = " itens";
-const OVERFLOW_COLOR: Color = Color::DarkGray;
 const STALE_AGE_PREFIX: &str = "sem atualizar há ";
 const MINUTES_PER_HOUR: i64 = 60;
 const HOURS_PER_DAY: i64 = 24;
-const WARNING_COLOR: Color = Color::Yellow;
 
 pub struct BoxContext<'a> {
     pub shortcut: Option<char>,
     pub emphasis: Emphasis,
     pub now: NaiveDateTime,
     pub warning: Option<&'a str>,
+    pub styles: &'a ThemeStyles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,14 +48,26 @@ pub fn render_widget_box(frame: &mut Frame, entry: &WidgetEntry, area: Rect, con
     if area.width < MINIMUM_BOX_WIDTH || area.height < MINIMUM_BOX_HEIGHT {
         return;
     }
-    let block = box_block(entry, context.shortcut, context.emphasis, area.width);
+    let block = box_block(
+        entry,
+        context.shortcut,
+        context.emphasis,
+        area.width,
+        context.styles,
+    );
     let inner = block.inner(area);
     let width = usize::from(inner.width);
-    let mut header = warning_lines(context.warning, width);
-    header.extend(box_header(entry, width, context.now, FailureDetail::Hidden));
+    let mut header = warning_lines(context.warning, width, context.styles);
+    header.extend(box_header(
+        entry,
+        width,
+        context.now,
+        FailureDetail::Hidden,
+        context.styles,
+    ));
     let header_rows = u16::try_from(header.len()).unwrap_or(u16::MAX);
     let capacity = visible_item_capacity(area.height.saturating_sub(header_rows), entry.max_items);
-    let blocks = box_blocks(entry, width, capacity);
+    let blocks = box_blocks(entry, width, capacity, context.styles);
     let mut lines = header;
     lines.extend(dim_if_stale(blocks, entry, context.now));
     frame.render_widget(block, area);
@@ -70,6 +79,7 @@ pub fn box_block(
     shortcut: Option<char>,
     emphasis: Emphasis,
     outer_width: u16,
+    styles: &ThemeStyles,
 ) -> Block<'static> {
     let record = &entry.record;
     let title_width = usize::from(outer_width.saturating_sub(BORDER_COLUMNS));
@@ -85,11 +95,7 @@ pub fn box_block(
     };
     Block::bordered()
         .title(Line::styled(title, Style::default().add_modifier(weight)))
-        .border_style(
-            Style::default()
-                .fg(border_color(record, emphasis))
-                .add_modifier(weight),
-        )
+        .border_style(border_style(record, emphasis, styles).add_modifier(weight))
 }
 
 pub fn entry_title(entry: &WidgetEntry) -> String {
@@ -99,13 +105,13 @@ pub fn entry_title(entry: &WidgetEntry) -> String {
     }
 }
 
-pub fn border_color(record: &WidgetRecord, emphasis: Emphasis) -> Color {
+pub fn border_style(record: &WidgetRecord, emphasis: Emphasis, styles: &ThemeStyles) -> Style {
     if record.is_failing() {
-        FAILURE_COLOR
+        styles.danger()
     } else if emphasis == Emphasis::Focused {
-        SELECTED_BORDER_COLOR
+        styles.accent()
     } else {
-        IDLE_BORDER_COLOR
+        styles.muted()
     }
 }
 
@@ -114,27 +120,37 @@ pub fn box_header(
     width: usize,
     now: NaiveDateTime,
     detail: FailureDetail,
+    styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
     let record = &entry.record;
     match record.snapshot() {
-        None => no_snapshot_lines(record, width),
-        Some(_) => failure_header(record, width, now, detail),
+        None => no_snapshot_lines(record, width, styles),
+        Some(_) => failure_header(record, width, now, detail, styles),
     }
 }
 
-fn box_blocks(entry: &WidgetEntry, width: usize, capacity: usize) -> Vec<Line<'static>> {
+fn box_blocks(
+    entry: &WidgetEntry,
+    width: usize,
+    capacity: usize,
+    styles: &ThemeStyles,
+) -> Vec<Line<'static>> {
     let Some(snapshot) = entry.record.snapshot() else {
         return Vec::new();
     };
-    let limited = render_blocks_limited(&snapshot.summary.blocks, width, capacity);
-    clip_limited(limited.lines, limited.total, capacity)
+    let limited = render_blocks_limited(&snapshot.summary.blocks, width, capacity, styles);
+    clip_limited(limited.lines, limited.total, capacity, styles)
 }
 
-fn no_snapshot_lines(record: &WidgetRecord, width: usize) -> Vec<Line<'static>> {
+fn no_snapshot_lines(
+    record: &WidgetRecord,
+    width: usize,
+    styles: &ThemeStyles,
+) -> Vec<Line<'static>> {
     match record.last_error() {
         Some(message) => message
             .lines()
-            .map(|line| failure_line(line, width))
+            .map(|line| failure_line(line, width, styles))
             .collect(),
         None => vec![Line::from(LOADING_TEXT)],
     }
@@ -145,6 +161,7 @@ pub(crate) fn failure_header(
     width: usize,
     now: NaiveDateTime,
     detail: FailureDetail,
+    styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
     let Some(message) = record.last_error() else {
         return Vec::new();
@@ -152,11 +169,11 @@ pub(crate) fn failure_header(
     let mut lines = Vec::new();
     if detail == FailureDetail::Shown {
         let reason = format!("{FAILURE_PREFIX}{message}");
-        lines.extend(reason.lines().map(|line| failure_line(line, width)));
+        lines.extend(reason.lines().map(|line| failure_line(line, width, styles)));
     }
     if let Some(age) = record.age(now) {
         let text = format!("{STALE_AGE_PREFIX}{}", age_text(age));
-        lines.push(failure_line(&text, width));
+        lines.push(failure_line(&text, width, styles));
     }
     lines
 }
@@ -192,21 +209,13 @@ pub fn dim_if_stale(
         .collect()
 }
 
-fn failure_line(text: &str, width: usize) -> Line<'static> {
-    Line::styled(
-        truncate_to_width(text, width),
-        Style::default().fg(FAILURE_COLOR),
-    )
+fn failure_line(text: &str, width: usize, styles: &ThemeStyles) -> Line<'static> {
+    Line::styled(truncate_to_width(text, width), styles.danger())
 }
 
-fn warning_lines(warning: Option<&str>, width: usize) -> Vec<Line<'static>> {
+fn warning_lines(warning: Option<&str>, width: usize, styles: &ThemeStyles) -> Vec<Line<'static>> {
     warning
-        .map(|text| {
-            Line::styled(
-                truncate_to_width(text, width),
-                Style::default().fg(WARNING_COLOR),
-            )
-        })
+        .map(|text| Line::styled(truncate_to_width(text, width), styles.warn()))
         .into_iter()
         .collect()
 }
@@ -221,12 +230,21 @@ pub fn box_title(shortcut: Option<char>, title: &str, refreshing: bool, width: u
     truncate_to_width(&format!("{prefix}{body}{suffix}"), width)
 }
 
-pub fn clip_with_overflow(lines: Vec<Line<'static>>, capacity: usize) -> Vec<Line<'static>> {
+pub fn clip_with_overflow(
+    lines: Vec<Line<'static>>,
+    capacity: usize,
+    styles: &ThemeStyles,
+) -> Vec<Line<'static>> {
     let total = lines.len();
-    clip_limited(lines, total, capacity)
+    clip_limited(lines, total, capacity, styles)
 }
 
-fn clip_limited(lines: Vec<Line<'static>>, total: usize, capacity: usize) -> Vec<Line<'static>> {
+fn clip_limited(
+    lines: Vec<Line<'static>>,
+    total: usize,
+    capacity: usize,
+    styles: &ThemeStyles,
+) -> Vec<Line<'static>> {
     if capacity == 0 {
         return Vec::new();
     }
@@ -236,18 +254,19 @@ fn clip_limited(lines: Vec<Line<'static>>, total: usize, capacity: usize) -> Vec
     let kept = capacity.saturating_sub(1);
     let omitted = total.saturating_sub(kept);
     let mut clipped: Vec<Line<'static>> = lines.into_iter().take(kept).collect();
-    clipped.push(overflow_line(omitted));
+    clipped.push(overflow_line(omitted, styles));
     clipped
 }
 
-fn overflow_line(omitted: usize) -> Line<'static> {
+fn overflow_line(omitted: usize, styles: &ThemeStyles) -> Line<'static> {
     let text = format!("{OVERFLOW_PREFIX}{omitted}{OVERFLOW_SUFFIX}");
-    Line::from(Span::styled(text, Style::default().fg(OVERFLOW_COLOR)))
+    Line::from(Span::styled(text, styles.muted()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::theme_styles::ThemeStyles;
     use crate::test_support::widget_box_now as now;
     use chrono::TimeDelta;
     use ratatui::text::Line;
@@ -269,8 +288,20 @@ mod tests {
         let mut record = WidgetRecord::loading();
         record.apply::<String>(Err("quebrou".to_string()), now());
 
-        let hidden = failure_header(&record, 40, now(), FailureDetail::Hidden);
-        let shown = failure_header(&record, 40, now(), FailureDetail::Shown);
+        let hidden = failure_header(
+            &record,
+            40,
+            now(),
+            FailureDetail::Hidden,
+            &ThemeStyles::ansi(),
+        );
+        let shown = failure_header(
+            &record,
+            40,
+            now(),
+            FailureDetail::Shown,
+            &ThemeStyles::ansi(),
+        );
 
         assert!(hidden.is_empty());
         assert_eq!(shown.len(), 1);
@@ -283,17 +314,24 @@ mod tests {
     }
 
     #[test]
-    fn border_color_depends_on_failure_then_emphasis() {
+    fn border_style_depends_on_failure_then_emphasis() {
+        let styles = ThemeStyles::ansi();
         let loading = WidgetRecord::loading();
         let mut failing = WidgetRecord::loading();
         failing.apply::<String>(Err("x".to_string()), now());
 
-        assert_eq!(border_color(&failing, Emphasis::Focused), FAILURE_COLOR);
         assert_eq!(
-            border_color(&loading, Emphasis::Focused),
-            SELECTED_BORDER_COLOR
+            border_style(&failing, Emphasis::Focused, &styles),
+            styles.danger()
         );
-        assert_eq!(border_color(&loading, Emphasis::Normal), IDLE_BORDER_COLOR);
+        assert_eq!(
+            border_style(&loading, Emphasis::Focused, &styles),
+            styles.accent()
+        );
+        assert_eq!(
+            border_style(&loading, Emphasis::Normal, &styles),
+            styles.muted()
+        );
     }
 
     #[test]
@@ -301,7 +339,10 @@ mod tests {
         let lines: Vec<Line<'static>> = (1..=10)
             .map(|number| line(&format!("linha {number}")))
             .collect();
-        let clipped: Vec<String> = clip_with_overflow(lines, 4).iter().map(line_text).collect();
+        let clipped: Vec<String> = clip_with_overflow(lines, 4, &ThemeStyles::ansi())
+            .iter()
+            .map(line_text)
+            .collect();
         assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+7 itens"]);
     }
 
@@ -310,19 +351,25 @@ mod tests {
         let prefix: Vec<Line<'static>> = (1..=4)
             .map(|number| line(&format!("linha {number}")))
             .collect();
-        let clipped: Vec<String> = clip_limited(prefix, 10, 4).iter().map(line_text).collect();
+        let clipped: Vec<String> = clip_limited(prefix, 10, 4, &ThemeStyles::ansi())
+            .iter()
+            .map(line_text)
+            .collect();
         assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+7 itens"]);
     }
 
     #[test]
     fn lines_within_capacity_are_kept() {
         let lines = vec![line("a"), line("b")];
-        assert_eq!(clip_with_overflow(lines.clone(), 2), lines);
+        assert_eq!(
+            clip_with_overflow(lines.clone(), 2, &ThemeStyles::ansi()),
+            lines
+        );
     }
 
     #[test]
     fn capacity_zero_renders_nothing() {
-        assert!(clip_with_overflow(vec![line("a"), line("b")], 0).is_empty());
+        assert!(clip_with_overflow(vec![line("a"), line("b")], 0, &ThemeStyles::ansi()).is_empty());
     }
 
     #[test]
@@ -359,7 +406,10 @@ mod tests {
         let lines: Vec<Line<'static>> = (1..=5)
             .map(|number| line(&format!("linha {number}")))
             .collect();
-        let clipped: Vec<String> = clip_with_overflow(lines, 4).iter().map(line_text).collect();
+        let clipped: Vec<String> = clip_with_overflow(lines, 4, &ThemeStyles::ansi())
+            .iter()
+            .map(line_text)
+            .collect();
         assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+2 itens"]);
     }
 

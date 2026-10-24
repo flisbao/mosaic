@@ -2,14 +2,15 @@ use ratatui::text::Line;
 
 use crate::domain::blocks::Block;
 use crate::presentation::blocks::render_block;
+use crate::presentation::theme_styles::ThemeStyles;
 
-pub fn render_blocks(blocks: &[Block], width: usize) -> Vec<Line<'static>> {
+pub fn render_blocks(blocks: &[Block], width: usize, styles: &ThemeStyles) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![];
     }
     blocks
         .iter()
-        .flat_map(|block| render_block(block, width))
+        .flat_map(|block| render_block(block, width, styles))
         .collect()
 }
 
@@ -20,7 +21,12 @@ pub struct LimitedLines {
 
 /// Renderiza blocos inteiros só até juntar `limit` linhas e conta as demais sem renderizá-las
 /// quando o tipo de bloco permite. `total` é o número de linhas que `render_blocks` geraria.
-pub fn render_blocks_limited(blocks: &[Block], width: usize, limit: usize) -> LimitedLines {
+pub fn render_blocks_limited(
+    blocks: &[Block],
+    width: usize,
+    limit: usize,
+    styles: &ThemeStyles,
+) -> LimitedLines {
     let mut limited = LimitedLines {
         lines: vec![],
         total: 0,
@@ -30,9 +36,9 @@ pub fn render_blocks_limited(blocks: &[Block], width: usize, limit: usize) -> Li
     }
     for block in blocks {
         if limited.lines.len() >= limit {
-            limited.total += block_line_count(block, width);
+            limited.total += block_line_count(block, width, styles);
         } else {
-            let rendered = render_block(block, width);
+            let rendered = render_block(block, width, styles);
             limited.total += rendered.len();
             limited.lines.extend(rendered);
         }
@@ -40,11 +46,11 @@ pub fn render_blocks_limited(blocks: &[Block], width: usize, limit: usize) -> Li
     limited
 }
 
-fn block_line_count(block: &Block, width: usize) -> usize {
+fn block_line_count(block: &Block, width: usize, styles: &ThemeStyles) -> usize {
     match block {
         Block::Lines(lines) => lines.len(),
         Block::Rows(rows) => rows.len(),
-        Block::Stat { .. } | Block::Table { .. } => render_block(block, width).len(),
+        Block::Stat { .. } | Block::Table { .. } => render_block(block, width, styles).len(),
     }
 }
 
@@ -71,7 +77,8 @@ mod tests {
     };
     use crate::domain::widget::Flag;
     use crate::domain::widget_content::{Align, Tone};
-    use crate::presentation::text_fit::{display_width, tone_style};
+    use crate::presentation::text_fit::display_width;
+    use crate::presentation::theme_styles::ThemeStyles;
     use ratatui::style::{Color, Modifier};
 
     fn line(text: &str, flag: Option<Flag>) -> WidgetLine {
@@ -99,7 +106,7 @@ mod tests {
     }
 
     fn plain(blocks: &[Block], width: usize) -> Vec<String> {
-        lines_to_plain_text(&render_blocks(blocks, width))
+        lines_to_plain_text(&render_blocks(blocks, width, &ThemeStyles::ansi()))
     }
 
     fn widest(lines: &[String]) -> usize {
@@ -139,9 +146,9 @@ mod tests {
     #[test]
     fn limited_render_counts_every_line_of_every_block_kind() {
         let blocks = one_block_of_each_kind();
-        let expected_total = render_blocks(&blocks, 20).len();
+        let expected_total = render_blocks(&blocks, 20, &ThemeStyles::ansi()).len();
         for limit in 0..=expected_total + 1 {
-            let limited = render_blocks_limited(&blocks, 20, limit);
+            let limited = render_blocks_limited(&blocks, 20, limit, &ThemeStyles::ansi());
             assert_eq!(limited.total, expected_total, "limite {limit}");
         }
     }
@@ -150,7 +157,7 @@ mod tests {
     fn limited_render_keeps_a_prefix_of_the_full_render() {
         let blocks = one_block_of_each_kind();
         let full = plain(&blocks, 20);
-        let limited = render_blocks_limited(&blocks, 20, 2);
+        let limited = render_blocks_limited(&blocks, 20, 2, &ThemeStyles::ansi());
         let kept = lines_to_plain_text(&limited.lines);
         assert!(kept.len() >= 2);
         assert_eq!(kept[..], full[..kept.len()]);
@@ -160,14 +167,14 @@ mod tests {
     fn limited_render_skips_blocks_past_the_limit() {
         let many: Vec<WidgetLine> = (0..500).map(|_| line("x", None)).collect();
         let blocks = [Block::Lines(many.clone()), Block::Lines(many)];
-        let limited = render_blocks_limited(&blocks, 20, 3);
+        let limited = render_blocks_limited(&blocks, 20, 3, &ThemeStyles::ansi());
         assert_eq!(limited.lines.len(), 500);
         assert_eq!(limited.total, 1000);
     }
 
     #[test]
     fn limited_render_at_width_zero_is_empty() {
-        let limited = render_blocks_limited(&one_block_of_each_kind(), 0, 5);
+        let limited = render_blocks_limited(&one_block_of_each_kind(), 0, 5, &ThemeStyles::ansi());
         assert!(limited.lines.is_empty());
         assert_eq!(limited.total, 0);
     }
@@ -255,13 +262,14 @@ mod tests {
     #[test]
     fn width_zero_and_one_do_not_panic() {
         let blocks = [Block::Rows(vec![row(Some("1"), "a", &["t"])])];
-        assert!(render_blocks(&blocks, 0).is_empty());
+        assert!(render_blocks(&blocks, 0, &ThemeStyles::ansi()).is_empty());
         assert!(widest(&plain(&blocks, 1)) <= 1);
     }
 
     #[test]
     fn tone_style_maps_every_tone() {
-        let normal = tone_style(Tone::Normal);
+        let styles = ThemeStyles::ansi();
+        let normal = styles.tone(Tone::Normal);
         for tone in [
             Tone::Muted,
             Tone::Ok,
@@ -269,17 +277,17 @@ mod tests {
             Tone::Danger,
             Tone::Current,
         ] {
-            assert_ne!(tone_style(tone), normal, "{tone:?}");
+            assert_ne!(styles.tone(tone), normal, "{tone:?}");
         }
-        assert_eq!(tone_style(Tone::Ok).fg, Some(Color::Green));
-        assert_eq!(tone_style(Tone::Warn).fg, Some(Color::Yellow));
-        assert_eq!(tone_style(Tone::Danger).fg, Some(Color::Red));
-        assert_eq!(tone_style(Tone::Muted).fg, Some(Color::DarkGray));
+        assert_eq!(styles.tone(Tone::Ok).fg, Some(Color::Green));
+        assert_eq!(styles.tone(Tone::Warn).fg, Some(Color::Yellow));
+        assert_eq!(styles.tone(Tone::Danger).fg, Some(Color::Red));
+        assert_eq!(styles.tone(Tone::Muted).fg, Some(Color::DarkGray));
     }
 
     #[test]
     fn current_tone_is_bold() {
-        let style = tone_style(Tone::Current);
+        let style = ThemeStyles::ansi().tone(Tone::Current);
         assert_eq!(style.fg, Some(Color::Cyan));
         assert!(style.add_modifier.contains(Modifier::BOLD));
     }
@@ -339,7 +347,7 @@ mod tests {
     #[test]
     fn stat_value_is_bold_in_the_item_tone() {
         let blocks = [stat(vec![stat_item("3", "x")], None)];
-        let lines = render_blocks(&blocks, 20);
+        let lines = render_blocks(&blocks, 20, &ThemeStyles::ansi());
         let value = &lines[0].spans[0];
         assert_eq!(value.content, "3");
         assert_eq!(value.style.fg, Some(Color::Green));
@@ -349,7 +357,7 @@ mod tests {
     #[test]
     fn stat_hint_is_a_muted_line_below() {
         let blocks = [stat(vec![stat_item("3", "x")], Some("hoje"))];
-        let lines = render_blocks(&blocks, 20);
+        let lines = render_blocks(&blocks, 20, &ThemeStyles::ansi());
         assert_eq!(lines_to_plain_text(&lines), vec!["3 x", "hoje"]);
         assert_eq!(lines[1].spans[0].style.fg, Some(Color::DarkGray));
     }
@@ -384,7 +392,7 @@ mod tests {
     #[test]
     fn table_header_is_bold() {
         let blocks = [table(vec![column("A", Align::Left)], vec![])];
-        let lines = render_blocks(&blocks, 10);
+        let lines = render_blocks(&blocks, 10, &ThemeStyles::ansi());
         assert!(lines[0].spans[0]
             .style
             .add_modifier
@@ -428,7 +436,7 @@ mod tests {
             vec![column("A", Align::Left)],
             vec![vec![flagged_cell]],
         )];
-        let lines = render_blocks(&blocks, 10);
+        let lines = render_blocks(&blocks, 10, &ThemeStyles::ansi());
         assert_eq!(lines_to_plain_text(&lines)[1], "⚠ x");
         assert_eq!(lines[1].spans[0].style.fg, Some(Color::Red));
     }
@@ -467,7 +475,7 @@ mod tests {
     fn extreme_block_counts_are_bounded() {
         let blocks: Vec<Block> = (0..20).flat_map(|_| pathological_blocks()).collect();
         let started = std::time::Instant::now();
-        let lines = render_blocks(&blocks, 10);
+        let lines = render_blocks(&blocks, 10, &ThemeStyles::ansi());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert!(!lines.is_empty());
     }

@@ -8,17 +8,23 @@ use crate::domain::blocks::{
 };
 use crate::domain::widget_content::Align;
 use crate::presentation::text_fit::{
-    clip_pieces, display_width, flagged, tone_style, truncate_to_width, Piece,
+    clip_pieces, display_width, flagged, truncate_to_width, Piece,
 };
+use crate::presentation::theme_styles::ThemeStyles;
 
 const COLUMN_SEPARATOR: &str = "  ";
 
 pub struct TableRenderer;
 
 impl BlockRenderer for TableRenderer {
-    fn render(&self, block: &Block, width: usize) -> Option<Vec<Line<'static>>> {
+    fn render(
+        &self,
+        block: &Block,
+        width: usize,
+        styles: &ThemeStyles,
+    ) -> Option<Vec<Line<'static>>> {
         match block {
-            Block::Table { columns, rows } => Some(render_table(columns, rows, width)),
+            Block::Table { columns, rows } => Some(render_table(columns, rows, width, styles)),
             _ => None,
         }
     }
@@ -62,7 +68,12 @@ fn shrink_to_fit(widths: &mut [usize], width: usize) {
     }
 }
 
-fn render_table(columns: &[Column], rows: &[Vec<Cell>], width: usize) -> Vec<Line<'static>> {
+fn render_table(
+    columns: &[Column],
+    rows: &[Vec<Cell>],
+    width: usize,
+    styles: &ThemeStyles,
+) -> Vec<Line<'static>> {
     let separator_width = display_width(COLUMN_SEPARATOR);
     let visible = columns
         .len()
@@ -79,7 +90,7 @@ fn render_table(columns: &[Column], rows: &[Vec<Cell>], width: usize) -> Vec<Lin
     for row in rows {
         let cells = (0..visible)
             .map(|index| match row.get(index) {
-                Some(cell) => (cell_text(cell), tone_style(cell.tone)),
+                Some(cell) => (cell_text(cell), styles.tone(cell.tone)),
                 None => (String::new(), Style::default()),
             })
             .collect::<Vec<_>>();

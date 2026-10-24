@@ -360,4 +360,44 @@ mod tests {
         );
         assert_eq!(styles.tone(Tone::Normal).bg, None);
     }
+
+    const THEME_STYLES_FILE: &str = "theme_styles.rs";
+    const TEST_SECTION_MARKER: &str = "#[cfg(test)]";
+    const RAW_COLOR_MARKERS: [&str; 3] = ["Color::", ".fg(", ".bg("];
+
+    fn rust_files(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                found.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn no_presentation_file_uses_raw_colors() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presentation");
+        let mut files = Vec::new();
+        rust_files(&directory, &mut files);
+        assert!(files.len() > 10);
+        for file in files {
+            if file
+                .file_name()
+                .is_some_and(|name| name == THEME_STYLES_FILE)
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).unwrap();
+            let production = text.split(TEST_SECTION_MARKER).next().unwrap();
+            for marker in RAW_COLOR_MARKERS {
+                assert!(
+                    !production.contains(marker),
+                    "{} usa '{marker}': use o ThemeStyles",
+                    file.display()
+                );
+            }
+        }
+    }
 }

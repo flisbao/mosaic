@@ -7,22 +7,28 @@ use crate::domain::blocks::{
     Block,
 };
 use crate::presentation::text_fit::{
-    clip_pieces, display_width, fit_pieces, flagged, pieces_width, tone_style, truncate_to_width,
-    Piece, TAG_SEPARATOR,
+    clip_pieces, display_width, fit_pieces, flagged, pieces_width, truncate_to_width, Piece,
+    TAG_SEPARATOR,
 };
+use crate::presentation::theme_styles::ThemeStyles;
 
 pub struct RowsRenderer;
 
 impl BlockRenderer for RowsRenderer {
-    fn render(&self, block: &Block, width: usize) -> Option<Vec<Line<'static>>> {
+    fn render(
+        &self,
+        block: &Block,
+        width: usize,
+        styles: &ThemeStyles,
+    ) -> Option<Vec<Line<'static>>> {
         match block {
-            Block::Rows(rows) => Some(render_rows(rows, width)),
+            Block::Rows(rows) => Some(render_rows(rows, width, styles)),
             _ => None,
         }
     }
 }
 
-fn render_rows(rows: &[Row], width: usize) -> Vec<Line<'static>> {
+fn render_rows(rows: &[Row], width: usize, styles: &ThemeStyles) -> Vec<Line<'static>> {
     let time_width = rows
         .iter()
         .filter_map(|row| row.time.as_deref())
@@ -30,12 +36,12 @@ fn render_rows(rows: &[Row], width: usize) -> Vec<Line<'static>> {
         .max()
         .unwrap_or(0);
     rows.iter()
-        .map(|row| render_row(row, time_width, width))
+        .map(|row| render_row(row, time_width, width, styles))
         .collect()
 }
 
-fn render_row(row: &Row, time_width: usize, width: usize) -> Line<'static> {
-    let row_style = tone_style(row.tone);
+fn render_row(row: &Row, time_width: usize, width: usize, styles: &ThemeStyles) -> Line<'static> {
+    let row_style = styles.tone(row.tone);
     let mut pieces: Vec<Piece> = vec![];
     if time_width > 0 {
         let time = row.time.as_deref().unwrap_or("");
@@ -44,7 +50,7 @@ fn render_row(row: &Row, time_width: usize, width: usize) -> Line<'static> {
     }
     let remaining = width.saturating_sub(pieces_width(&pieces));
     let text = flagged(row.flag, &row.text);
-    let tags = tag_pieces(&row.tags);
+    let tags = tag_pieces(&row.tags, styles);
     let tags_width = pieces_width(&tags);
     let separator_width = display_width(TAG_SEPARATOR);
     let (text_budget, tags_budget) = if tags.is_empty() {
@@ -71,13 +77,13 @@ fn render_row(row: &Row, time_width: usize, width: usize) -> Line<'static> {
     clip_pieces(pieces, width)
 }
 
-fn tag_pieces(tags: &[Tag]) -> Vec<Piece> {
+fn tag_pieces(tags: &[Tag], styles: &ThemeStyles) -> Vec<Piece> {
     let mut pieces = vec![];
     for (index, tag) in tags.iter().enumerate() {
         if index > 0 {
             pieces.push((TAG_SEPARATOR.to_string(), Style::default()));
         }
-        pieces.push((format!("[{}]", tag.text), tone_style(tag.tone)));
+        pieces.push((format!("[{}]", tag.text), styles.tone(tag.tone)));
     }
     pieces
 }
