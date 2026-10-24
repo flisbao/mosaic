@@ -96,3 +96,26 @@ fn list_prints_one_plugin_per_line() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(text(&output.stdout), "github\njira\n");
 }
+
+#[test]
+fn an_invalid_plugin_name_is_a_usage_error() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    write_plugin(source.path(), "jira");
+    for bad in ["../x", "Jira", "jira.py"] {
+        let output = run_plugins(&[
+            "install",
+            "--from",
+            source.path().to_str().unwrap(),
+            "--to",
+            target.path().to_str().unwrap(),
+            bad,
+        ]);
+        assert_eq!(output.status.code(), Some(EXIT_USAGE), "{bad}");
+        assert!(
+            text(&output.stderr).contains("nome de plugin inválido"),
+            "{bad}"
+        );
+    }
+    assert!(!target.path().join("jira").exists());
+}

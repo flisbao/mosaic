@@ -127,6 +127,10 @@ fn run_install(arguments: &[String]) -> ExitCode {
             report(&outcomes, &invocation);
             ExitCode::SUCCESS
         }
+        Err(PluginsError::InvalidName(name)) => {
+            eprintln!("mosaic: nome de plugin inválido: {name}\n{PLUGINS_USAGE}");
+            ExitCode::from(EXIT_CODE_USAGE)
+        }
         Err(error) => failure(&error),
     }
 }
