@@ -101,7 +101,7 @@ priority_prompt = "prompts/prioridade.md"
 # gcalcli: CALENDAR_SOURCE = "gcalcli" (rode `gcalcli init` antes).
 
 # --- Pull requests (descomente o seu; passo a passo em plugins/<github|azure-devops|gitlab>/README.md no repositório) ---
-#   export GITHUB_TOKEN_PRS="..."   export AZDO_TOKEN="..."   export GITLAB_TOKEN_MRS="..."
+#   export GITHUB_TOKEN_PRS="..."   export GITLAB_TOKEN_MRS="..."   (Azure DevOps usa az login: sem token)
 # [[widgets]]
 # id = "github-prs"
 # command = "python3"
@@ -119,11 +119,11 @@ priority_prompt = "prompts/prioridade.md"
 # args = ["plugins/azure-devops/azure_devops.py"]
 # interval_seconds = 120
 # timeout_seconds = 30
-# inherit_env = ["AZDO_TOKEN"]
+# inherit_env = []
 #
 # [widgets.env]
 # AZDO_ORGANIZATION = "minha-org"
-# AZDO_TOKEN_ENV = "AZDO_TOKEN"
+# AZDO_AUTH_METHOD = "azure-cli"
 #
 # [[widgets]]
 # id = "gitlab-mrs"
@@ -397,6 +397,8 @@ mod tests {
         assert!(text.contains("# args = [\"plugins/azure-devops/azure_devops.py\"]"));
         assert!(text.contains("# args = [\"plugins/gitlab/gitlab_mrs.py\"]"));
         assert!(text.contains("# AZDO_ORGANIZATION = \"minha-org\""));
+        assert!(text.contains("# AZDO_AUTH_METHOD = \"azure-cli\""));
+        assert!(!text.contains("AZDO_TOKEN"));
     }
 
     #[test]
