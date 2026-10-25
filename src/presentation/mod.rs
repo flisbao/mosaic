@@ -3,6 +3,7 @@ pub mod app_state;
 pub mod blocks;
 pub mod focus_column;
 pub mod grid_layout;
+pub mod indexed_palette;
 pub mod key_hints;
 pub mod key_input;
 pub mod redraw_policy;
