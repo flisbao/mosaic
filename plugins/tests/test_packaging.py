@@ -18,7 +18,7 @@ PACKAGED_SKILLS = "usr/share/mosaic/skills"
 WORKFLOWS = REPOSITORY_ROOT / ".github" / "workflows"
 
 
-def stage(package, destination, repository=None):
+def stage(package, destination, repository=None, umask=None):
     environment = dict(os.environ)
     if repository is not None:
         environment["MOSAIC_REPO"] = str(repository)
@@ -27,6 +27,7 @@ def stage(package, destination, repository=None):
         capture_output=True,
         text=True,
         env=environment,
+        preexec_fn=None if umask is None else lambda: os.umask(umask),
     )
 
 
@@ -62,6 +63,17 @@ class PackagingTests(unittest.TestCase):
     def test_version_file_is_semver(self):
         text = (REPOSITORY_ROOT / "plugins" / "VERSION").read_text(encoding="utf-8")
         self.assertRegex(text, r"^\d+\.\d+\.\d+\n?$")
+
+    def test_staged_permissions_do_not_depend_on_the_umask(self):
+        for package in ("core", "plugins"):
+            destination = self.destination / package
+            result = stage(package, destination, umask=0o002)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for path in [destination, *destination.rglob("*")]:
+                if path.is_symlink():
+                    continue
+                mode = path.stat().st_mode & 0o777
+                self.assertEqual(mode & 0o022, 0, f"{path}: {oct(mode)}")
 
     def test_stage_core_has_docs_and_only_the_authoring_skill(self):
         result = stage("core", self.destination)

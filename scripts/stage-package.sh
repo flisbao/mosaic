@@ -63,6 +63,10 @@ stage_plugins() {
   install -Dm644 "$REPO/LICENSE" "$documents/copyright"
 }
 
+normalize_permissions() {
+  chmod -R u=rwX,go=rX "$DESTINATION"
+}
+
 case "$PACKAGE" in
   core) stage_core ;;
   plugins) stage_plugins ;;
@@ -71,3 +75,4 @@ case "$PACKAGE" in
     exit 2
     ;;
 esac
+normalize_permissions
