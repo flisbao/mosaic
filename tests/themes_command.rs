@@ -30,9 +30,9 @@ fn lists_every_preset_and_exits_zero() {
 }
 
 #[test]
-fn truecolor_terminals_get_swatches() {
+fn piped_output_has_no_swatches_even_on_truecolor() {
     let output = run_themes(&[], "truecolor");
-    assert!(text(&output.stdout).contains('\x1b'));
+    assert!(!text(&output.stdout).contains('\x1b'));
 }
 
 #[test]
