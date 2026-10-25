@@ -1834,53 +1834,68 @@ mod tests {
         Color::Rgb(rgb.red, rgb.green, rgb.blue)
     }
 
-    #[test]
-    fn colored_theme_paints_every_cell_background() {
-        for name in ["tokyo-night", "solarized-light"] {
-            let state = themed_state(name);
-            let expected = palette_color(name, |palette| palette.background);
-            let buffer = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
-            let accent = palette_color(name, |palette| palette.accent);
-            for cell in &buffer.content {
-                assert!(
-                    cell.bg == expected || cell.bg == accent,
-                    "{name}: {:?}",
-                    cell.bg
-                );
+    fn colored_preset_names() -> Vec<&'static str> {
+        crate::domain::theme::preset_names()
+            .into_iter()
+            .filter(|name| *name != crate::domain::theme::DEFAULT_THEME_NAME)
+            .collect()
+    }
+
+    fn assert_only_background_and_active_tab(name: &str, screen_name: &str, state: &AppState) {
+        let background = palette_color(name, |palette| palette.background);
+        let accent = palette_color(name, |palette| palette.accent);
+        assert_ne!(background, accent, "{name}");
+        let buffer = buffer_of(state, THEME_WIDTH, THEME_HEIGHT, now());
+        let mut accent_cells = 0;
+        for cell in &buffer.content {
+            if cell.bg == accent {
+                accent_cells += 1;
+            } else {
+                assert_eq!(cell.bg, background, "{name} ({screen_name}): {:?}", cell.bg);
             }
-            assert!(buffer.content.iter().any(|cell| cell.bg == expected));
         }
+        assert!(
+            accent_cells < ACTIVE_TAB_MAXIMUM_CELLS,
+            "{name} ({screen_name}): só a aba ativa usa o accent, veio {accent_cells}"
+        );
     }
 
     #[test]
-    fn popup_cells_keep_the_theme_background() {
-        let mut state = themed_state("tokyo-night");
-        let expected = palette_color("tokyo-night", |palette| palette.background);
-        let accent = palette_color("tokyo-night", |palette| palette.accent);
-        press(&mut state, &[KeyInput::Character('?')]);
-        let help = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
-        for cell in &help.content {
-            assert!(
-                cell.bg == expected || cell.bg == accent,
-                "ajuda: {:?}",
-                cell.bg
+    fn colored_themes_paint_every_cell_of_every_screen() {
+        for name in colored_preset_names() {
+            let mut state = themed_state(name);
+            assert_only_background_and_active_tab(name, "painel", &state);
+
+            press(&mut state, &[KeyInput::Enter]);
+            assert_only_background_and_active_tab(name, "detalhe", &state);
+
+            press(&mut state, &[KeyInput::Down, KeyInput::Character('a')]);
+            press(&mut state, &[KeyInput::Enter]);
+            assert!(screen(&state, THEME_WIDTH, THEME_HEIGHT).contains("[s] confirma"));
+            assert_only_background_and_active_tab(name, "confirmação de ação", &state);
+
+            let mut sending = themed_state(name);
+            sending.ask_send_confirmation(
+                "Enviar itens?".to_string(),
+                crate::application::recommendation::RecommendationPlan {
+                    prompt: "p".to_string(),
+                    item_count: 1,
+                    estimated_tokens: 1,
+                },
             );
-        }
-        press(&mut state, &[KeyInput::Escape]);
-        state.show_alert(crate::application::ports::AlertMessage {
-            title: "Aviso".to_string(),
-            body: "texto do aviso".to_string(),
-        });
-        let alert = buffer_of(&state, THEME_WIDTH, THEME_HEIGHT, now());
-        assert!(draw(&state, THEME_WIDTH, THEME_HEIGHT)
-            .iter()
-            .any(|row| row.contains("texto do aviso")));
-        for cell in &alert.content {
-            assert!(
-                cell.bg == expected || cell.bg == accent,
-                "alerta: {:?}",
-                cell.bg
-            );
+            assert_only_background_and_active_tab(name, "confirmação de envio", &sending);
+
+            let mut help = themed_state(name);
+            press(&mut help, &[KeyInput::Character('?')]);
+            assert_only_background_and_active_tab(name, "ajuda", &help);
+
+            let mut alert = themed_state(name);
+            alert.show_alert(crate::application::ports::AlertMessage {
+                title: "Aviso".to_string(),
+                body: "texto do aviso".to_string(),
+            });
+            assert!(screen(&alert, THEME_WIDTH, THEME_HEIGHT).contains("texto do aviso"));
+            assert_only_background_and_active_tab(name, "alerta", &alert);
         }
     }
 
