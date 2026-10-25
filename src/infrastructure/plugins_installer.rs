@@ -8,6 +8,7 @@ const RUNTIME_EXTENSIONS: [&str; 2] = ["py", "js"];
 const DOCUMENTATION_FILE_NAME: &str = "README.md";
 const EXCLUDED_FOLDER_NAMES: [&str; 1] = ["tests"];
 const TEMPORARY_FOLDER_MARKER: &str = ".tmp-";
+const BACKUP_FOLDER_MARKER: &str = ".old-";
 
 #[derive(Debug, Error, PartialEq)]
 pub enum PluginsError {
@@ -148,14 +149,26 @@ fn install_one(
         std::process::id()
     ));
     copy_into_staging(plugin_folder, &staging)?;
+    let backup = target.join(format!(
+        ".{name}{BACKUP_FOLDER_MARKER}{}",
+        std::process::id()
+    ));
     if already_exists {
-        fs::remove_dir_all(&destination)
+        discard(&backup);
+        fs::rename(&destination, &backup)
             .map_err(PluginsError::io(&destination))
             .inspect_err(|_| discard(&staging))?;
     }
-    fs::rename(&staging, &destination)
-        .map_err(PluginsError::io(&destination))
-        .inspect_err(|_| discard(&staging))?;
+    if let Err(error) = fs::rename(&staging, &destination) {
+        discard(&staging);
+        if already_exists {
+            let _ = fs::rename(&backup, &destination);
+        }
+        return Err(PluginsError::io(&destination)(error));
+    }
+    if already_exists {
+        discard(&backup);
+    }
     Ok(if already_exists {
         PluginOutcome::Replaced(name)
     } else {
@@ -335,6 +348,38 @@ mod tests {
         assert_eq!(
             fs::read_to_string(target.path().join("jira/jira.py")).unwrap(),
             "print('jira')"
+        );
+    }
+
+    #[test]
+    fn replacing_leaves_no_temporary_folders_behind() {
+        let source = source_with_plugins();
+        let target = tempfile::tempdir().unwrap();
+        install(source.path(), target.path(), &["jira"], Overwrite::Keep);
+        install(source.path(), target.path(), &["jira"], Overwrite::Replace);
+        let mut entries: Vec<String> = fs::read_dir(target.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, names(&["jira"]));
+    }
+
+    #[test]
+    fn a_failed_replacement_keeps_the_previous_plugin() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let source = source_with_plugins();
+        let target = tempfile::tempdir().unwrap();
+        write(&target.path().join("jira/jira.py"), "meu ajuste");
+        fs::set_permissions(target.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let (_, result) = try_install(source.path(), target.path(), &["jira"], Overwrite::Replace);
+        fs::set_permissions(target.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(result, Err(PluginsError::Io { .. })));
+        assert_eq!(
+            fs::read_to_string(target.path().join("jira/jira.py")).unwrap(),
+            "meu ajuste"
         );
     }
 
