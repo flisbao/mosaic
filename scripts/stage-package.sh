@@ -21,7 +21,6 @@ SKILL_PREFIX="mosaic-plugin-"
 AUTHORING_SKILL="mosaic-widget-authoring"
 SKILLS_DESTINATION="$DESTINATION/usr/share/mosaic/skills"
 PLUGINS_DESTINATION="$DESTINATION/usr/share/mosaic/plugins"
-NOT_PLUGIN_FOLDERS=" tests __pycache__ "
 
 stage_core() {
   local documents="$DESTINATION/usr/share/doc/mosaic"
@@ -37,7 +36,6 @@ service_plugins() {
   local folder name
   for folder in "$REPO"/plugins/*/; do
     name=$(basename "$folder")
-    case "$NOT_PLUGIN_FOLDERS" in *" $name "*) continue ;; esac
     [ -d "$SKILLS_SOURCE/$SKILL_PREFIX$name" ] && echo "$name"
   done
 }
