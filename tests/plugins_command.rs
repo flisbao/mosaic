@@ -43,7 +43,7 @@ fn install_copies_the_plugins_and_reports_them() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let stdout = text(&output.stdout);
     assert!(stdout.contains("instalado: jira"), "{stdout}");
-    assert!(stdout.contains("2 plugins em"), "{stdout}");
+    assert!(stdout.contains("2 plugins instalados em"), "{stdout}");
     assert!(target.path().join("jira/jira.py").is_file());
 }
 
