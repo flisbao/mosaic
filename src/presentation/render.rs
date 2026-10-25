@@ -827,7 +827,7 @@ mod tests {
         kanban.actions = vec![ActionSpec {
             id: "move".to_string(),
             label: "Mover para done".to_string(),
-            description: Some("Mover o cartão selecionado para done".to_string()),
+            description: Some("Mover a tarefa selecionada para done".to_string()),
             scope: ActionScope::Item,
             params_json: "{}".to_string(),
         }];
@@ -1330,7 +1330,7 @@ mod tests {
         );
         let text = screen(&state, 100, 30);
         assert!(
-            text.contains("Mover o cartão selecionado para done"),
+            text.contains("Mover a tarefa selecionada para done"),
             "{text}"
         );
         assert!(text.contains("inbox/b.md"));
@@ -1395,9 +1395,9 @@ mod tests {
     #[test]
     fn notice_is_rendered_on_the_last_row() {
         let mut state = state_with(vec![kanban_entry()]);
-        state.show_notice("Cartão movido".to_string());
+        state.show_notice("Tarefa movida".to_string());
         let rows = draw(&state, 100, 30);
-        assert!(rows[29].contains("Cartão movido"));
+        assert!(rows[29].contains("Tarefa movida"));
     }
     fn pomodoro_timer() -> crate::domain::pomodoro::PomodoroTimer {
         crate::domain::pomodoro::PomodoroTimer::new(crate::domain::pomodoro::PomodoroSettings {
