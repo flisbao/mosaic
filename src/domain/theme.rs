@@ -195,45 +195,28 @@ pub enum Theme {
 
 struct PresetSpec {
     name: &'static str,
-    foreground: Rgb,
-    background: Rgb,
-    muted: Rgb,
-    ok: Rgb,
-    warn: Rgb,
-    danger: Rgb,
-    accent: Rgb,
+    palette: Palette,
 }
 
-impl PresetSpec {
-    fn palette(&self) -> Palette {
-        Palette {
-            foreground: self.foreground,
-            background: self.background,
-            muted: self.muted,
-            ok: self.ok,
-            warn: self.warn,
-            danger: self.danger,
-            accent: self.accent,
-            on_accent: self.background,
-        }
-    }
-}
-
+// foreground, background, muted, ok, warn, danger, accent (on_accent é o fundo)
 const fn preset(name: &'static str, colors: [u32; 7]) -> PresetSpec {
+    let background = Rgb::from_u24(colors[1]);
     PresetSpec {
         name,
-        foreground: Rgb::from_u24(colors[0]),
-        background: Rgb::from_u24(colors[1]),
-        muted: Rgb::from_u24(colors[2]),
-        ok: Rgb::from_u24(colors[3]),
-        warn: Rgb::from_u24(colors[4]),
-        danger: Rgb::from_u24(colors[5]),
-        accent: Rgb::from_u24(colors[6]),
+        palette: Palette {
+            foreground: Rgb::from_u24(colors[0]),
+            background,
+            muted: Rgb::from_u24(colors[2]),
+            ok: Rgb::from_u24(colors[3]),
+            warn: Rgb::from_u24(colors[4]),
+            danger: Rgb::from_u24(colors[5]),
+            accent: Rgb::from_u24(colors[6]),
+            on_accent: background,
+        },
     }
 }
 
-// foreground, background, muted, ok, warn, danger, accent
-const PRESETS: [PresetSpec; 12] = [
+const PRESETS: &[PresetSpec] = &[
     preset(
         "tokyo-night",
         [
@@ -324,7 +307,7 @@ impl Theme {
             .find(|spec| spec.name == name)
             .map(|spec| Theme::Colored {
                 name: spec.name.to_string(),
-                palette: spec.palette(),
+                palette: spec.palette.clone(),
                 paints_background: true,
             })
             .ok_or_else(|| ThemeError::UnknownTheme(name.to_string()))
@@ -370,7 +353,7 @@ mod tests {
     const LIGHT_PRESETS: [&str; 2] = ["solarized-light", "gruvbox-light"];
     const LIGHT_BACKGROUND_MINIMUM_LUMINANCE: f64 = 0.5;
     const DARK_BACKGROUND_MAXIMUM_LUMINANCE: f64 = 0.2;
-    const DOCUMENTED_NAMES: [&str; 13] = [
+    const DOCUMENTED_NAMES: &[&str] = &[
         "default",
         "tokyo-night",
         "tokyo-night-storm",
@@ -468,7 +451,7 @@ mod tests {
 
     #[test]
     fn catalog_has_exactly_the_documented_names() {
-        assert_eq!(preset_names(), DOCUMENTED_NAMES.to_vec());
+        assert_eq!(preset_names(), DOCUMENTED_NAMES);
     }
 
     #[test]
