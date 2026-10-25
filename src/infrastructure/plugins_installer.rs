@@ -64,13 +64,14 @@ pub fn install_plugins(
     target: &Path,
     names: &[String],
     overwrite: Overwrite,
-) -> Result<Vec<PluginOutcome>, PluginsError> {
+    mut on_outcome: impl FnMut(PluginOutcome),
+) -> Result<(), PluginsError> {
     let selected = select_plugins(source, names)?;
     fs::create_dir_all(target).map_err(PluginsError::io(target))?;
-    selected
-        .into_iter()
-        .map(|name| install_one(&source.join(&name), target, name, overwrite))
-        .collect()
+    for name in selected {
+        on_outcome(install_one(&source.join(&name), target, name, overwrite)?);
+    }
+    Ok(())
 }
 
 fn select_plugins(source: &Path, names: &[String]) -> Result<Vec<String>, PluginsError> {
@@ -214,7 +215,22 @@ mod tests {
         wanted: &[&str],
         overwrite: Overwrite,
     ) -> Vec<PluginOutcome> {
-        install_plugins(source, target, &names(wanted), overwrite).unwrap()
+        let (outcomes, result) = try_install(source, target, wanted, overwrite);
+        result.unwrap();
+        outcomes
+    }
+
+    fn try_install(
+        source: &Path,
+        target: &Path,
+        wanted: &[&str],
+        overwrite: Overwrite,
+    ) -> (Vec<PluginOutcome>, Result<(), PluginsError>) {
+        let mut outcomes = Vec::new();
+        let result = install_plugins(source, target, &names(wanted), overwrite, |outcome| {
+            outcomes.push(outcome)
+        });
+        (outcomes, result)
     }
 
     #[test]
@@ -276,12 +292,7 @@ mod tests {
         let source = source_with_plugins();
         let target = tempfile::tempdir().unwrap();
         for bad in ["", "..", "a/b", "Jira", "jira.py", "../jira"] {
-            let result = install_plugins(
-                source.path(),
-                target.path(),
-                &names(&[bad]),
-                Overwrite::Keep,
-            );
+            let (_, result) = try_install(source.path(), target.path(), &[bad], Overwrite::Keep);
             assert_eq!(
                 result,
                 Err(PluginsError::InvalidName(bad.to_string())),
@@ -295,10 +306,10 @@ mod tests {
     fn unknown_plugin_is_reported_and_nothing_is_copied() {
         let source = source_with_plugins();
         let target = tempfile::tempdir().unwrap();
-        let result = install_plugins(
+        let (_, result) = try_install(
             source.path(),
             target.path(),
-            &names(&["jira", "nope"]),
+            &["jira", "nope"],
             Overwrite::Keep,
         );
         assert_eq!(result, Err(PluginsError::UnknownPlugin("nope".to_string())));
@@ -353,15 +364,31 @@ mod tests {
         let unreadable = source.path().join("jira/jira.py");
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
         let target = tempfile::tempdir().unwrap();
-        let result = install_plugins(
-            source.path(),
-            target.path(),
-            &names(&["jira"]),
-            Overwrite::Keep,
-        );
+        let (_, result) = try_install(source.path(), target.path(), &["jira"], Overwrite::Keep);
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(result, Err(PluginsError::Io { .. })));
         assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn outcomes_before_a_failure_are_still_reported() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let source = source_with_plugins();
+        let unreadable = source.path().join("jira/jira.py");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let (outcomes, result) = try_install(source.path(), target.path(), &[], Overwrite::Keep);
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(result, Err(PluginsError::Io { .. })));
+        assert_eq!(
+            outcomes,
+            vec![
+                PluginOutcome::Installed("calendar".to_string()),
+                PluginOutcome::Installed("github".to_string()),
+            ]
+        );
     }
 
     #[test]

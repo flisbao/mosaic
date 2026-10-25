@@ -117,14 +117,20 @@ fn run_install(arguments: &[String]) -> ExitCode {
         Ok(invocation) => invocation,
         Err(error) => return usage_failure(&error),
     };
-    match install_plugins(
+    let mut outcomes = Vec::new();
+    let result = install_plugins(
         &invocation.source,
         &invocation.target,
         &invocation.names,
         invocation.overwrite,
-    ) {
-        Ok(outcomes) => {
-            report(&outcomes, &invocation);
+        |outcome| {
+            report_outcome(&outcome);
+            outcomes.push(outcome);
+        },
+    );
+    match result {
+        Ok(()) => {
+            report_summary(&outcomes, &invocation);
             ExitCode::SUCCESS
         }
         Err(PluginsError::InvalidName(name)) => {
@@ -154,16 +160,17 @@ fn failure(error: &PluginsError) -> ExitCode {
     ExitCode::from(EXIT_CODE_FAILURE)
 }
 
-fn report(outcomes: &[PluginOutcome], invocation: &InstallInvocation) {
-    for outcome in outcomes {
-        match outcome {
-            PluginOutcome::Installed(name) => println!("instalado: {name}"),
-            PluginOutcome::Replaced(name) => println!("substituído: {name}"),
-            PluginOutcome::AlreadyInstalled(name) => {
-                println!("já instalado: {name} (use {FORCE_FLAG} para substituir)")
-            }
+fn report_outcome(outcome: &PluginOutcome) {
+    match outcome {
+        PluginOutcome::Installed(name) => println!("instalado: {name}"),
+        PluginOutcome::Replaced(name) => println!("substituído: {name}"),
+        PluginOutcome::AlreadyInstalled(name) => {
+            println!("já instalado: {name} (use {FORCE_FLAG} para substituir)")
         }
     }
+}
+
+fn report_summary(outcomes: &[PluginOutcome], invocation: &InstallInvocation) {
     println!(
         "{} plugins em {}",
         outcomes.len(),
