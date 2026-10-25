@@ -80,8 +80,8 @@ pub(super) struct RawLlm {
 
 #[derive(Deserialize, Default)]
 pub(super) struct RawTheme {
-    pub(super) name: Option<String>,
-    pub(super) paint_background: Option<bool>,
+    pub(super) name: Option<toml::Value>,
+    pub(super) paint_background: Option<toml::Value>,
     #[serde(default)]
-    pub(super) colors: BTreeMap<String, String>,
+    pub(super) colors: BTreeMap<String, toml::Value>,
 }

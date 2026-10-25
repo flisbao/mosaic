@@ -19,6 +19,8 @@ const LEGACY_NOTIFY_COMMAND_WARNING: &str =
     "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
 const LLM_SECTION: &str = "llm";
 const THEME_SECTION: &str = "theme";
+const THEME_NAME_KEY: &str = "name";
+const THEME_PAINT_BACKGROUND_KEY: &str = "paint_background";
 const UNKNOWN_THEME_HINT: &str = "; veja `mosaic themes`";
 const MAXIMUM_WARNING_VALUE_CHARACTERS: usize = 40;
 const ELLIPSIS: char = '…';
@@ -299,7 +301,9 @@ fn at_most(
 }
 
 pub(super) fn build_theme(raw: RawTheme, warnings: &mut Vec<String>) -> Theme {
-    let requested = raw.name.as_deref().map(str::trim).unwrap_or_default();
+    let requested = theme_text(THEME_NAME_KEY, raw.name.as_ref(), warnings)
+        .map(str::trim)
+        .unwrap_or_default();
     let name = if requested.is_empty() {
         DEFAULT_THEME_NAME
     } else {
@@ -321,15 +325,43 @@ pub(super) fn build_theme(raw: RawTheme, warnings: &mut Vec<String>) -> Theme {
         return Theme::Ansi;
     }
     let themed = base.with_overrides(&theme_overrides(&raw.colors, warnings));
-    if raw.paint_background == Some(false) {
+    let paints_background = match raw.paint_background {
+        Some(toml::Value::Boolean(value)) => value,
+        Some(_) => {
+            warnings.push(format!(
+                "[{THEME_SECTION}] {THEME_PAINT_BACKGROUND_KEY}: use true ou false"
+            ));
+            true
+        }
+        None => true,
+    };
+    if !paints_background {
         themed.without_background()
     } else {
         themed
     }
 }
 
+fn theme_text<'a>(
+    key: &str,
+    value: Option<&'a toml::Value>,
+    warnings: &mut Vec<String>,
+) -> Option<&'a str> {
+    match value {
+        Some(toml::Value::String(text)) => Some(text),
+        Some(_) => {
+            warnings.push(format!(
+                "[{THEME_SECTION}] {}: use um texto entre aspas",
+                shortened(key)
+            ));
+            None
+        }
+        None => None,
+    }
+}
+
 fn theme_overrides(
-    colors: &std::collections::BTreeMap<String, String>,
+    colors: &std::collections::BTreeMap<String, toml::Value>,
     warnings: &mut Vec<String>,
 ) -> Vec<(ThemeRole, Rgb)> {
     let mut overrides = Vec::new();
@@ -340,6 +372,9 @@ fn theme_overrides(
                 warnings.push(theme_warning(&error));
                 continue;
             }
+        };
+        let Some(value) = theme_text(key, Some(value), warnings) else {
+            continue;
         };
         match Rgb::from_hex(value) {
             Ok(rgb) => overrides.push((role, rgb)),

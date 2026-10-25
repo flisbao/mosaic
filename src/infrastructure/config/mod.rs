@@ -1239,6 +1239,23 @@ command = "sh"
     }
 
     #[test]
+    fn wrong_types_in_the_theme_section_are_warnings_not_errors() {
+        let (theme, warnings) =
+            theme_of("[theme]\nname = 1\npaint_background = \"yes\"\n[theme.colors]\naccent = 5\n");
+        assert_eq!(theme, crate::domain::theme::Theme::Ansi);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        let (theme, warnings) = theme_of(
+            "[theme]\nname = \"nord\"\npaint_background = \"yes\"\n[theme.colors]\naccent = 5\n",
+        );
+        assert_eq!(theme, preset("nord"));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("paint_background")));
+        assert!(warnings.iter().any(|warning| warning.contains("accent")));
+    }
+
+    #[test]
     fn long_theme_values_are_shortened_in_every_warning() {
         let long = "x".repeat(200);
         let (_, by_name) = theme_of(&format!("[theme]\nname = \"{long}\"\n"));
@@ -1313,13 +1330,6 @@ command = "sh"
         let (theme, warnings) = theme_of("[theme]\npaint_background = true\n");
         assert_eq!(theme, crate::domain::theme::Theme::Ansi);
         assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn non_string_color_value_is_a_config_error() {
-        let error =
-            parse_config("[theme]\nname = \"nord\"\n[theme.colors]\naccent = 5\n").unwrap_err();
-        assert!(matches!(error, ConfigError::Parse(_)), "{error:?}");
     }
 
     #[test]
