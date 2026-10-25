@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
@@ -52,7 +52,7 @@ pub fn available_plugins(source: &Path) -> Result<Vec<String>, PluginsError> {
     for entry in fs::read_dir(source).map_err(PluginsError::io(source))? {
         let entry = entry.map_err(PluginsError::io(source))?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if is_plugin_folder(&entry.path(), &name) {
+        if is_plugin_folder(&entry.path(), &name)? {
             names.push(name);
         }
     }
@@ -103,13 +103,15 @@ fn is_plain_name(name: &str) -> bool {
         })
 }
 
-fn is_plugin_folder(path: &Path, name: &str) -> bool {
-    let is_real_folder = fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir());
-    is_real_folder
-        && is_plain_name(name)
-        && !EXCLUDED_FOLDER_NAMES.contains(&name)
-        && copyable_files(path)
-            .is_ok_and(|files| files.iter().any(|file| has_runtime_extension(file)))
+fn is_plugin_folder(path: &Path, name: &str) -> Result<bool, PluginsError> {
+    let metadata = fs::symlink_metadata(path).map_err(PluginsError::io(path))?;
+    let is_candidate =
+        metadata.is_dir() && is_plain_name(name) && !EXCLUDED_FOLDER_NAMES.contains(&name);
+    if !is_candidate {
+        return Ok(false);
+    }
+    let files = copyable_files(path)?;
+    Ok(files.iter().any(|file| has_runtime_extension(file)))
 }
 
 fn has_runtime_extension(path: &Path) -> bool {
@@ -118,12 +120,14 @@ fn has_runtime_extension(path: &Path) -> bool {
         .is_some_and(|extension| RUNTIME_EXTENSIONS.contains(&extension))
 }
 
-fn copyable_files(folder: &Path) -> Result<Vec<std::path::PathBuf>, PluginsError> {
+fn copyable_files(folder: &Path) -> Result<Vec<PathBuf>, PluginsError> {
     let mut files = Vec::new();
     for entry in fs::read_dir(folder).map_err(PluginsError::io(folder))? {
         let entry = entry.map_err(PluginsError::io(folder))?;
         let path = entry.path();
-        let is_regular_file = fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file());
+        let is_regular_file = fs::symlink_metadata(&path)
+            .map_err(PluginsError::io(&path))?
+            .is_file();
         let is_documentation = entry.file_name() == DOCUMENTATION_FILE_NAME;
         if is_regular_file && (has_runtime_extension(&path) || is_documentation) {
             files.push(path);
@@ -184,10 +188,8 @@ fn copy_into_staging(plugin_folder: &Path, staging: &Path) -> Result<(), Plugins
 
 fn copy_files(plugin_folder: &Path, staging: &Path) -> Result<(), PluginsError> {
     for file in copyable_files(plugin_folder)? {
-        let Some(file_name) = file.file_name() else {
-            continue;
-        };
-        fs::copy(&file, staging.join(file_name)).map_err(PluginsError::io(&file))?;
+        let destination = staging.join(file.file_name().unwrap_or_default());
+        fs::copy(&file, destination).map_err(PluginsError::io(&file))?;
     }
     Ok(())
 }
@@ -434,6 +436,19 @@ mod tests {
                 PluginOutcome::Installed("github".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn an_unreadable_plugin_folder_is_an_error_not_a_missing_plugin() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let source = source_with_plugins();
+        let folder = source.path().join("jira");
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = available_plugins(source.path());
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(result, Err(PluginsError::Io { .. })));
     }
 
     #[test]
