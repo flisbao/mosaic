@@ -123,7 +123,7 @@ mosaic plugins install jira github       # or just some
 mosaic plugins install --force           # update the ones you already installed (overwrites local edits)
 ```
 
-Install `mosaic-plugins_<version>_all.deb` (it puts them in `/usr/share/mosaic/plugins`) or unpack `mosaic-plugins-<version>.tar.gz` and pass `--from mosaic-plugins-<version>/plugins`. The matching Claude Code skills are in `skills/`: `mosaic skills install --from mosaic-plugins-<version>/skills`. Then uncomment the widget you want in `mosaic.toml`.
+Download `mosaic-plugins_<version>_all.deb` or `mosaic-plugins-<version>.tar.gz` from the [plugins releases](https://github.com/flisbao/mosaic/releases?q=plugins-v) (the "latest" release is the core, not the plugins). The `.deb` puts them in `/usr/share/mosaic/plugins`; with the tarball, unpack it and pass `--from mosaic-plugins-<version>/plugins`. The matching Claude Code skills are in `skills/`: `mosaic skills install --from mosaic-plugins-<version>/skills`. Then uncomment the widget you want in `mosaic.toml`.
 
 The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 
