@@ -8,6 +8,7 @@ use mosaic::domain::theme::{
 
 const EXIT_CODE_USAGE: u8 = 2;
 const THEMES_USAGE: &str = "uso: mosaic themes [NOME]";
+const THEME_NAME_SEPARATOR: &str = ", ";
 const USAGE_HINT: &str = "use em mosaic.toml:";
 const SWATCH_WIDTH: usize = 2;
 const BACKGROUND_ESCAPE_PREFIX: &str = "\x1b[48;2;";
@@ -122,7 +123,10 @@ fn execute(arguments: &[String], style: SwatchStyle) -> Outcome {
         [] => Outcome::Output(listing(style)),
         [name] => match details(name, style) {
             Ok(text) => Outcome::Output(text),
-            Err(error) => Outcome::Usage(format!("{error}\n{THEMES_USAGE}")),
+            Err(error) => Outcome::Usage(format!(
+                "{error}; temas disponíveis: {}\n{THEMES_USAGE}",
+                preset_names().join(THEME_NAME_SEPARATOR)
+            )),
         },
         _ => Outcome::Usage(THEMES_USAGE.to_string()),
     }

@@ -1232,7 +1232,26 @@ command = "sh"
         assert_eq!(theme, crate::domain::theme::Theme::Ansi);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].starts_with("[theme]"), "{}", warnings[0]);
-        assert!(warnings[0].contains("neon") && warnings[0].contains("tokyo-night"));
+        assert_eq!(
+            warnings[0],
+            "[theme] tema desconhecido 'neon'; veja `mosaic themes`"
+        );
+    }
+
+    #[test]
+    fn long_theme_values_are_shortened_in_every_warning() {
+        let long = "x".repeat(200);
+        let (_, by_name) = theme_of(&format!("[theme]\nname = \"{long}\"\n"));
+        let (_, by_role) = theme_of(&format!(
+            "[theme]\nname = \"nord\"\n[theme.colors]\n{long} = \"#000000\"\n"
+        ));
+        let (_, by_key) = theme_of(&format!(
+            "[theme]\nname = \"nord\"\n[theme.colors]\naccent = \"{long}\"\n"
+        ));
+        for warnings in [by_name, by_role, by_key] {
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].len() < 150, "{}", warnings[0]);
+        }
     }
 
     #[test]

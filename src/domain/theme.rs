@@ -17,12 +17,11 @@ const RED_WEIGHT: f64 = 0.2126;
 const GREEN_WEIGHT: f64 = 0.7152;
 const BLUE_WEIGHT: f64 = 0.0722;
 const CONTRAST_OFFSET: f64 = 0.05;
-const NAME_LIST_SEPARATOR: &str = ", ";
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Clone, Error, PartialEq)]
 pub enum ThemeError {
-    #[error("tema desconhecido '{name}'; temas disponíveis: {available}")]
-    UnknownTheme { name: String, available: String },
+    #[error("tema desconhecido '{0}'")]
+    UnknownTheme(String),
     #[error("cor inválida '{0}': use #rrggbb")]
     InvalidHex(String),
     #[error("papel de cor desconhecido '{0}'")]
@@ -328,10 +327,7 @@ impl Theme {
                 palette: spec.palette(),
                 paints_background: true,
             })
-            .ok_or_else(|| ThemeError::UnknownTheme {
-                name: name.to_string(),
-                available: preset_names().join(NAME_LIST_SEPARATOR),
-            })
+            .ok_or_else(|| ThemeError::UnknownTheme(name.to_string()))
     }
 
     pub fn with_overrides(self, overrides: &[(ThemeRole, Rgb)]) -> Theme {
@@ -483,14 +479,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_preset_lists_the_available_names() {
+    fn unknown_preset_names_the_theme() {
         let error = Theme::preset("neon").unwrap_err();
-        assert!(matches!(&error, ThemeError::UnknownTheme { name, .. } if name == "neon"));
-        let message = error.to_string();
-        assert!(
-            message.contains("tokyo-night") && message.contains("default"),
-            "{message}"
-        );
+        assert_eq!(error, ThemeError::UnknownTheme("neon".to_string()));
+        assert_eq!(error.to_string(), "tema desconhecido 'neon'");
     }
 
     #[test]

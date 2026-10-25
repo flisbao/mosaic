@@ -10,7 +10,7 @@ use super::{
     MAXIMUM_TIMEOUT_SECONDS, MINIMUM_INTERVAL_SECONDS,
 };
 use crate::application::recommendation::LlmSelection;
-use crate::domain::theme::{preset_names, Rgb, Theme, ThemeError, ThemeRole, DEFAULT_THEME_NAME};
+use crate::domain::theme::{Rgb, Theme, ThemeError, ThemeRole, DEFAULT_THEME_NAME};
 use crate::domain::widget::WidgetId;
 use crate::infrastructure::child_environment::is_valid_variable_name;
 
@@ -19,9 +19,9 @@ const LEGACY_NOTIFY_COMMAND_WARNING: &str =
     "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
 const LLM_SECTION: &str = "llm";
 const THEME_SECTION: &str = "theme";
+const UNKNOWN_THEME_HINT: &str = "; veja `mosaic themes`";
 const MAXIMUM_WARNING_VALUE_CHARACTERS: usize = 40;
 const ELLIPSIS: char = '…';
-const THEME_NAME_SEPARATOR: &str = ", ";
 const FIRST_TAB_INDEX: usize = 0;
 
 pub(super) struct TabAssignment {
@@ -343,9 +343,10 @@ fn theme_overrides(
         };
         match Rgb::from_hex(value) {
             Ok(rgb) => overrides.push((role, rgb)),
-            Err(_) => warnings.push(format!(
-                "[{THEME_SECTION}.colors] {key}: cor inválida '{}': use #rrggbb",
-                shortened(value)
+            Err(error) => warnings.push(format!(
+                "[{THEME_SECTION}.colors] {}: {}",
+                shortened(key),
+                shortened_theme_error(error)
             )),
         }
     }
@@ -353,18 +354,22 @@ fn theme_overrides(
 }
 
 fn theme_warning(error: &ThemeError) -> String {
-    let detail = match error {
-        ThemeError::UnknownTheme { name, .. } => format!(
-            "tema desconhecido '{}'; temas disponíveis: {}",
-            shortened(name),
-            preset_names().join(THEME_NAME_SEPARATOR)
-        ),
-        ThemeError::InvalidHex(value) => {
-            format!("cor inválida '{}': use #rrggbb", shortened(value))
-        }
-        ThemeError::UnknownRole(role) => format!("papel de cor desconhecido '{}'", shortened(role)),
+    let hint = match error {
+        ThemeError::UnknownTheme(_) => UNKNOWN_THEME_HINT,
+        ThemeError::InvalidHex(_) | ThemeError::UnknownRole(_) => "",
     };
-    format!("[{THEME_SECTION}] {detail}")
+    format!(
+        "[{THEME_SECTION}] {}{hint}",
+        shortened_theme_error(error.clone())
+    )
+}
+
+fn shortened_theme_error(error: ThemeError) -> ThemeError {
+    match error {
+        ThemeError::UnknownTheme(name) => ThemeError::UnknownTheme(shortened(&name)),
+        ThemeError::InvalidHex(value) => ThemeError::InvalidHex(shortened(&value)),
+        ThemeError::UnknownRole(role) => ThemeError::UnknownRole(shortened(&role)),
+    }
 }
 
 fn shortened(value: &str) -> String {
