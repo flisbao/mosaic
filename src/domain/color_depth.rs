@@ -2,6 +2,14 @@ const COLOR_TERMINAL_VARIABLE: &str = "COLORTERM";
 const TERMINAL_VARIABLE: &str = "TERM";
 const TRUE_COLOR_VALUES: [&str; 2] = ["truecolor", "24bit"];
 const INDEXED_TERMINAL_SUFFIX: &str = "256color";
+const DIRECT_COLOR_TERMINAL_SUFFIX: &str = "-direct";
+const MODERN_TERMINALS: [&str; 5] = [
+    "xterm-kitty",
+    "alacritty",
+    "foot",
+    "xterm-ghostty",
+    "wezterm",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorDepth {
@@ -18,13 +26,18 @@ impl ColorDepth {
         if announces_true_color {
             return ColorDepth::TrueColor;
         }
-        let has_indexed_palette = variable(TERMINAL_VARIABLE).is_some_and(|value| {
-            value
-                .trim()
-                .to_ascii_lowercase()
-                .ends_with(INDEXED_TERMINAL_SUFFIX)
-        });
-        if has_indexed_palette {
+        let terminal = variable(TERMINAL_VARIABLE)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        Self::from_terminal_name(&terminal)
+    }
+
+    fn from_terminal_name(terminal: &str) -> ColorDepth {
+        if terminal.ends_with(DIRECT_COLOR_TERMINAL_SUFFIX) {
+            ColorDepth::TrueColor
+        } else if terminal.ends_with(INDEXED_TERMINAL_SUFFIX)
+            || MODERN_TERMINALS.contains(&terminal)
+        {
             ColorDepth::Indexed256
         } else {
             ColorDepth::Basic
@@ -66,6 +79,34 @@ mod tests {
             detect(&[("TERM", "screen-256color")]),
             ColorDepth::Indexed256
         );
+    }
+
+    #[test]
+    fn modern_terminals_are_indexed_even_without_colorterm() {
+        for terminal in [
+            "xterm-kitty",
+            "alacritty",
+            "foot",
+            "xterm-ghostty",
+            "wezterm",
+        ] {
+            assert_eq!(
+                detect(&[("TERM", terminal)]),
+                ColorDepth::Indexed256,
+                "{terminal}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_color_terms_are_truecolor() {
+        for terminal in ["xterm-direct", "tmux-direct"] {
+            assert_eq!(
+                detect(&[("TERM", terminal)]),
+                ColorDepth::TrueColor,
+                "{terminal}"
+            );
+        }
     }
 
     #[test]
