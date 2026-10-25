@@ -7,6 +7,8 @@ const INDEXED_GRAY_START: u8 = 232;
 const INDEXED_GRAY_STEPS: u8 = 24;
 const INDEXED_GRAY_BASE: i32 = 8;
 const INDEXED_GRAY_STEP: i32 = 10;
+const INDEXED_GRAY_HALF_STEP: i32 = INDEXED_GRAY_STEP / 2;
+const RGB_CHANNEL_COUNT: i32 = 3;
 
 pub fn nearest_indexed(rgb: Rgb) -> u8 {
     let cube = nearest_cube_index(rgb);
@@ -32,8 +34,9 @@ fn nearest_cube_index(rgb: Rgb) -> u8 {
 }
 
 fn nearest_gray_index(rgb: Rgb) -> u8 {
-    let average = (i32::from(rgb.red) + i32::from(rgb.green) + i32::from(rgb.blue)) / 3;
-    let step = ((average - INDEXED_GRAY_BASE + INDEXED_GRAY_STEP / 2) / INDEXED_GRAY_STEP)
+    let average =
+        (i32::from(rgb.red) + i32::from(rgb.green) + i32::from(rgb.blue)) / RGB_CHANNEL_COUNT;
+    let step = ((average - INDEXED_GRAY_BASE + INDEXED_GRAY_HALF_STEP) / INDEXED_GRAY_STEP)
         .clamp(0, i32::from(INDEXED_GRAY_STEPS) - 1);
     INDEXED_GRAY_START + u8::try_from(step).unwrap_or(0)
 }
