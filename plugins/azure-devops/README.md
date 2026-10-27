@@ -1,5 +1,7 @@
 # Azure DevOps
 
+> Instalação: `mosaic plugins install azure-devops` (o plugin não vem no binário; veja o README da raiz).
+
 `plugins/azure-devops/azure_devops.py` é um provider do Mosaic que mostra os pull requests do Azure DevOps que esperam por você: os que pediram sua revisão e os que você abriu. Ele só faz `GET` na API REST (`api-version` 7.1) e só fala com `https://dev.azure.com`. A autenticação é feita com **Microsoft Entra ID** (token de acesso curto, enviado como `Bearer`); o PAT não é mais suportado. Nenhum segredo vai em argumento: o plugin lê o **nome** de uma variável (ou um arquivo) e, no `device-code`, um arquivo de credencial só seu.
 
 ## O que mostra

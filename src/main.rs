@@ -1,6 +1,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod check_command;
+mod plugins_command;
 mod skills_command;
 
 use std::collections::HashMap;
@@ -69,6 +70,7 @@ const NO_STATE_DIRECTORY_STORE_WARNING: &str =
     "recomendações não serão salvas: não há diretório de estado do usuário";
 const CHECK_SUBCOMMAND: &str = "check";
 const SKILLS_SUBCOMMAND: &str = "skills";
+const PLUGINS_SUBCOMMAND: &str = "plugins";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 
@@ -120,6 +122,9 @@ fn main() -> ExitCode {
     }
     if arguments.first().map(String::as_str) == Some(SKILLS_SUBCOMMAND) {
         return skills_command::run(&arguments[1..]);
+    }
+    if arguments.first().map(String::as_str) == Some(PLUGINS_SUBCOMMAND) {
+        return plugins_command::run(&arguments[1..]);
     }
     match run() {
         Ok(()) => ExitCode::SUCCESS,

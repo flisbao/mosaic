@@ -18,12 +18,7 @@ trap 'rm -rf "$ROOT"' EXIT
 chmod 755 "$ROOT"
 
 install -Dm755 "$BINARY" "$ROOT/usr/bin/mosaic"
-install -Dm644 "$REPO/README.md" "$ROOT/usr/share/doc/mosaic/README.md"
-install -Dm644 "$REPO/PROTOCOL.md" "$ROOT/usr/share/doc/mosaic/PROTOCOL.md"
-install -Dm644 "$REPO/schema/protocol.schema.json" "$ROOT/usr/share/doc/mosaic/protocol.schema.json"
-install -Dm644 "$REPO/LICENSE" "$ROOT/usr/share/doc/mosaic/copyright"
-mkdir -p "$ROOT/usr/share/mosaic"
-cp -r "$REPO/.claude/skills" "$ROOT/usr/share/mosaic/skills"
+"$REPO/scripts/stage-package.sh" core "$ROOT"
 
 mkdir -p "$ROOT/DEBIAN"
 cat > "$ROOT/DEBIAN/control" <<CONTROL
@@ -34,14 +29,17 @@ Priority: optional
 Architecture: $ARCHITECTURE
 Depends: libc6 (>= ${MINIMUM_GLIBC:-2.17})
 Recommends: python3
+Suggests: mosaic-plugins
 Maintainer: Lisbao <flisbao@gmail.com>
 Homepage: https://github.com/flisbao/mosaic
 Description: Terminal dashboard built from pluggable widgets
  Qualquer programa que imprime JSON vira um widget do painel.
- Os widgets de exemplo (Jira, GitHub, GitLab, Azure DevOps, agenda)
- são instalados em ~/.config/mosaic na primeira execução.
- As skills do Claude Code ficam em /usr/share/mosaic/skills;
- rode "mosaic skills install" para ligá-las ao seu ~/.claude/skills.
+ Os widgets de exemplo (kanban, example, gallery) são instalados em
+ ~/.config/mosaic na primeira execução. Os widgets de serviço (Jira,
+ GitHub, GitLab, Azure DevOps, agenda) vêm no pacote mosaic-plugins:
+ rode "mosaic plugins install" para copiá-los.
+ A skill do protocolo fica em /usr/share/mosaic/skills;
+ rode "mosaic skills install" para ligá-la ao seu ~/.claude/skills.
 CONTROL
 
 mkdir -p "$OUTPUT"

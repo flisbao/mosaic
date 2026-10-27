@@ -1,0 +1,96 @@
+name: Release dos plugins
+
+on:
+  push:
+    tags:
+      - "plugins-v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verificar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: A tag bate com plugins/VERSION
+        run: |
+          version="$(cat plugins/VERSION)"
+          if [ "${GITHUB_REF_NAME}" != "plugins-v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} diferente de plugins-v${version} (plugins/VERSION)" >&2
+            exit 1
+          fi
+      - run: python3 -m unittest discover -s plugins/tests
+
+  compat:
+    name: Compatível com o núcleo
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --locked
+      - name: Os widgets de exemplo seguem o protocolo
+        run: |
+          target/debug/mosaic check python3 plugins/example.py
+          target/debug/mosaic check python3 plugins/gallery.py
+      - name: O pacote instala com mosaic plugins install
+        run: |
+          stage="$(mktemp -d)"
+          scripts/stage-package.sh plugins "${stage}"
+          target/debug/mosaic plugins install --from "${stage}/usr/share/mosaic/plugins" --to "${stage}/instalado"
+          test -f "${stage}/instalado/jira/jira.py"
+          test -f "${stage}/instalado/azure-pipelines/azure_pipelines.py"
+
+  package:
+    name: Empacotar
+    needs: compat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Montar o tarball e o .deb
+        run: |
+          version="$(cat plugins/VERSION)"
+          name="mosaic-plugins-${version}"
+          stage="$(mktemp -d)"
+          scripts/stage-package.sh plugins "${stage}"
+          mkdir "${name}"
+          cp -R "${stage}/usr/share/mosaic/plugins" "${stage}/usr/share/mosaic/skills" "${name}/"
+          cp plugins/VERSION LICENSE "${name}/"
+          tar -czf "${name}.tar.gz" "${name}"
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          deb="$(scripts/build-plugins-deb.sh "${version}" .)"
+          sha256sum "$(basename "${deb}")" > "$(basename "${deb}").sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mosaic-plugins
+          path: |
+            mosaic-plugins-*.tar.gz
+            mosaic-plugins-*.tar.gz.sha256
+            mosaic-plugins_*.deb
+            mosaic-plugins_*.deb.sha256
+
+  release:
+    name: Publicar a release
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Criar a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --latest=false \
+            --verify-tag

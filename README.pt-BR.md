@@ -10,7 +10,7 @@ Mosaic é um painel de terminal (TUI) feito de peças independentes. Cada widget
 cargo run --release
 ```
 
-Na primeira execução o Mosaic cria `~/.config/mosaic/` com a configuração, os widgets de exemplo (kanban, Jira, galeria) e o prompt de prioridade. Se você já usava a versão anterior, copie `~/.config/panel-tui/` para `~/.config/mosaic/`.
+Na primeira execução o Mosaic cria `~/.config/mosaic/` com a configuração, os widgets de exemplo (kanban, example, galeria) e o prompt de prioridade. Os widgets de serviço (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, agenda) vêm no pacote `mosaic-plugins`: rode `mosaic plugins install` (ou `mosaic plugins install jira github`) e descomente o bloco que quiser no `mosaic.toml`. Se você já usava a versão anterior, copie `~/.config/panel-tui/` para `~/.config/mosaic/`.
 
 O prompt é enviado ao `claude` e ao `opencode` pela entrada padrão, nunca como argumento, para não aparecer em `ps`.
 

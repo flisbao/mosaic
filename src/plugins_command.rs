@@ -1,0 +1,250 @@
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use mosaic::infrastructure::app_paths::config_directory;
+use mosaic::infrastructure::plugins_installer::{
+    available_plugins, install_plugins, Overwrite, PluginOutcome, PluginsError,
+};
+use thiserror::Error;
+
+const EXIT_CODE_USAGE: u8 = 2;
+const EXIT_CODE_FAILURE: u8 = 1;
+const PLUGINS_USAGE: &str = "uso: mosaic plugins install [--from DIR] [--to DIR] [--force] [NOME...] | mosaic plugins list [--from DIR]";
+const INSTALL_SUBCOMMAND: &str = "install";
+const LIST_SUBCOMMAND: &str = "list";
+const FROM_FLAG: &str = "--from";
+const TO_FLAG: &str = "--to";
+const FORCE_FLAG: &str = "--force";
+const END_OF_FLAGS: &str = "--";
+const PACKAGED_PLUGINS_DIRECTORY: &str = "/usr/share/mosaic/plugins";
+const INSTALLED_PLUGINS_FOLDER: &str = "plugins";
+
+#[derive(Debug, Error, PartialEq)]
+enum PluginsUsageError {
+    #[error("{PLUGINS_USAGE}")]
+    UnknownSubcommand,
+    #[error("{0} precisa de DIRETORIO\n{PLUGINS_USAGE}")]
+    FlagWithoutValue(&'static str),
+    #[error("argumento desconhecido: {0}\n{PLUGINS_USAGE}")]
+    UnknownFlag(String),
+    #[error("não foi possível descobrir a pasta de configuração; use {TO_FLAG}\n{PLUGINS_USAGE}")]
+    NoConfigDirectory,
+}
+
+#[derive(Debug, PartialEq)]
+struct InstallInvocation {
+    source: PathBuf,
+    target: PathBuf,
+    overwrite: Overwrite,
+    names: Vec<String>,
+}
+
+fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, PluginsUsageError> {
+    let mut source = None;
+    let mut target = None;
+    let mut overwrite = Overwrite::Keep;
+    let mut names = Vec::new();
+    let mut flags_ended = false;
+    let mut remaining = arguments.iter();
+    while let Some(argument) = remaining.next() {
+        if flags_ended || !argument.starts_with('-') {
+            names.push(argument.clone());
+            continue;
+        }
+        match argument.as_str() {
+            END_OF_FLAGS => flags_ended = true,
+            FORCE_FLAG => overwrite = Overwrite::Replace,
+            FROM_FLAG => source = Some(directory_value(&mut remaining, FROM_FLAG)?),
+            TO_FLAG => target = Some(directory_value(&mut remaining, TO_FLAG)?),
+            other => return Err(PluginsUsageError::UnknownFlag(other.to_string())),
+        }
+    }
+    Ok(InstallInvocation {
+        source: source.unwrap_or_else(packaged_directory),
+        target: match target {
+            Some(target) => target,
+            None => default_target()?,
+        },
+        overwrite,
+        names,
+    })
+}
+
+fn directory_value<'a>(
+    remaining: &mut impl Iterator<Item = &'a String>,
+    flag: &'static str,
+) -> Result<PathBuf, PluginsUsageError> {
+    remaining
+        .next()
+        .map(PathBuf::from)
+        .ok_or(PluginsUsageError::FlagWithoutValue(flag))
+}
+
+fn parse_list_arguments(arguments: &[String]) -> Result<PathBuf, PluginsUsageError> {
+    match arguments {
+        [] => Ok(packaged_directory()),
+        [flag, value] if flag == FROM_FLAG => Ok(PathBuf::from(value)),
+        [flag] if flag == FROM_FLAG => Err(PluginsUsageError::FlagWithoutValue(FROM_FLAG)),
+        [other, ..] => Err(PluginsUsageError::UnknownFlag(other.clone())),
+    }
+}
+
+fn packaged_directory() -> PathBuf {
+    PathBuf::from(PACKAGED_PLUGINS_DIRECTORY)
+}
+
+fn default_target() -> Result<PathBuf, PluginsUsageError> {
+    config_directory()
+        .map(|directory| directory.join(INSTALLED_PLUGINS_FOLDER))
+        .ok_or(PluginsUsageError::NoConfigDirectory)
+}
+
+pub fn run(arguments: &[String]) -> ExitCode {
+    match arguments.split_first() {
+        Some((subcommand, rest)) if subcommand == INSTALL_SUBCOMMAND => run_install(rest),
+        Some((subcommand, rest)) if subcommand == LIST_SUBCOMMAND => run_list(rest),
+        _ => usage_failure(&PluginsUsageError::UnknownSubcommand),
+    }
+}
+
+fn usage_failure(error: &PluginsUsageError) -> ExitCode {
+    eprintln!("{error}");
+    ExitCode::from(EXIT_CODE_USAGE)
+}
+
+fn run_install(arguments: &[String]) -> ExitCode {
+    let invocation = match parse_install_arguments(arguments) {
+        Ok(invocation) => invocation,
+        Err(error) => return usage_failure(&error),
+    };
+    match install_plugins(
+        &invocation.source,
+        &invocation.target,
+        &invocation.names,
+        invocation.overwrite,
+    ) {
+        Ok(outcomes) => {
+            report(&outcomes, &invocation);
+            ExitCode::SUCCESS
+        }
+        Err(PluginsError::InvalidName(name)) => {
+            eprintln!("mosaic: nome de plugin inválido: {name}\n{PLUGINS_USAGE}");
+            ExitCode::from(EXIT_CODE_USAGE)
+        }
+        Err(error) => failure(&error),
+    }
+}
+
+fn run_list(arguments: &[String]) -> ExitCode {
+    let source = match parse_list_arguments(arguments) {
+        Ok(source) => source,
+        Err(error) => return usage_failure(&error),
+    };
+    match available_plugins(&source) {
+        Ok(names) => {
+            names.iter().for_each(|name| println!("{name}"));
+            ExitCode::SUCCESS
+        }
+        Err(error) => failure(&error),
+    }
+}
+
+fn failure(error: &PluginsError) -> ExitCode {
+    eprintln!("mosaic: {error}");
+    ExitCode::from(EXIT_CODE_FAILURE)
+}
+
+fn report(outcomes: &[PluginOutcome], invocation: &InstallInvocation) {
+    for outcome in outcomes {
+        match outcome {
+            PluginOutcome::Installed(name) => println!("instalado: {name}"),
+            PluginOutcome::Replaced(name) => println!("substituído: {name}"),
+            PluginOutcome::AlreadyInstalled(name) => {
+                println!("já instalado: {name} (use {FORCE_FLAG} para substituir)")
+            }
+        }
+    }
+    println!(
+        "{} plugins em {}",
+        outcomes.len(),
+        invocation.target.display()
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arguments(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn parses_from_to_force_and_names() {
+        let invocation = parse_install_arguments(&arguments(&[
+            "--from", "/a", "--to", "/b", "--force", "jira", "github",
+        ]))
+        .unwrap();
+        assert_eq!(invocation.source, PathBuf::from("/a"));
+        assert_eq!(invocation.target, PathBuf::from("/b"));
+        assert_eq!(invocation.overwrite, Overwrite::Replace);
+        assert_eq!(invocation.names, arguments(&["jira", "github"]));
+    }
+
+    #[test]
+    fn defaults_come_from_the_package_and_the_config_directory() {
+        let invocation = parse_install_arguments(&[]).unwrap();
+        assert_eq!(invocation.source, PathBuf::from(PACKAGED_PLUGINS_DIRECTORY));
+        assert!(invocation.target.ends_with("mosaic/plugins"));
+        assert_eq!(invocation.overwrite, Overwrite::Keep);
+        assert!(invocation.names.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_flag_is_a_usage_error() {
+        assert_eq!(
+            parse_install_arguments(&arguments(&["--x"])).unwrap_err(),
+            PluginsUsageError::UnknownFlag("--x".to_string())
+        );
+    }
+
+    #[test]
+    fn a_flag_without_value_is_a_usage_error() {
+        assert_eq!(
+            parse_install_arguments(&arguments(&["--to"])).unwrap_err(),
+            PluginsUsageError::FlagWithoutValue(TO_FLAG)
+        );
+    }
+
+    #[test]
+    fn arguments_after_the_double_dash_are_names() {
+        let invocation =
+            parse_install_arguments(&arguments(&["--to", "/b", "--", "--force"])).unwrap();
+        assert_eq!(invocation.names, arguments(&["--force"]));
+        assert_eq!(invocation.overwrite, Overwrite::Keep);
+    }
+
+    #[test]
+    fn list_without_from_uses_the_packaged_directory() {
+        assert_eq!(
+            parse_list_arguments(&[]).unwrap(),
+            PathBuf::from(PACKAGED_PLUGINS_DIRECTORY)
+        );
+        assert_eq!(
+            parse_list_arguments(&arguments(&["--from", "/a"])).unwrap(),
+            PathBuf::from("/a")
+        );
+    }
+
+    #[test]
+    fn list_rejects_other_arguments() {
+        assert_eq!(
+            parse_list_arguments(&arguments(&["--to", "/b"])).unwrap_err(),
+            PluginsUsageError::UnknownFlag("--to".to_string())
+        );
+        assert_eq!(
+            parse_list_arguments(&arguments(&["--from"])).unwrap_err(),
+            PluginsUsageError::FlagWithoutValue(FROM_FLAG)
+        );
+    }
+}

@@ -98,6 +98,17 @@ Press `?` at any time: the help is always one key away, and the bottom line show
 | **Kanban** | A folder of Markdown files per column, with a "move task" action | `plugins/kanban.py` |
 | **Gallery** | Every block type, for the curious (and for copy-pasting) | `plugins/gallery.py` |
 
+Only Kanban, `example` and `gallery` ship inside the binary. The service widgets (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, Calendar) come in the separate **mosaic-plugins** package, versioned on its own (release tags `plugins-v*`):
+
+```sh
+mosaic plugins list                      # what the package offers
+mosaic plugins install                   # copy all of them to ~/.config/mosaic/plugins
+mosaic plugins install jira github       # or just some
+mosaic plugins install --force           # update the ones you already installed (overwrites local edits)
+```
+
+Install `mosaic-plugins_<version>_all.deb` (it puts them in `/usr/share/mosaic/plugins`) or unpack `mosaic-plugins-<version>.tar.gz` and pass `--from mosaic-plugins-<version>/plugins`. The matching Claude Code skills are in `skills/`: `mosaic skills install --from mosaic-plugins-<version>/skills`. Then uncomment the widget you want in `mosaic.toml`.
+
 The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 
 The pull request widgets remember what you have already reviewed, so a fresh push to a PR you reviewed lights up as `push novo`. If the network drops, they show the last good data with an `(offline)` note instead of an empty box.
