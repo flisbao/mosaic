@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use thiserror::Error;
@@ -59,10 +60,29 @@ fn joined(current: &str, block: &str) -> String {
 fn replace_file(path: &Path, content: &str) -> Result<(), AppendError> {
     let permissions = fs::metadata(path).map_err(io_error(path))?.permissions();
     let temporary = path.with_extension("toml.tmp");
-    fs::write(&temporary, content).map_err(io_error(&temporary))?;
+    let _ = fs::remove_file(&temporary);
+    let mut file = create_temporary(&temporary, &permissions).map_err(io_error(&temporary))?;
+    file.write_all(content.as_bytes())
+        .map_err(io_error(&temporary))?;
     fs::set_permissions(&temporary, permissions).map_err(io_error(&temporary))?;
     fs::rename(&temporary, path).map_err(io_error(path))
 }
+
+fn create_temporary(path: &Path, permissions: &fs::Permissions) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    restrict_creation_mode(&mut options, permissions);
+    options.open(path)
+}
+
+#[cfg(unix)]
+fn restrict_creation_mode(options: &mut fs::OpenOptions, permissions: &fs::Permissions) {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    options.mode(permissions.mode());
+}
+
+#[cfg(not(unix))]
+fn restrict_creation_mode(_options: &mut fs::OpenOptions, _permissions: &fs::Permissions) {}
 
 #[cfg(test)]
 mod tests {
@@ -119,6 +139,43 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let error = append_widget(directory.path(), BLOCK).unwrap_err();
         assert!(error.to_string().contains("mosaic.toml"));
+    }
+
+    #[test]
+    fn a_stale_temporary_file_does_not_block_the_append() {
+        let directory = directory_with("");
+        let temporary = directory.path().join("mosaic.toml.tmp");
+        fs::write(&temporary, "sobra de uma execução interrompida").unwrap();
+        append_widget(directory.path(), BLOCK).unwrap();
+        assert!(!temporary.exists());
+        let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
+        assert_eq!(text, BLOCK);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_the_temporary_path_is_never_followed() {
+        let directory = directory_with("");
+        let victim = directory.path().join("alvo-do-link");
+        fs::write(&victim, "intacto").unwrap();
+        std::os::unix::fs::symlink(&victim, directory.path().join("mosaic.toml.tmp")).unwrap();
+        append_widget(directory.path(), BLOCK).unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "intacto");
+        let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
+        assert_eq!(text, BLOCK);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_temporary_file_is_born_private_when_the_config_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = directory_with("");
+        let permissions = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(config_file_path(directory.path()), permissions.clone()).unwrap();
+        let temporary = directory.path().join("mosaic.toml.tmp");
+        let file = create_temporary(&temporary, &permissions).unwrap();
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[cfg(unix)]
