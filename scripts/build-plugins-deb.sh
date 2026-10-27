@@ -31,9 +31,10 @@ Maintainer: Lisbao <flisbao@gmail.com>
 Homepage: https://github.com/flisbao/mosaic
 Description: Service widgets for the Mosaic terminal dashboard
  Widgets de Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines e agenda,
- com as skills do Claude Code de cada um. Rode "mosaic plugins install"
- para copiá-los para ~/.config/mosaic/plugins e "mosaic skills install"
- para ligar as skills ao seu ~/.claude/skills.
+ cada um com a skill do Claude Code e o roteiro de configuração. Rode
+ "mosaic plugins install" para copiá-los para ~/.config/mosaic/plugins (e
+ ligar as skills ao ~/.claude/skills) e "mosaic plugins setup NOME" para
+ configurar um widget.
 CONTROL
 
 mkdir -p "$OUTPUT"

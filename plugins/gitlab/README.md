@@ -1,6 +1,6 @@
 # GitLab
 
-> Instalação: `mosaic plugins install gitlab` (o plugin não vem no binário; veja o README da raiz).
+> Instalação: `mosaic plugins install gitlab` (o plugin não vem no binário; veja o README da raiz). Configuração guiada, sem editar o `mosaic.toml` à mão: `mosaic plugins setup gitlab` (pergunta só o que este plugin lê, mostra o bloco e grava depois que você confirmar).
 
 `plugins/gitlab/gitlab_mrs.py` é um provider do Mosaic que mostra os merge requests do GitLab que esperam por você: os que pediram sua revisão e os que você abriu. Ele só lê (consultas GraphQL, sem mutation) e só fala com `https://gitlab.com`. O token nunca vai em argumento: `GITLAB_TOKEN_ENV` guarda o **nome** da variável que contém o token (ou use `GITLAB_TOKEN_FILE`).
 

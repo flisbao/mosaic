@@ -9,7 +9,18 @@ description: Use quando for configurar, depurar ou alterar o widget de pull requ
 
 `plugins/github/github_prs.py` mostra os PRs que esperam por você no **GitHub.com**: a seção "Aguardando minha revisão" e a seção "Meus PRs". Só leitura (GraphQL sem mutation), só `https://api.github.com`, sem ações. Detalhes, tabela de tags e roteiro manual: `plugins/github/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
-> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+> Instalada por `mosaic plugins install` (junto com o plugin, em `~/.config/mosaic/plugins/github/`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
+## Instalar e configurar com o mosaic plugins
+
+Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, ele é interativo):
+
+1. `mosaic plugins list`: lista os plugins disponíveis no pacote (`/usr/share/mosaic/plugins`).
+2. `mosaic plugins install github`: copia a pasta para `~/.config/mosaic/plugins/github/` (script, `README.md`, esta `SKILL.md` e o `setup.toml`) e liga esta skill ao Claude Code em `~/.claude/skills/mosaic-plugin-github`, se `~/.claude` existir. Não sobrescreve nada: depois de instalar um pacote novo, use `--force`. `--no-skill` pula a skill; `--from DIR`, `--to DIR` e `--skills-dir DIR` apontam para outras pastas (tarball, testes).
+3. `mosaic plugins setup github`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
+4. Aperte `R` no mosaic para recarregar; `mosaic check --config` valida o arquivo.
+
+Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup github` sem sair da conversa. Se ela preferir conversar, siga a entrevista abaixo e entregue o bloco para colar.
 
 ## Configurar com a pessoa
 
@@ -32,6 +43,20 @@ inherit_env = ["GITHUB_TOKEN_PRS"]
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN_PRS"
 GITHUB_OWNERS = "minha-org,minha-conta"
 ```
+
+## Todas as opções
+
+O que o `mosaic plugins setup` pergunta, na ordem. Vem do `setup.toml` desta pasta, que um teste confere com o README e com o código do plugin.
+
+| Opção | O que é | Padrão | Situação |
+| --- | --- | --- | --- |
+| `GITHUB_TOKEN_ENV` ou `GITHUB_TOKEN_FILE` | Token do GitHub (fine-grained com Pull requests: Read e Metadata: Read, ou classic com escopo repo) (nome da variável ou caminho do arquivo; o valor nunca é pedido) | — | obrigatória |
+| `GITHUB_OWNERS` | Usuários ou organizações a acompanhar (Enter = todos os repositórios que o token alcança) (separados por vírgula) | — | opcional |
+| `GITHUB_TITLE` | Título do widget | `GitHub` | opcional |
+| `GITHUB_STATE_DIR` | Pasta do estado do widget (memória de revisões e cache offline) | `~/.local/state/mosaic/github` | opcional; só com `--advanced` |
+
+- Só para testes locais, o `setup` não pergunta: `GITHUB_API_URL`.
+- Valores de partida do widget: `interval_seconds = 120` e `timeout_seconds = 30`; o id padrão é `github-prs`.
 
 ## Verificar
 

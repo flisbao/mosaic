@@ -11,7 +11,7 @@ SKILL_PREFIX = "mosaic-plugin-"
 AUTHORING_SKILL = "mosaic-widget-authoring"
 USAGE_EXIT_CODE = 2
 ALLOWED_PLUGIN_SUFFIXES = (".py", ".js")
-ALLOWED_PLUGIN_FILE_NAMES = ("README.md",)
+ALLOWED_PLUGIN_FILE_NAMES = ("README.md", "SKILL.md", "setup.toml")
 SKIPPED_PLUGIN_FOLDERS = ("tests", "__pycache__")
 PACKAGED_PLUGINS = "usr/share/mosaic/plugins"
 PACKAGED_SKILLS = "usr/share/mosaic/skills"
@@ -50,7 +50,7 @@ def real_service_plugins():
         for folder in plugins.iterdir()
         if folder.is_dir()
         and folder.name not in SKIPPED_PLUGIN_FOLDERS
-        and (REPOSITORY_ROOT / ".claude" / "skills" / f"{SKILL_PREFIX}{folder.name}").is_dir()
+        and (folder / "SKILL.md").is_file()
     )
 
 
@@ -86,15 +86,18 @@ class PackagingTests(unittest.TestCase):
         self.assertTrue((self.destination / PACKAGED_SKILLS / AUTHORING_SKILL / "SKILL.md").is_file())
         self.assertFalse((self.destination / PACKAGED_PLUGINS).exists())
 
-    def test_stage_plugins_has_every_service_plugin_and_its_skill(self):
+    def test_stage_plugins_has_every_service_plugin_with_its_skill_and_setup_manifest(self):
         result = stage("plugins", self.destination)
         self.assertEqual(result.returncode, 0, result.stderr)
         expected = real_service_plugins()
         self.assertGreaterEqual(len(expected), 6)
         self.assertEqual(listing(self.destination / PACKAGED_PLUGINS), expected)
-        self.assertEqual(
-            listing(self.destination / PACKAGED_SKILLS), [f"{SKILL_PREFIX}{name}" for name in expected]
-        )
+        for name in expected:
+            folder = self.destination / PACKAGED_PLUGINS / name
+            with self.subTest(plugin=name):
+                self.assertTrue((folder / "SKILL.md").is_file())
+                self.assertTrue((folder / "setup.toml").is_file())
+        self.assertFalse((self.destination / PACKAGED_SKILLS).exists())
 
     def test_plugins_package_has_only_runtime_files(self):
         stage("plugins", self.destination)
@@ -148,7 +151,10 @@ class PackagingTests(unittest.TestCase):
         (repository / "plugins" / "alpha" / "tests").mkdir()
         (repository / "plugins" / "alpha" / "tests" / "test_a.py").write_text("x", encoding="utf-8")
         stage("plugins", self.destination, repository)
-        self.assertEqual(listing(self.destination / PACKAGED_PLUGINS / "alpha"), ["README.md", "alpha.py"])
+        self.assertEqual(
+            listing(self.destination / PACKAGED_PLUGINS / "alpha"),
+            ["README.md", "SKILL.md", "alpha.py", "setup.toml"],
+        )
 
     def test_plugins_release_workflow_is_triggered_only_by_plugins_tags(self):
         text = (WORKFLOWS / "release-plugins.yml").read_text(encoding="utf-8")
@@ -182,13 +188,12 @@ class PackagingTests(unittest.TestCase):
         (repository / "plugins" / "alpha").mkdir(parents=True)
         (repository / "plugins" / "alpha" / "alpha.py").write_text("print()", encoding="utf-8")
         (repository / "plugins" / "alpha" / "README.md").write_text("# a", encoding="utf-8")
+        (repository / "plugins" / "alpha" / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        (repository / "plugins" / "alpha" / "setup.toml").write_text("plugin = \"alpha\"\n", encoding="utf-8")
         (repository / "plugins" / "tests").mkdir()
         (repository / "plugins" / "VERSION").write_text("1.2.3\n", encoding="utf-8")
-        skill = repository / ".claude" / "skills" / f"{SKILL_PREFIX}alpha"
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
         authoring = repository / ".claude" / "skills" / AUTHORING_SKILL
-        authoring.mkdir()
+        authoring.mkdir(parents=True)
         (authoring / "SKILL.md").write_text("---\nname: y\n---\n", encoding="utf-8")
         for name in ("README.md", "PROTOCOL.md", "LICENSE"):
             (repository / name).write_text(name, encoding="utf-8")

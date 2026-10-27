@@ -9,7 +9,18 @@ description: Use quando for configurar, depurar ou alterar o widget de pull requ
 
 `plugins/azure-devops/azure_devops.py` mostra os PRs ativos do **Azure DevOps Services** (`dev.azure.com`) que esperam por você: "Aguardando minha revisão" e "Meus PRs". Só leitura (`GET` na API REST `api-version` 7.1), sem ações. A autenticação é **Microsoft Entra ID** (token `Bearer` curto); o PAT foi removido. Detalhes e roteiro manual: `plugins/azure-devops/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
-> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+> Instalada por `mosaic plugins install` (junto com o plugin, em `~/.config/mosaic/plugins/azure-devops/`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
+## Instalar e configurar com o mosaic plugins
+
+Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, ele é interativo):
+
+1. `mosaic plugins list`: lista os plugins disponíveis no pacote (`/usr/share/mosaic/plugins`).
+2. `mosaic plugins install azure-devops`: copia a pasta para `~/.config/mosaic/plugins/azure-devops/` (script, `README.md`, esta `SKILL.md` e o `setup.toml`) e liga esta skill ao Claude Code em `~/.claude/skills/mosaic-plugin-azure-devops`, se `~/.claude` existir. Não sobrescreve nada: depois de instalar um pacote novo, use `--force`. `--no-skill` pula a skill; `--from DIR`, `--to DIR` e `--skills-dir DIR` apontam para outras pastas (tarball, testes).
+3. `mosaic plugins setup azure-devops`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
+4. Aperte `R` no mosaic para recarregar; `mosaic check --config` valida o arquivo.
+
+Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup azure-devops` sem sair da conversa. Se ela preferir conversar, siga a entrevista abaixo e entregue o bloco para colar.
 
 ## Configurar com a pessoa
 
@@ -41,6 +52,25 @@ AZDO_AUTH_METHOD = "azure-cli"
 ```
 
 Para o `service-principal`: `inherit_env = ["AZDO_SEGREDO"]` e, em `[widgets.env]`, `AZDO_TENANT_ID`, `AZDO_CLIENT_ID` e `AZDO_CLIENT_SECRET_ENV = "AZDO_SEGREDO"`.
+
+## Todas as opções
+
+O que o `mosaic plugins setup` pergunta, na ordem. Vem do `setup.toml` desta pasta, que um teste confere com o README e com o código do plugin.
+
+| Opção | O que é | Padrão | Situação |
+| --- | --- | --- | --- |
+| `AZDO_ORGANIZATION` | Nome da organização do Azure DevOps (só o nome, sem URL) | — | obrigatória |
+| `AZDO_PROJECTS` | Projetos, sem diferenciar maiúsculas de minúsculas (Enter = todos os projetos da organização) (separados por vírgula) | — | opcional |
+| `AZDO_AUTH_METHOD` | Como o widget se autentica no Entra: `azure-cli`, `device-code`, `service-principal`, `managed-identity` | `azure-cli` | opcional |
+| `AZDO_TENANT_ID` | Directory (tenant) ID (padrão: organizations) | — | obrigatória se `AZDO_AUTH_METHOD` = `service-principal`; perguntada se `AZDO_AUTH_METHOD` = `azure-cli` ou `device-code` ou `service-principal` |
+| `AZDO_CLIENT_ID` | Application (client) ID do app registrado no Entra (na managed-identity, só para identidade atribuída pelo usuário) | — | obrigatória se `AZDO_AUTH_METHOD` = `device-code` ou `service-principal`; perguntada se `AZDO_AUTH_METHOD` = `device-code` ou `service-principal` ou `managed-identity` |
+| `AZDO_CLIENT_SECRET_ENV` ou `AZDO_CLIENT_SECRET_FILE` | Segredo do app registrado no Entra (nome da variável ou caminho do arquivo; o valor nunca é pedido) | — | obrigatória; perguntada se `AZDO_AUTH_METHOD` = `service-principal` |
+| `AZDO_TITLE` | Título do widget | `Azure DevOps` | opcional |
+| `AZDO_CREDENTIALS_DIR` | Pasta (0700) do refresh token do device-code | `~/.local/state/mosaic/azure-devops-credentials` | opcional; perguntada se `AZDO_AUTH_METHOD` = `device-code`; só com `--advanced` |
+| `AZDO_STATE_DIR` | Pasta do estado do widget (memória de revisões e cache offline) | `~/.local/state/mosaic/azure-devops` | opcional; só com `--advanced` |
+
+- Só para testes locais, o `setup` não pergunta: `AZDO_BASE_URL`, `AZDO_LOGIN_URL`, `AZDO_IMDS_URL`.
+- Valores de partida do widget: `interval_seconds = 120` e `timeout_seconds = 30`; o id padrão é `azure-devops-prs`.
 
 ## Verificar
 

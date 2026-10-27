@@ -1,0 +1,62 @@
+plugin = "calendar"
+script = "plugins/calendar/calendar_widget.py"
+default_id = "agenda"
+interval_seconds = 300
+timeout_seconds = 20
+
+[[steps]]
+kind = "variable"
+name = "CALENDAR_SOURCE"
+prompt = "De onde vem a agenda"
+type = "choice"
+required = true
+choices = [
+  { value = "ics", description = "link ICS secreto; funciona em qualquer sistema e conta com o link liberado" },
+  { value = "goa", description = "conta Google do GNOME (Contas Online); só Linux com GNOME" },
+  { value = "gcalcli", description = "as agendas que o gcalcli já enxerga" },
+]
+
+[[steps]]
+kind = "secret"
+prompt = "Links ICS da agenda (cada link é um segredo: guarde-o numa variável de ambiente ou num arquivo com um link por linha)"
+environment_key = "CALENDAR_ICS_URL_ENV"
+file_key = "CALENDAR_ICS_URL_FILE"
+list = true
+both = true
+required = true
+when = { variable = "CALENDAR_SOURCE", in = ["ics"] }
+
+[[steps]]
+kind = "variable"
+name = "CALENDAR_GOA_ACCOUNT"
+prompt = "E-mail de uma conta Google específica (Enter = todas as contas com agenda)"
+when = { variable = "CALENDAR_SOURCE", in = ["goa"] }
+
+[[steps]]
+kind = "variable"
+name = "CALENDAR_CALENDARS"
+prompt = "Nomes das agendas (Enter = todas as agendas)"
+type = "list"
+when = { variable = "CALENDAR_SOURCE", in = ["goa", "gcalcli"] }
+
+[[steps]]
+kind = "variable"
+name = "CALENDAR_TITLE"
+prompt = "Título do widget"
+default = "Agenda"
+
+[[inherit]]
+name = "DBUS_SESSION_BUS_ADDRESS"
+when = { variable = "CALENDAR_SOURCE", in = ["goa"] }
+
+[[notes]]
+text = "ics: quem tem o link lê a sua agenda; nunca o coloque no mosaic.toml. Cada link tem até 15 s para responder: com vários links, aumente timeout_seconds."
+when = { variable = "CALENDAR_SOURCE", in = ["ics"] }
+
+[[notes]]
+text = "goa: a conta precisa estar em Configurações > Contas Online com Agenda ligada."
+when = { variable = "CALENDAR_SOURCE", in = ["goa"] }
+
+[[notes]]
+text = "gcalcli: precisa estar instalado e autenticado uma vez no terminal; se não estiver no PATH do widget, defina PATH em [widgets.env]."
+when = { variable = "CALENDAR_SOURCE", in = ["gcalcli"] }

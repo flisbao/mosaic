@@ -1,4 +1,5 @@
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -11,10 +12,13 @@ NOT_PLUGIN_DIRECTORIES = ("tests", "__pycache__")
 DESCRIPTION_PREFIX = "Use quando"
 MAXIMUM_FRONT_MATTER_CHARACTERS = 1024
 FRONT_MATTER_FENCE = "---"
+MANIFEST_FILE_NAME = "setup.toml"
 REQUIRED_HEADINGS = (
     "Visão geral",
+    "Instalar e configurar com o mosaic plugins",
     "Configurar com a pessoa",
     "Bloco do mosaic.toml",
+    "Todas as opções",
     "Verificar",
     "Mexendo no código",
     "Armadilhas",
@@ -34,7 +38,11 @@ def plugin_names():
 
 def plugin_files(name):
     folder = PLUGINS_DIRECTORY / name
-    return [path for path in folder.rglob("*") if path.suffix in (".py", ".md")]
+    return [
+        path
+        for path in folder.rglob("*")
+        if path.suffix in (".py", ".md") and path.name != "SKILL.md"
+    ]
 
 
 def known_text(name):
@@ -89,6 +97,33 @@ class PluginSkillTests(unittest.TestCase):
                     f"plugin '{name}' sem skill: crie .claude/skills/{PLUGIN_SKILL_PREFIX}{name}/SKILL.md "
                     f"pelo template em .claude/skills/{AUTHORING_SKILL}/plugin-skill-template.md",
                 )
+
+    def test_the_skill_lives_in_the_plugin_folder_and_is_linked_from_claude_skills(self):
+        for name in plugin_names():
+            with self.subTest(plugin=name):
+                real = PLUGINS_DIRECTORY / name / "SKILL.md"
+                link = SKILLS_DIRECTORY / f"{PLUGIN_SKILL_PREFIX}{name}"
+                self.assertTrue(real.is_file(), f"a skill de '{name}' fica em plugins/{name}/SKILL.md")
+                self.assertTrue(link.is_symlink(), f".claude/skills/{link.name} deve ser link para ../../plugins/{name}")
+                self.assertEqual(link.resolve(), (PLUGINS_DIRECTORY / name).resolve())
+
+    def test_every_option_of_the_setup_manifest_is_in_the_skill(self):
+        for name in plugin_names():
+            directory = SKILLS_DIRECTORY / f"{PLUGIN_SKILL_PREFIX}{name}"
+            if not directory.is_dir():
+                continue
+            with self.subTest(plugin=name):
+                _, _, body = read_skill(directory)
+                manifest = tomllib.loads((PLUGINS_DIRECTORY / name / MANIFEST_FILE_NAME).read_text(encoding="utf-8"))
+                keys = []
+                for step in manifest["steps"]:
+                    if step["kind"] == "secret":
+                        keys += [step["environment_key"], step["file_key"]]
+                    else:
+                        keys.append(step.get("name") or step["flag"])
+                keys += manifest.get("testing_only", [])
+                missing = [key for key in keys if f"`{key}`" not in body]
+                self.assertEqual(missing, [], "opções do setup.toml fora da skill")
 
     def test_every_plugin_skill_belongs_to_a_plugin(self):
         names = set(plugin_names())

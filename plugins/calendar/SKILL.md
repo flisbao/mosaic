@@ -9,7 +9,18 @@ description: Use quando for configurar, depurar ou alterar o widget de agenda (p
 
 `plugins/calendar/calendar_widget.py` mostra a agenda de **agora até a próxima segunda-feira às 00:00** (fuso local); o que já terminou some a cada leitura. Só leitura, sem ações, só biblioteca padrão. Três fontes, uma por widget, escolhidas com `CALENDAR_SOURCE`: `ics`, `goa`, `gcalcli`. Passo a passo e mensagens de erro: `plugins/calendar/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
-> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+> Instalada por `mosaic plugins install` (junto com o plugin, em `~/.config/mosaic/plugins/calendar/`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
+## Instalar e configurar com o mosaic plugins
+
+Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, ele é interativo):
+
+1. `mosaic plugins list`: lista os plugins disponíveis no pacote (`/usr/share/mosaic/plugins`).
+2. `mosaic plugins install calendar`: copia a pasta para `~/.config/mosaic/plugins/calendar/` (script, `README.md`, esta `SKILL.md` e o `setup.toml`) e liga esta skill ao Claude Code em `~/.claude/skills/mosaic-plugin-calendar`, se `~/.claude` existir. Não sobrescreve nada: depois de instalar um pacote novo, use `--force`. `--no-skill` pula a skill; `--from DIR`, `--to DIR` e `--skills-dir DIR` apontam para outras pastas (tarball, testes).
+3. `mosaic plugins setup calendar`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
+4. Aperte `R` no mosaic para recarregar; `mosaic check --config` valida o arquivo.
+
+Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup calendar` sem sair da conversa. Se ela preferir conversar, siga a entrevista abaixo e entregue o bloco para colar.
 
 ## Configurar com a pessoa
 
@@ -43,6 +54,21 @@ CALENDAR_ICS_URL_ENV = "CALENDAR_ICS_PERSONAL"
 ```
 
 GOA: `CALENDAR_SOURCE = "goa"` e `inherit_env = ["DBUS_SESSION_BUS_ADDRESS"]`. gcalcli: `CALENDAR_SOURCE = "gcalcli"` e, se o `gcalcli` não estiver no `PATH` do widget, `PATH` em `[widgets.env]`.
+
+## Todas as opções
+
+O que o `mosaic plugins setup` pergunta, na ordem. Vem do `setup.toml` desta pasta, que um teste confere com o README e com o código do plugin.
+
+| Opção | O que é | Padrão | Situação |
+| --- | --- | --- | --- |
+| `CALENDAR_SOURCE` | De onde vem a agenda: `ics`, `goa`, `gcalcli` | — | obrigatória |
+| `CALENDAR_ICS_URL_ENV` ou `CALENDAR_ICS_URL_FILE` | Links ICS da agenda (cada link é um segredo: guarde-o numa variável de ambiente ou num arquivo com um link por linha) (lista de nomes; aceita também os dois) | — | obrigatória; perguntada se `CALENDAR_SOURCE` = `ics` |
+| `CALENDAR_GOA_ACCOUNT` | E-mail de uma conta Google específica (Enter = todas as contas com agenda) | — | opcional; perguntada se `CALENDAR_SOURCE` = `goa` |
+| `CALENDAR_CALENDARS` | Nomes das agendas (Enter = todas as agendas) (separados por vírgula) | — | opcional; perguntada se `CALENDAR_SOURCE` = `goa` ou `gcalcli` |
+| `CALENDAR_TITLE` | Título do widget | `Agenda` | opcional |
+
+- `inherit_env` leva `DBUS_SESSION_BUS_ADDRESS` quando `CALENDAR_SOURCE` = `goa`.
+- Valores de partida do widget: `interval_seconds = 300` e `timeout_seconds = 20`; o id padrão é `agenda`.
 
 ## Verificar
 

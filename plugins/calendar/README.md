@@ -1,6 +1,6 @@
 # Widget de agenda (Google Agenda)
 
-> Instalação: `mosaic plugins install calendar` (o plugin não vem no binário; veja o README da raiz).
+> Instalação: `mosaic plugins install calendar` (o plugin não vem no binário; veja o README da raiz). Configuração guiada, sem editar o `mosaic.toml` à mão: `mosaic plugins setup calendar` (pergunta só o que este plugin lê, mostra o bloco e grava depois que você confirmar).
 
 Plugin do mosaic que mostra a sua agenda da semana: de **agora** até a **próxima segunda-feira às 00:00** (no fuso local, então domingo à noite ainda mostra os eventos de domingo). Os eventos que já terminaram somem sozinhos a cada atualização.
 
@@ -22,7 +22,7 @@ O plugin não vem no binário. Instale-o com:
 mosaic plugins install calendar
 ```
 
-Isso copia `calendar_widget.py` para `~/.config/mosaic/plugins/calendar/`. Depois descomente o bloco "Agenda Google" no `mosaic.toml`. Para atualizar uma cópia já instalada, use `mosaic plugins install calendar --force` (sobrescreve edições locais).
+Isso copia `calendar_widget.py` para `~/.config/mosaic/plugins/calendar/`. Depois rode `mosaic plugins setup calendar` ou descomente o bloco "Agenda Google" no `mosaic.toml`. Para atualizar uma cópia já instalada, use `mosaic plugins install calendar --force` (sobrescreve edições locais).
 
 ## Variáveis `CALENDAR_*`
 

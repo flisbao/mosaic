@@ -9,7 +9,18 @@ description: Use quando for configurar, depurar ou alterar o widget de pipelines
 
 `plugins/azure-pipelines/azure_pipelines.py` mostra, na Home, as pipelines de build mais lentas do **Azure DevOps Services** (média de duração das execuções concluídas na janela) e, no detalhe (Enter no widget), os passos que mais demoram em cada uma. Só leitura (`GET`, `api-version` 7.1), sem ações. A autenticação é Microsoft Entra ID, igual à do widget de PRs (`mosaic-plugin-azure-devops`). Detalhes e roteiro manual: `plugins/azure-pipelines/README.md`. Requisitos gerais: `mosaic-widget-authoring`.
 
-> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+> Instalada por `mosaic plugins install` (junto com o plugin, em `~/.config/mosaic/plugins/azure-pipelines/`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
+## Instalar e configurar com o mosaic plugins
+
+Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, ele é interativo):
+
+1. `mosaic plugins list`: lista os plugins disponíveis no pacote (`/usr/share/mosaic/plugins`).
+2. `mosaic plugins install azure-pipelines`: copia a pasta para `~/.config/mosaic/plugins/azure-pipelines/` (script, `README.md`, esta `SKILL.md` e o `setup.toml`) e liga esta skill ao Claude Code em `~/.claude/skills/mosaic-plugin-azure-pipelines`, se `~/.claude` existir. Não sobrescreve nada: depois de instalar um pacote novo, use `--force`. `--no-skill` pula a skill; `--from DIR`, `--to DIR` e `--skills-dir DIR` apontam para outras pastas (tarball, testes).
+3. `mosaic plugins setup azure-pipelines`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
+4. Aperte `R` no mosaic para recarregar; `mosaic check --config` valida o arquivo.
+
+Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup azure-pipelines` sem sair da conversa. Se ela preferir conversar, siga a entrevista abaixo e entregue o bloco para colar.
 
 ## Configurar com a pessoa
 
@@ -37,6 +48,28 @@ AZDO_AUTH_METHOD = "azure-cli"
 ```
 
 O intervalo é longo de propósito: o ranking muda devagar e cada leitura faz uma requisição de builds por projeto. Para o `service-principal`, acrescente `AZDO_TENANT_ID`, `AZDO_CLIENT_ID`, `AZDO_CLIENT_SECRET_ENV` e o nome da variável em `inherit_env`.
+
+## Todas as opções
+
+O que o `mosaic plugins setup` pergunta, na ordem. Vem do `setup.toml` desta pasta, que um teste confere com o README e com o código do plugin.
+
+| Opção | O que é | Padrão | Situação |
+| --- | --- | --- | --- |
+| `AZDO_ORGANIZATION` | Nome da organização do Azure DevOps (só o nome, sem URL) | — | obrigatória |
+| `AZDO_PROJECTS` | Projetos, pelo nome exato (Enter = todos os projetos da organização, até 50; custa uma requisição de builds por projeto) (separados por vírgula) | — | opcional |
+| `AZDO_PIPELINE_DAYS` | Janela de histórico, em dias (1 a 90) | `14` | opcional |
+| `AZDO_PIPELINE_TOP` | Quantas pipelines entram no ranking (1 a 10) | `5` | opcional |
+| `AZDO_PIPELINE_SAMPLE` | Quantas execuções recentes de cada pipeline entram na análise dos passos (1 a 20) | `10` | opcional |
+| `AZDO_AUTH_METHOD` | Como o widget se autentica no Entra: `azure-cli`, `device-code`, `service-principal`, `managed-identity` | `azure-cli` | opcional |
+| `AZDO_TENANT_ID` | Directory (tenant) ID (padrão: organizations) | — | obrigatória se `AZDO_AUTH_METHOD` = `service-principal`; perguntada se `AZDO_AUTH_METHOD` = `azure-cli` ou `device-code` ou `service-principal` |
+| `AZDO_CLIENT_ID` | Application (client) ID do app registrado no Entra (na managed-identity, só para identidade atribuída pelo usuário) | — | obrigatória se `AZDO_AUTH_METHOD` = `device-code` ou `service-principal`; perguntada se `AZDO_AUTH_METHOD` = `device-code` ou `service-principal` ou `managed-identity` |
+| `AZDO_CLIENT_SECRET_ENV` ou `AZDO_CLIENT_SECRET_FILE` | Segredo do app registrado no Entra (nome da variável ou caminho do arquivo; o valor nunca é pedido) | — | obrigatória; perguntada se `AZDO_AUTH_METHOD` = `service-principal` |
+| `AZDO_TITLE` | Título do widget | `Pipelines lentas` | opcional |
+| `AZDO_CREDENTIALS_DIR` | Pasta (0700) do refresh token do device-code | `~/.local/state/mosaic/azure-devops-credentials` | opcional; perguntada se `AZDO_AUTH_METHOD` = `device-code`; só com `--advanced` |
+| `AZDO_STATE_DIR` | Pasta do estado do widget (cache offline e cache de timelines) | `~/.local/state/mosaic/azure-pipelines` | opcional; só com `--advanced` |
+
+- Só para testes locais, o `setup` não pergunta: `AZDO_BASE_URL`, `AZDO_LOGIN_URL`, `AZDO_IMDS_URL`.
+- Valores de partida do widget: `interval_seconds = 900` e `timeout_seconds = 60`; o id padrão é `azure-pipelines`.
 
 ## Verificar
 

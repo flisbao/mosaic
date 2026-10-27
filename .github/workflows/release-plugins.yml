@@ -44,6 +44,8 @@ jobs:
           target/debug/mosaic plugins install --from "${stage}/usr/share/mosaic/plugins" --to "${stage}/instalado"
           test -f "${stage}/instalado/jira/jira.py"
           test -f "${stage}/instalado/azure-pipelines/azure_pipelines.py"
+          test -f "${stage}/instalado/jira/SKILL.md"
+          test -f "${stage}/instalado/jira/setup.toml"
 
   package:
     name: Empacotar
@@ -58,7 +60,7 @@ jobs:
           stage="$(mktemp -d)"
           scripts/stage-package.sh plugins "${stage}"
           mkdir "${name}"
-          cp -R "${stage}/usr/share/mosaic/plugins" "${stage}/usr/share/mosaic/skills" "${name}/"
+          cp -R "${stage}/usr/share/mosaic/plugins" "${name}/"
           cp plugins/VERSION LICENSE "${name}/"
           tar -czf "${name}.tar.gz" "${name}"
           sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"

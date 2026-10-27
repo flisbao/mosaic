@@ -1,6 +1,6 @@
 # Jira
 
-> Instalação: `mosaic plugins install jira` (o plugin não vem no binário; veja o README da raiz).
+> Instalação: `mosaic plugins install jira` (o plugin não vem no binário; veja o README da raiz). Configuração guiada, sem editar o `mosaic.toml` à mão: `mosaic plugins setup jira` (pergunta só o que este plugin lê, mostra o bloco e grava depois que você confirmar).
 
 `plugins/jira/jira.py` é um provider genérico para o Jira Cloud: cada widget define o próprio JQL e como mostrar o resultado. O Mosaic acrescenta `snapshot` aos `args`, então as opções do widget vêm antes dele e a conexão (site, e-mail, token) vem por variáveis de ambiente em `[widgets.env]`. O token nunca vai em argumento: `JIRA_TOKEN_ENV` guarda o **nome** da variável que contém o token (ou use `JIRA_TOKEN_FILE`).
 

@@ -1,0 +1,90 @@
+plugin = "azure-devops"
+script = "plugins/azure-devops/azure_devops.py"
+default_id = "azure-devops-prs"
+interval_seconds = 120
+timeout_seconds = 30
+testing_only = ["AZDO_BASE_URL", "AZDO_LOGIN_URL", "AZDO_IMDS_URL"]
+
+[[steps]]
+kind = "variable"
+name = "AZDO_ORGANIZATION"
+prompt = "Nome da organização do Azure DevOps (só o nome, sem URL)"
+required = true
+
+[[steps]]
+kind = "variable"
+name = "AZDO_PROJECTS"
+prompt = "Projetos, sem diferenciar maiúsculas de minúsculas (Enter = todos os projetos da organização)"
+type = "list"
+
+[[steps]]
+kind = "variable"
+name = "AZDO_AUTH_METHOD"
+prompt = "Como o widget se autentica no Entra"
+type = "choice"
+default = "azure-cli"
+choices = [
+  { value = "azure-cli", description = "usa o az login da sua máquina (padrão)" },
+  { value = "device-code", description = "login uma vez no terminal, com um app registrado no Entra" },
+  { value = "service-principal", description = "automação fora do Azure, com o segredo de um app" },
+  { value = "managed-identity", description = "Mosaic rodando numa VM do Azure" },
+]
+
+[[steps]]
+kind = "variable"
+name = "AZDO_TENANT_ID"
+prompt = "Directory (tenant) ID (padrão: organizations)"
+when = { variable = "AZDO_AUTH_METHOD", in = ["azure-cli", "device-code", "service-principal"] }
+required_when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
+
+[[steps]]
+kind = "variable"
+name = "AZDO_CLIENT_ID"
+prompt = "Application (client) ID do app registrado no Entra (na managed-identity, só para identidade atribuída pelo usuário)"
+when = { variable = "AZDO_AUTH_METHOD", in = ["device-code", "service-principal", "managed-identity"] }
+required_when = { variable = "AZDO_AUTH_METHOD", in = ["device-code", "service-principal"] }
+
+[[steps]]
+kind = "secret"
+prompt = "Segredo do app registrado no Entra"
+environment_key = "AZDO_CLIENT_SECRET_ENV"
+file_key = "AZDO_CLIENT_SECRET_FILE"
+required = true
+when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
+
+[[steps]]
+kind = "variable"
+name = "AZDO_TITLE"
+prompt = "Título do widget"
+default = "Azure DevOps"
+
+[[steps]]
+kind = "variable"
+name = "AZDO_CREDENTIALS_DIR"
+prompt = "Pasta (0700) do refresh token do device-code"
+default = "~/.local/state/mosaic/azure-devops-credentials"
+advanced = true
+when = { variable = "AZDO_AUTH_METHOD", in = ["device-code"] }
+
+[[steps]]
+kind = "variable"
+name = "AZDO_STATE_DIR"
+prompt = "Pasta do estado do widget (memória de revisões e cache offline)"
+default = "~/.local/state/mosaic/azure-devops"
+advanced = true
+
+[[notes]]
+text = "azure-cli: o mosaic precisa achar o az no PATH e ler ~/.azure; se você usa AZURE_CONFIG_DIR, liste-a em inherit_env."
+when = { variable = "AZDO_AUTH_METHOD", in = ["azure-cli"] }
+
+[[notes]]
+text = "device-code: rode o login uma vez, no terminal, com as mesmas variáveis do widget: python3 ~/.config/mosaic/plugins/azure-devops/azure_devops.py login"
+when = { variable = "AZDO_AUTH_METHOD", in = ["device-code"] }
+
+[[notes]]
+text = "service-principal: exporte a variável do segredo antes de abrir o mosaic; o valor nunca vai para o mosaic.toml."
+when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
+
+[[notes]]
+text = "managed-identity só funciona numa VM do Azure (IMDS)."
+when = { variable = "AZDO_AUTH_METHOD", in = ["managed-identity"] }

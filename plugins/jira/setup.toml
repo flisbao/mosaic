@@ -1,0 +1,139 @@
+plugin = "jira"
+script = "plugins/jira/jira.py"
+default_id = "jira"
+interval_seconds = 120
+timeout_seconds = 45
+testing_only = ["JIRA_BASE_URL"]
+
+[[steps]]
+kind = "variable"
+name = "JIRA_SITE"
+prompt = "Host do site do Jira, sem https:// (ex.: empresa.atlassian.net)"
+required = true
+
+[[steps]]
+kind = "variable"
+name = "JIRA_EMAIL"
+prompt = "E-mail da conta dona do token"
+required = true
+
+[[steps]]
+kind = "secret"
+prompt = "Token de API do Jira (crie em id.atlassian.com)"
+environment_key = "JIRA_TOKEN_ENV"
+file_key = "JIRA_TOKEN_FILE"
+required = true
+
+[[steps]]
+kind = "argument"
+flag = "--jql"
+prompt = "Consulta JQL do widget"
+required = true
+
+[[steps]]
+kind = "argument"
+flag = "--title"
+prompt = "Título do widget"
+default = "Jira"
+
+[[steps]]
+kind = "argument"
+flag = "--group-by"
+prompt = "Agrupar o detalhe por"
+type = "choice"
+default = "none"
+choices = [
+  { value = "none", description = "sem agrupamento" },
+  { value = "assignee", description = "por responsável" },
+  { value = "status", description = "por status" },
+  { value = "priority", description = "por prioridade" },
+]
+
+[[steps]]
+kind = "argument"
+flag = "--view"
+prompt = "Como mostrar os issues"
+type = "choice"
+default = "lines"
+choices = [
+  { value = "lines", description = "uma linha por issue" },
+  { value = "table", description = "tabela" },
+  { value = "stat", description = "só as contagens" },
+]
+
+[[steps]]
+kind = "argument"
+flag = "--columns"
+prompt = "Colunas da tabela: key, summary, status, assignee, priority, updated"
+type = "list"
+default = "key,summary,status,assignee"
+when = { variable = "--view", in = ["table"] }
+
+[[steps]]
+kind = "argument"
+flag = "--max-issues"
+prompt = "Máximo de issues buscados"
+type = "integer"
+min = 1
+max = 500
+default = "100"
+
+[[steps]]
+kind = "variable"
+name = "JIRA_STATE_DIR"
+prompt = "Pasta do cache offline"
+default = "~/.local/state/mosaic/jira"
+advanced = true
+
+[[steps]]
+kind = "variable"
+name = "JIRA_BUDGET_SECONDS"
+prompt = "Orçamento interno de tempo, em segundos (menor que o tempo máximo do widget)"
+type = "integer"
+min = 1
+max = 3600
+default = "40"
+advanced = true
+
+[[notes]]
+text = "O valor do token fica fora do mosaic.toml: exporte a variável (ou grave o arquivo com chmod 600) antes de abrir o mosaic."
+
+[[presets]]
+name = "minhas-tarefas"
+description = "o que está atribuído a você e ainda não terminou"
+id = "jira-minhas-tarefas"
+arguments = { "--jql" = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC", "--title" = "Minhas tarefas" }
+
+[[presets]]
+name = "time-em-andamento"
+description = "o que cada pessoa do projeto está pegando agora, agrupado por responsável, em tabela"
+id = "jira-time-em-andamento"
+arguments = { "--jql" = 'project = {project} AND statusCategory = "In Progress"', "--title" = "Time em andamento", "--group-by" = "assignee", "--view" = "table", "--columns" = "key,summary,status" }
+inputs = [{ name = "project", prompt = "Chave do projeto (ex.: VHPJ)" }]
+
+[[presets]]
+name = "time"
+description = "issues abertos de uma lista fixa de pessoas, agrupados por responsável"
+id = "jira-time"
+arguments = { "--jql" = "assignee in ({emails}) AND statusCategory != Done", "--title" = "Time", "--group-by" = "assignee" }
+inputs = [{ name = "emails", prompt = "E-mails das pessoas, separados por vírgula", quote_list = true }]
+
+[[presets]]
+name = "sem-dono"
+description = "issues a fazer sem responsável há mais de duas horas, só a contagem"
+id = "jira-sem-dono"
+arguments = { "--jql" = 'assignee is EMPTY AND statusCategory = "To Do" AND created <= -2h', "--title" = "Sem dono", "--view" = "stat" }
+
+[[presets]]
+name = "sprint"
+description = "sprint aberto de um projeto, agrupado por status"
+id = "jira-sprint"
+arguments = { "--jql" = "sprint in openSprints() AND project = {project}", "--title" = "Sprint", "--group-by" = "status" }
+inputs = [{ name = "project", prompt = "Chave do projeto (ex.: VHPJ)" }]
+
+[[presets]]
+name = "filtro-salvo"
+description = "um filtro salvo no Jira (o número está na URL do filtro)"
+id = "jira-filtro"
+arguments = { "--jql" = "filter = {filter}", "--title" = "Meu filtro" }
+inputs = [{ name = "filter", prompt = "Número do filtro" }]

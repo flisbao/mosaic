@@ -9,7 +9,18 @@ description: Use quando for configurar, depurar ou alterar o widget do Jira (plu
 
 `plugins/jira/jira.py` é um provider genérico do **Jira Cloud**, só leitura (sem ações): cada widget traz o próprio JQL em `args` e escolhe como mostrar o resultado. Autenticação Basic com e-mail e token de API clássico. Detalhes e exemplos: `plugins/jira/README.md`. Requisitos gerais de widget: `mosaic-widget-authoring`.
 
-> Instalada pelo pacote (`mosaic skills install`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+> Instalada por `mosaic plugins install` (junto com o plugin, em `~/.config/mosaic/plugins/jira/`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
+
+## Instalar e configurar com o mosaic plugins
+
+Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, ele é interativo):
+
+1. `mosaic plugins list`: lista os plugins disponíveis no pacote (`/usr/share/mosaic/plugins`).
+2. `mosaic plugins install jira`: copia a pasta para `~/.config/mosaic/plugins/jira/` (script, `README.md`, esta `SKILL.md` e o `setup.toml`) e liga esta skill ao Claude Code em `~/.claude/skills/mosaic-plugin-jira`, se `~/.claude` existir. Não sobrescreve nada: depois de instalar um pacote novo, use `--force`. `--no-skill` pula a skill; `--from DIR`, `--to DIR` e `--skills-dir DIR` apontam para outras pastas (tarball, testes).
+3. `mosaic plugins setup jira`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
+4. Aperte `R` no mosaic para recarregar; `mosaic check --config` valida o arquivo.
+
+Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup jira` sem sair da conversa. Se ela preferir conversar, siga a entrevista abaixo e entregue o bloco para colar.
 
 ## Configurar com a pessoa
 
@@ -39,6 +50,36 @@ JIRA_TOKEN_ENV = "JIRA_TOKEN_EMPRESA"
 ```
 
 `timeout_seconds` precisa ficar acima de `JIRA_BUDGET_SECONDS` (40). Aspas dentro do JQL viram `\"` no TOML.
+
+## Todas as opções
+
+O que o `mosaic plugins setup` pergunta, na ordem. Vem do `setup.toml` desta pasta, que um teste confere com o README e com o código do plugin.
+
+| Opção | O que é | Padrão | Situação |
+| --- | --- | --- | --- |
+| `JIRA_SITE` | Host do site do Jira, sem https:// (ex.: empresa.atlassian.net) | — | obrigatória |
+| `JIRA_EMAIL` | E-mail da conta dona do token | — | obrigatória |
+| `JIRA_TOKEN_ENV` ou `JIRA_TOKEN_FILE` | Token de API do Jira (crie em id.atlassian.com) (nome da variável ou caminho do arquivo; o valor nunca é pedido) | — | obrigatória |
+| `--jql` | Consulta JQL do widget | — | obrigatória |
+| `--title` | Título do widget | `Jira` | opcional |
+| `--group-by` | Agrupar o detalhe por: `none`, `assignee`, `status`, `priority` | `none` | opcional |
+| `--view` | Como mostrar os issues: `lines`, `table`, `stat` | `lines` | opcional |
+| `--columns` | Colunas da tabela: key, summary, status, assignee, priority, updated (separados por vírgula) | `key,summary,status,assignee` | opcional; perguntada se `--view` = `table` |
+| `--max-issues` | Máximo de issues buscados (1 a 500) | `100` | opcional |
+| `JIRA_STATE_DIR` | Pasta do cache offline | `~/.local/state/mosaic/jira` | opcional; só com `--advanced` |
+| `JIRA_BUDGET_SECONDS` | Orçamento interno de tempo, em segundos (menor que o tempo máximo do widget) (1 a 3600) | `40` | opcional; só com `--advanced` |
+
+- Só para testes locais, o `setup` não pergunta: `JIRA_BASE_URL`.
+- Valores de partida do widget: `interval_seconds = 120` e `timeout_seconds = 45`; o id padrão é `jira`.
+
+Modelos prontos que o `setup` oferece antes das perguntas (vêm do README):
+
+- `minhas-tarefas`: o que está atribuído a você e ainda não terminou.
+- `time-em-andamento`: o que cada pessoa do projeto está pegando agora, agrupado por responsável, em tabela.
+- `time`: issues abertos de uma lista fixa de pessoas, agrupados por responsável.
+- `sem-dono`: issues a fazer sem responsável há mais de duas horas, só a contagem.
+- `sprint`: sprint aberto de um projeto, agrupado por status.
+- `filtro-salvo`: um filtro salvo no Jira (o número está na URL do filtro).
 
 ## Verificar
 
