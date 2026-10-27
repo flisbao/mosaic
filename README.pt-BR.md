@@ -10,7 +10,7 @@ Mosaic é um painel de terminal (TUI) feito de peças independentes. Cada widget
 cargo run --release
 ```
 
-Na primeira execução o Mosaic cria `~/.config/mosaic/` com a configuração, os widgets de exemplo (kanban, example, galeria) e o prompt de prioridade. Os widgets de serviço (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, agenda) vêm no pacote `mosaic-plugins`, baixado das [releases de plugins](https://github.com/flisbao/mosaic/releases?q=plugins-v) (a "latest" é a do núcleo): rode `mosaic plugins install` (ou `mosaic plugins install jira github`) e descomente o bloco que quiser no `mosaic.toml`. Se você já usava a versão anterior, copie `~/.config/panel-tui/` para `~/.config/mosaic/`.
+Na primeira execução o Mosaic cria `~/.config/mosaic/` com a configuração, os widgets de exemplo (kanban, example, galeria) e o prompt de prioridade. Os widgets de serviço (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, agenda) vêm no pacote `mosaic-plugins`, baixado das [releases de plugins](https://github.com/flisbao/mosaic/releases?q=plugins-v) (a "latest" é a do núcleo): rode `mosaic plugins install` (ou `mosaic plugins install jira github`) e depois `mosaic plugins setup jira`, uma entrevista no terminal que monta o widget a partir do que o plugin já lê e só grava no `mosaic.toml` depois que você confirmar (nunca pede o token: só o nome da variável ou o caminho do arquivo; `--print` só mostra o bloco e `--advanced` inclui as opções avançadas). Cada plugin traz também a skill do Claude Code (`SKILL.md`), que o `install` liga ao `~/.claude/skills`. Se preferir, descomente o bloco que quiser no `mosaic.toml`. Se você já usava a versão anterior, copie `~/.config/panel-tui/` para `~/.config/mosaic/`.
 
 O prompt é enviado ao `claude` e ao `opencode` pela entrada padrão, nunca como argumento, para não aparecer em `ps`.
 
@@ -29,7 +29,7 @@ Valide com `mosaic check python3 meu_widget.py` (o `check` executa o script a pa
 
 ## Contribuindo
 
-Um plugin novo precisa vir com a sua skill (`.claude/skills/mosaic-plugin-<pasta>/`). O passo a passo está em [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Um plugin novo precisa vir com a sua skill (`plugins/<pasta>/SKILL.md`) e com o roteiro do `mosaic plugins setup` (`plugins/<pasta>/setup.toml`). O passo a passo está em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Jira
 

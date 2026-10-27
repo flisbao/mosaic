@@ -121,9 +121,12 @@ mosaic plugins list                      # what the package offers
 mosaic plugins install                   # copy all of them to ~/.config/mosaic/plugins
 mosaic plugins install jira github       # or just some
 mosaic plugins install --force           # update the ones you already installed (overwrites local edits)
+mosaic plugins setup jira                # answer a few questions; it writes the widget into mosaic.toml
 ```
 
-Download `mosaic-plugins_<version>_all.deb` or `mosaic-plugins-<version>.tar.gz` from the [plugins releases](https://github.com/flisbao/mosaic/releases?q=plugins-v) (the "latest" release is the core, not the plugins). The `.deb` puts them in `/usr/share/mosaic/plugins`; with the tarball, unpack it and pass `--from mosaic-plugins-<version>/plugins`. The matching Claude Code skills are in `skills/`: `mosaic skills install --from mosaic-plugins-<version>/skills`. Then uncomment the widget you want in `mosaic.toml`.
+`mosaic plugins setup <name>` is an interview in the terminal built from what that plugin already reads (its variables and options, listed in `plugins/<name>/setup.toml`). It asks one thing at a time, shows the finished `[[widgets]]` block and only appends it to `mosaic.toml` after you confirm; it never asks for a token, only the name of the environment variable or the path of the file that holds it. `--print` just shows the block, `--advanced` also asks the optional settings and `--config-dir DIR` uses another configuration folder. Run it again with another id for a second widget.
+
+Download `mosaic-plugins_<version>_all.deb` or `mosaic-plugins-<version>.tar.gz` from the [plugins releases](https://github.com/flisbao/mosaic/releases?q=plugins-v) (the "latest" release is the core, not the plugins). The `.deb` puts them in `/usr/share/mosaic/plugins`; with the tarball, unpack it and pass `--from mosaic-plugins-<version>/plugins`. Each plugin folder also carries its Claude Code skill (`SKILL.md`) and its `setup.toml`; `mosaic plugins install` copies them and links the skill into `~/.claude/skills` when Claude Code is there (`--no-skill` skips it). Then run `mosaic plugins setup <name>` or uncomment the widget you want in `mosaic.toml`.
 
 The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 
@@ -192,13 +195,13 @@ Without `[[tabs]]` everything lives on a single tab. Check the file any time wit
 
 ## Claude Code skills
 
-Mosaic ships [Claude Code](https://claude.com/claude-code) skills that interview you and configure each widget for you (without ever asking you to paste a token), plus one for writing new widgets. The `.deb` puts them in `/usr/share/mosaic/skills`. Link them into your Claude Code with:
+Mosaic ships [Claude Code](https://claude.com/claude-code) skills that interview you and configure each widget for you (without ever asking you to paste a token). Each plugin brings its own, in `plugins/<name>/SKILL.md`, and `mosaic plugins install` links it into `~/.claude/skills/` (it never overwrites anything of yours and is safe to run again). The skill that teaches how to write new widgets comes with the core package in `/usr/share/mosaic/skills`; link it with:
 
 ```sh
 mosaic skills install
 ```
 
-It creates symlinks in `~/.claude/skills/`, never overwrites anything of yours and is safe to run again. Without the package, they live in [`.claude/skills`](.claude/skills) in this repository.
+Without the packages, the skills live in this repository: [`plugins/<name>/SKILL.md`](plugins) (linked from [`.claude/skills`](.claude/skills)) and `.claude/skills/mosaic-widget-authoring`.
 
 ## Contributing
 

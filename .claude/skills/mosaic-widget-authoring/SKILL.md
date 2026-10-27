@@ -13,7 +13,9 @@ Um widget é um comando completo (script + argumentos) que o Mosaic executa em i
 
 ## Pré-requisito de contribuição
 
-**Plugin novo só é aceito com a sua skill** `.claude/skills/mosaic-plugin-<pasta>/SKILL.md`, escrita a partir de [plugin-skill-template.md](plugin-skill-template.md). `python3 -m unittest discover -s plugins/tests` falha se uma pasta de plugin não tiver skill, se a skill estiver mal formada ou se citar uma variável que o código do plugin não conhece.
+**Plugin novo só é aceito com a sua skill** `plugins/<pasta>/SKILL.md` (e o link `.claude/skills/mosaic-plugin-<pasta>` → `../../plugins/<pasta>`), escrita a partir de [plugin-skill-template.md](plugin-skill-template.md), **e com o roteiro** `plugins/<pasta>/setup.toml` do `mosaic plugins setup`. `python3 -m unittest discover -s plugins/tests` falha se uma pasta de plugin não tiver skill ou roteiro, se a skill estiver mal formada, se citar uma variável que o código do plugin não conhece ou se esquecer uma opção do roteiro.
+
+O `setup.toml` só lista o que o plugin **já** lê (variáveis do README, opções de linha de comando, padrões, faixas, condições e os modelos prontos do README). Não invente configuração que o código não implementa: `test_setup_manifests.py` confere o arquivo com o README e com o código.
 
 Skills existentes: `mosaic-plugin-jira`, `-github`, `-gitlab`, `-azure-devops`, `-azure-pipelines`, `-calendar`. Ao mexer em um deles, use a skill dele junto com esta.
 
@@ -37,7 +39,9 @@ Skills existentes: `mosaic-plugin-jira`, `-github`, `-gitlab`, `-azure-devops`, 
 plugins/<pasta>/<nome>.py      só biblioteca padrão do Python 3, um arquivo
 plugins/<pasta>/README.md      o que mostra, variáveis, token, testar, limitações
 plugins/tests/test_<nome>.py   unittest; servidor falso em plugins/tests/fake_*.py se houver rede
-.claude/skills/mosaic-plugin-<pasta>/SKILL.md
+plugins/<pasta>/SKILL.md       a skill (instalada por mosaic plugins install)
+plugins/<pasta>/setup.toml     o roteiro do mosaic plugins setup <pasta>
+.claude/skills/mosaic-plugin-<pasta>   link para ../../plugins/<pasta>
 ```
 
 Forma do código (copie de `plugins/github/github_prs.py`):
@@ -55,8 +59,8 @@ Forma do código (copie de `plugins/github/github_prs.py`):
 2. **REQUIRED SUB-SKILL:** `superpowers:test-driven-development`. Teste primeiro (`plugins/tests/test_<nome>.py`), veja falhar, implemente.
 3. `python3 -m unittest discover -s plugins/tests` (suíte inteira, não só o arquivo novo).
 4. `mosaic check --cwd ~/.config/mosaic ... python3 plugins/<pasta>/<nome>.py` (ou `--config` para validar o `mosaic.toml`). Atenção: `check` passa o ambiente inteiro do shell e **não aplica `inherit_env`**; confira `inherit_env` à mão.
-5. Empacotar: o plugin entra sozinho no pacote **mosaic-plugins** (`scripts/stage-package.sh plugins`) quando existem `plugins/<pasta>/` e a skill `mosaic-plugin-<pasta>`; o usuário o instala com `mosaic plugins install <pasta>`. Ele **não** é embutido no binário. Opcional: bloco **comentado** no `DEFAULT_CONFIG` (`src/infrastructure/default_files.rs`). Mencionar o plugin no `README.md` da raiz.
-6. Escrever a skill do plugin pelo template e conferir que o teste de skills passa.
+5. Empacotar: o plugin entra sozinho no pacote **mosaic-plugins** (`scripts/stage-package.sh plugins`) quando existe `plugins/<pasta>/SKILL.md`; o usuário o instala com `mosaic plugins install <pasta>` (que também liga a skill ao Claude Code) e o configura com `mosaic plugins setup <pasta>`. Ele **não** é embutido no binário. Opcional: bloco **comentado** no `DEFAULT_CONFIG` (`src/infrastructure/default_files.rs`). Mencionar o plugin no `README.md` da raiz.
+6. Escrever a skill do plugin pelo template, o `setup.toml` e o link em `.claude/skills/`, e conferir que os testes de skills e de roteiro passam.
 7. `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`; ao final `cargo clean`.
 8. Revisão do plugin pronto por um modelo mais forte que o implementador (a equipe usa Sonnet 5.5, ou gpt-6-sol-1 em harness OpenAI). Critical e Important voltam com teste que falha primeiro.
 
