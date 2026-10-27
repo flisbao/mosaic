@@ -43,6 +43,15 @@ pub fn install_skills(source: &Path, target: &Path) -> Result<Vec<SkillOutcome>,
         .collect()
 }
 
+pub fn link_skill_directory(
+    skill: &Path,
+    target: &Path,
+    name: &str,
+) -> Result<SkillOutcome, SkillsError> {
+    fs::create_dir_all(target).map_err(SkillsError::io(target))?;
+    link_skill(skill, &target.join(name), name.to_string())
+}
+
 fn skill_names(source: &Path) -> Result<Vec<String>, SkillsError> {
     let mut names = Vec::new();
     for entry in fs::read_dir(source).map_err(SkillsError::io(source))? {

@@ -119,3 +119,101 @@ fn an_invalid_plugin_name_is_a_usage_error() {
     }
     assert!(!target.path().join("jira").exists());
 }
+
+fn write_plugin_with_skill(source: &Path, name: &str) {
+    write_plugin(source, name);
+    let folder = source.join(name);
+    fs::write(folder.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+    fs::write(folder.join("setup.toml"), "plugin = \"x\"\n").unwrap();
+    fs::write(folder.join("notes.txt"), "fora do pacote").unwrap();
+}
+
+#[test]
+fn install_ships_the_skill_and_the_setup_manifest_and_links_the_skill() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let skills = tempfile::tempdir().unwrap();
+    write_plugin_with_skill(source.path(), "jira");
+    let output = run_plugins(&[
+        "install",
+        "--from",
+        source.path().to_str().unwrap(),
+        "--to",
+        target.path().to_str().unwrap(),
+        "--skills-dir",
+        skills.path().to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(target.path().join("jira/SKILL.md").is_file());
+    assert!(target.path().join("jira/setup.toml").is_file());
+    assert!(!target.path().join("jira/notes.txt").exists());
+    let link = skills.path().join("mosaic-plugin-jira");
+    assert_eq!(fs::read_link(&link).unwrap(), target.path().join("jira"));
+    assert!(text(&output.stdout).contains("skill instalada: mosaic-plugin-jira"));
+}
+
+#[test]
+fn no_skill_installs_the_plugin_without_linking_anything() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let skills = tempfile::tempdir().unwrap();
+    write_plugin_with_skill(source.path(), "jira");
+    let output = run_plugins(&[
+        "install",
+        "--from",
+        source.path().to_str().unwrap(),
+        "--to",
+        target.path().to_str().unwrap(),
+        "--skills-dir",
+        skills.path().to_str().unwrap(),
+        "--no-skill",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(target.path().join("jira/SKILL.md").is_file());
+    assert!(!skills.path().join("mosaic-plugin-jira").exists());
+}
+
+#[test]
+fn a_plugin_without_a_skill_links_nothing() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let skills = tempfile::tempdir().unwrap();
+    write_plugin(source.path(), "kanban-extra");
+    let output = run_plugins(&[
+        "install",
+        "--from",
+        source.path().to_str().unwrap(),
+        "--to",
+        target.path().to_str().unwrap(),
+        "--skills-dir",
+        skills.path().to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(fs::read_dir(skills.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_foreign_skill_with_the_same_name_is_reported_not_replaced() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let skills = tempfile::tempdir().unwrap();
+    write_plugin_with_skill(source.path(), "jira");
+    fs::create_dir_all(skills.path().join("mosaic-plugin-jira")).unwrap();
+    let output = run_plugins(&[
+        "install",
+        "--from",
+        source.path().to_str().unwrap(),
+        "--to",
+        target.path().to_str().unwrap(),
+        "--skills-dir",
+        skills.path().to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(text(&output.stderr).contains("não é a skill deste plugin"));
+    assert!(
+        !fs::symlink_metadata(skills.path().join("mosaic-plugin-jira"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}

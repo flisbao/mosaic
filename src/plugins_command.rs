@@ -5,16 +5,26 @@ use mosaic::infrastructure::app_paths::config_directory;
 use mosaic::infrastructure::plugins_installer::{
     available_plugins, install_plugins, Overwrite, PluginOutcome, PluginsError,
 };
+use mosaic::infrastructure::skills_installer::{link_skill_directory, SkillOutcome};
 use thiserror::Error;
+
+use crate::plugin_setup_command;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
-const PLUGINS_USAGE: &str = "uso: mosaic plugins install [--from DIR] [--to DIR] [--force] [NOME...] | mosaic plugins list [--from DIR]";
+const PLUGINS_USAGE: &str = "uso: mosaic plugins install [--from DIR] [--to DIR] [--force] [--no-skill] [NOME...] | mosaic plugins list [--from DIR] | mosaic plugins setup NOME [--config-dir DIR] [--advanced] [--print]";
 const INSTALL_SUBCOMMAND: &str = "install";
 const LIST_SUBCOMMAND: &str = "list";
+const SETUP_SUBCOMMAND: &str = "setup";
 const FROM_FLAG: &str = "--from";
 const TO_FLAG: &str = "--to";
 const FORCE_FLAG: &str = "--force";
+const NO_SKILL_FLAG: &str = "--no-skill";
+const SKILLS_DIR_FLAG: &str = "--skills-dir";
+const SKILL_FILE_NAME: &str = "SKILL.md";
+const SKILL_NAME_PREFIX: &str = "mosaic-plugin-";
+const CLAUDE_DIRECTORY_NAME: &str = ".claude";
+const CLAUDE_SKILLS_FOLDER: &str = "skills";
 const END_OF_FLAGS: &str = "--";
 const PACKAGED_PLUGINS_DIRECTORY: &str = "/usr/share/mosaic/plugins";
 const INSTALLED_PLUGINS_FOLDER: &str = "plugins";
@@ -32,10 +42,18 @@ enum PluginsUsageError {
 }
 
 #[derive(Debug, PartialEq)]
+enum SkillLinking {
+    Disabled,
+    WhenClaudeCodeExists(PathBuf),
+    Into(PathBuf),
+}
+
+#[derive(Debug, PartialEq)]
 struct InstallInvocation {
     source: PathBuf,
     target: PathBuf,
     overwrite: Overwrite,
+    skill_linking: SkillLinking,
     names: Vec<String>,
 }
 
@@ -43,6 +61,8 @@ fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, Pl
     let mut source = None;
     let mut target = None;
     let mut overwrite = Overwrite::Keep;
+    let mut skills_directory = None;
+    let mut link_skills = true;
     let mut names = Vec::new();
     let mut flags_ended = false;
     let mut remaining = arguments.iter();
@@ -54,6 +74,10 @@ fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, Pl
         match argument.as_str() {
             END_OF_FLAGS => flags_ended = true,
             FORCE_FLAG => overwrite = Overwrite::Replace,
+            NO_SKILL_FLAG => link_skills = false,
+            SKILLS_DIR_FLAG => {
+                skills_directory = Some(directory_value(&mut remaining, SKILLS_DIR_FLAG)?)
+            }
             FROM_FLAG => source = Some(directory_value(&mut remaining, FROM_FLAG)?),
             TO_FLAG => target = Some(directory_value(&mut remaining, TO_FLAG)?),
             other => return Err(PluginsUsageError::UnknownFlag(other.to_string())),
@@ -66,8 +90,20 @@ fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, Pl
             None => default_target()?,
         },
         overwrite,
+        skill_linking: skill_linking(link_skills, skills_directory),
         names,
     })
+}
+
+fn skill_linking(link_skills: bool, skills_directory: Option<PathBuf>) -> SkillLinking {
+    match (link_skills, skills_directory) {
+        (false, _) => SkillLinking::Disabled,
+        (true, Some(directory)) => SkillLinking::Into(directory),
+        (true, None) => match dirs::home_dir() {
+            Some(home) => SkillLinking::WhenClaudeCodeExists(home.join(CLAUDE_DIRECTORY_NAME)),
+            None => SkillLinking::Disabled,
+        },
+    }
 }
 
 fn directory_value<'a>(
@@ -103,6 +139,9 @@ pub fn run(arguments: &[String]) -> ExitCode {
     match arguments.split_first() {
         Some((subcommand, rest)) if subcommand == INSTALL_SUBCOMMAND => run_install(rest),
         Some((subcommand, rest)) if subcommand == LIST_SUBCOMMAND => run_list(rest),
+        Some((subcommand, rest)) if subcommand == SETUP_SUBCOMMAND => {
+            plugin_setup_command::run(rest)
+        }
         _ => usage_failure(&PluginsUsageError::UnknownSubcommand),
     }
 }
@@ -131,6 +170,7 @@ fn run_install(arguments: &[String]) -> ExitCode {
     match result {
         Ok(()) => {
             println!("{}", summary_line(&outcomes, &invocation.target));
+            link_skills(&invocation, &outcomes);
             ExitCode::SUCCESS
         }
         Err(PluginsError::InvalidName(name)) => {
@@ -138,6 +178,44 @@ fn run_install(arguments: &[String]) -> ExitCode {
             ExitCode::from(EXIT_CODE_USAGE)
         }
         Err(error) => failure(&error),
+    }
+}
+
+fn link_skills(invocation: &InstallInvocation, outcomes: &[PluginOutcome]) {
+    let skills_directory = match &invocation.skill_linking {
+        SkillLinking::Disabled => return,
+        SkillLinking::Into(directory) => directory.clone(),
+        SkillLinking::WhenClaudeCodeExists(claude_directory) => {
+            if !claude_directory.is_dir() {
+                return;
+            }
+            claude_directory.join(CLAUDE_SKILLS_FOLDER)
+        }
+    };
+    for outcome in outcomes {
+        let name = outcome_name(outcome);
+        let plugin_directory = invocation.target.join(name);
+        if !plugin_directory.join(SKILL_FILE_NAME).is_file() {
+            continue;
+        }
+        let skill_name = format!("{SKILL_NAME_PREFIX}{name}");
+        match link_skill_directory(&plugin_directory, &skills_directory, &skill_name) {
+            Ok(SkillOutcome::Linked(skill)) => println!("skill instalada: {skill}"),
+            Ok(SkillOutcome::AlreadyLinked(skill)) => println!("skill já instalada: {skill}"),
+            Ok(SkillOutcome::Conflict(skill)) => eprintln!(
+                "aviso: {} já existe e não é a skill deste plugin; remova-a para instalar",
+                skills_directory.join(skill).display()
+            ),
+            Err(error) => eprintln!("aviso: não instalei a skill de {name}: {error}"),
+        }
+    }
+}
+
+fn outcome_name(outcome: &PluginOutcome) -> &str {
+    match outcome {
+        PluginOutcome::Installed(name)
+        | PluginOutcome::Replaced(name)
+        | PluginOutcome::AlreadyInstalled(name) => name,
     }
 }
 

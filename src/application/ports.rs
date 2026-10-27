@@ -106,3 +106,16 @@ pub struct CriteriaError(pub String);
 pub trait CriteriaSource {
     fn load(&self) -> Result<String, CriteriaError>;
 }
+
+#[derive(Debug, Clone, Error, PartialEq)]
+pub enum PromptError {
+    #[error("a entrada terminou antes do fim das perguntas")]
+    EndOfInput,
+    #[error("{0}")]
+    Failed(String),
+}
+
+pub trait Prompter {
+    fn ask(&mut self, question: &str) -> Result<String, PromptError>;
+    fn tell(&mut self, message: &str);
+}

@@ -3,6 +3,7 @@ pub mod check_report;
 pub mod execute_action;
 pub mod launch_spec;
 pub mod llm;
+pub mod plugin_setup;
 pub mod pomodoro_notifications;
 pub mod ports;
 pub mod recommendation;

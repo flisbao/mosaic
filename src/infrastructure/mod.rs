@@ -2,6 +2,7 @@ pub mod app_paths;
 pub mod child_environment;
 pub mod concurrency_gate;
 pub mod config;
+pub mod config_appender;
 pub mod default_files;
 pub mod llm_cli;
 pub mod notifiers;
@@ -15,8 +16,10 @@ pub mod protocol_blocks;
 pub mod protocol_report;
 pub mod recommendation_file;
 pub mod refresh_signal;
+pub mod setup_manifest;
 pub mod shutdown;
 pub mod skills_installer;
+pub mod stream_prompter;
 pub mod system_clock;
 pub mod widget_runtime;
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 const RUNTIME_EXTENSIONS: [&str; 2] = ["py", "js"];
-const DOCUMENTATION_FILE_NAME: &str = "README.md";
+const SHIPPED_DOCUMENT_NAMES: [&str; 3] = ["README.md", "SKILL.md", "setup.toml"];
 const EXCLUDED_FOLDER_NAMES: [&str; 1] = ["tests"];
 const TEMPORARY_FOLDER_MARKER: &str = ".tmp-";
 const BACKUP_FOLDER_MARKER: &str = ".old-";
@@ -128,7 +128,9 @@ fn copyable_files(folder: &Path) -> Result<Vec<PathBuf>, PluginsError> {
         let is_regular_file = fs::symlink_metadata(&path)
             .map_err(PluginsError::io(&path))?
             .is_file();
-        let is_documentation = entry.file_name() == DOCUMENTATION_FILE_NAME;
+        let is_documentation = SHIPPED_DOCUMENT_NAMES
+            .iter()
+            .any(|name| entry.file_name() == *name);
         if is_regular_file && (has_runtime_extension(&path) || is_documentation) {
             files.push(path);
         }
