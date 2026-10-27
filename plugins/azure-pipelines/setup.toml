@@ -13,9 +13,22 @@ required = true
 
 [[steps]]
 kind = "variable"
+name = "AZDO_PIPELINES_FILE"
+prompt = "Catálogo de pipelines: caminho de um arquivo .ini com a URL de cada pipeline (Enter = varrer os projetos, sem catálogo)"
+
+[[steps]]
+kind = "variable"
+name = "AZDO_PIPELINE_WATCH"
+prompt = "Quais pipelines do catálogo monitorar: nomes, projeto/repositório ou projeto/* (Enter = todas)"
+type = "list"
+when = { variable = "AZDO_PIPELINES_FILE", present = true }
+
+[[steps]]
+kind = "variable"
 name = "AZDO_PROJECTS"
 prompt = "Projetos, pelo nome exato (Enter = todos os projetos da organização, até 50; custa uma requisição de builds por projeto)"
 type = "list"
+when = { variable = "AZDO_PIPELINES_FILE", present = false }
 
 [[steps]]
 kind = "variable"
@@ -118,3 +131,7 @@ when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
 [[notes]]
 text = "managed-identity só funciona numa VM do Azure (IMDS)."
 when = { variable = "AZDO_AUTH_METHOD", in = ["managed-identity"] }
+
+[[notes]]
+text = "catálogo: o arquivo é lido a cada atualização. Para ver o que ele e a escolha selecionam, sem rede: python3 ~/.config/mosaic/plugins/azure-pipelines/azure_pipelines.py pipelines (com as mesmas variáveis do widget)."
+when = { variable = "AZDO_PIPELINES_FILE", present = true }

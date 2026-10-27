@@ -1,6 +1,6 @@
 ---
 name: mosaic-plugin-azure-pipelines
-description: Use quando for configurar, depurar ou alterar o widget de pipelines lentas do Azure DevOps (plugins/azure-pipelines/azure_pipelines.py), ou ao mexer em AZDO_PIPELINE_DAYS, AZDO_PIPELINE_TOP, AZDO_PIPELINE_SAMPLE, no ranking de duração média, nos passos que mais demoram ou no cache de timelines.
+description: Use quando for configurar, depurar ou alterar o widget de pipelines lentas do Azure DevOps (plugins/azure-pipelines/azure_pipelines.py), ou ao mexer em AZDO_PIPELINE_DAYS, AZDO_PIPELINE_TOP, AZDO_PIPELINE_SAMPLE, AZDO_PIPELINES_FILE, AZDO_PIPELINE_WATCH, no catálogo de pipelines, no ranking de duração média, nos passos que mais demoram ou no cache de timelines.
 ---
 
 # Azure Pipelines (pipelines lentas)
@@ -17,7 +17,7 @@ Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, 
 
 1. `mosaic plugins list`: lista os plugins disponíveis no pacote (`/usr/share/mosaic/plugins`).
 2. `mosaic plugins install azure-pipelines`: copia a pasta para `~/.config/mosaic/plugins/azure-pipelines/` (script, `README.md`, esta `SKILL.md` e o `setup.toml`) e liga esta skill ao Claude Code em `~/.claude/skills/mosaic-plugin-azure-pipelines`, se `~/.claude` existir. Não sobrescreve nada: depois de instalar um pacote novo, use `--force`. `--no-skill` pula a skill; `--from DIR`, `--to DIR` e `--skills-dir DIR` apontam para outras pastas (tarball, testes).
-3. `mosaic plugins setup azure-pipelines`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
+3. `mosaic plugins setup azure-pipelines`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"), mais a aba do painel em que o widget fica (dá para criar uma aba nova na hora; `mosaic tabs list` mostra as abas e `mosaic tabs add NOME` cria uma). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
 4. Aperte `R` no mosaic para recarregar; `mosaic check --config` valida o arquivo.
 
 Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup azure-pipelines` sem sair da conversa. Se ela preferir conversar, siga a entrevista abaixo e entregue o bloco para colar.
@@ -25,7 +25,9 @@ Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup azure-pipelin
 ## Configurar com a pessoa
 
 1. **Organização**: só o nome (`minha-org`), nunca a URL → `AZDO_ORGANIZATION` (obrigatória).
-2. **Projetos**: quais? → `AZDO_PROJECTS`, separados por vírgula. Vazio lista todos os projetos da organização (até 50), o que custa uma requisição de builds por projeto: prefira listar.
+2. **Quais pipelines**: a pessoa quer o ranking de projetos inteiros ou só de algumas pipelines?
+   - Só algumas → catálogo: um arquivo INI à parte (`AZDO_PIPELINES_FILE`, ex.: `pipelines.ini` ao lado do `mosaic.toml`) com uma seção por pipeline (`url` com `definitionId=NÚMERO`, copiada do navegador, e `repository` opcional). Ajude a montar o arquivo a partir das URLs que ela colar (as URLs não são segredo). Depois, `AZDO_PIPELINE_WATCH` escolhe: nomes das seções, `projeto/repositório` ou `projeto/*`; vazio = o catálogo inteiro. Com o catálogo, `AZDO_PROJECTS` não pode ser definido. Dois conjuntos de escolha são dois widgets.
+   - Projetos inteiros → `AZDO_PROJECTS`, separados por vírgula. Vazio lista todos os projetos da organização (até 50), o que custa uma requisição de builds por projeto: prefira listar.
 3. **Autenticação**: igual ao widget de PRs. Pergunte o método (`azure-cli` é o padrão) e siga a entrevista de `mosaic-plugin-azure-devops` → `AZDO_AUTH_METHOD`, `AZDO_TENANT_ID`, `AZDO_CLIENT_ID`, `AZDO_CLIENT_SECRET_ENV`. **Nunca peça o valor do segredo no chat.** A identidade precisa de acesso **Basic** e permissão de leitura de **Build** nos projetos.
 4. **Janela e tamanho**: quantos dias de histórico (`AZDO_PIPELINE_DAYS`, 1 a 90, padrão 14), quantas pipelines no ranking (`AZDO_PIPELINE_TOP`, 1 a 10, padrão 5) e quantas execuções recentes de cada uma entram na análise dos passos (`AZDO_PIPELINE_SAMPLE`, 1 a 20, padrão 10).
 5. Duas organizações são dois widgets, cada um com `id` e `[widgets.env]` próprios. Azure DevOps Server (on-premises) não é suportado.
@@ -56,7 +58,9 @@ O que o `mosaic plugins setup` pergunta, na ordem. Vem do `setup.toml` desta pas
 | Opção | O que é | Padrão | Situação |
 | --- | --- | --- | --- |
 | `AZDO_ORGANIZATION` | Nome da organização do Azure DevOps (só o nome, sem URL) | — | obrigatória |
-| `AZDO_PROJECTS` | Projetos, pelo nome exato (Enter = todos os projetos da organização, até 50; custa uma requisição de builds por projeto) (separados por vírgula) | — | opcional |
+| `AZDO_PIPELINES_FILE` | Catálogo de pipelines: caminho de um arquivo .ini com a URL de cada pipeline (Enter = varrer os projetos, sem catálogo) | — | opcional |
+| `AZDO_PIPELINE_WATCH` | Quais pipelines do catálogo monitorar: nomes, projeto/repositório ou projeto/* (Enter = todas) (separados por vírgula) | — | opcional; perguntada se `AZDO_PIPELINES_FILE` tem valor |
+| `AZDO_PROJECTS` | Projetos, pelo nome exato (Enter = todos os projetos da organização, até 50; custa uma requisição de builds por projeto) (separados por vírgula) | — | opcional; perguntada se `AZDO_PIPELINES_FILE` está vazio |
 | `AZDO_PIPELINE_DAYS` | Janela de histórico, em dias (1 a 90) | `14` | opcional |
 | `AZDO_PIPELINE_TOP` | Quantas pipelines entram no ranking (1 a 10) | `5` | opcional |
 | `AZDO_PIPELINE_SAMPLE` | Quantas execuções recentes de cada pipeline entram na análise dos passos (1 a 20) | `10` | opcional |
@@ -88,13 +92,14 @@ A prévia mostra o título "Pipelines lentas", as pipelines mais lentas com a du
 
 - Testes: `python3 -m unittest discover -s plugins/tests -p test_azure_pipelines.py` e `-p test_entra_auth.py`. Fixtures e servidor falso: `plugins/tests/pipeline_fixtures.py`, `fake_pipeline_server.py`.
 - O bloco entre `# --- entra-auth: início ---` e `# --- entra-auth: fim ---` é **idêntico** ao do `azure_devops.py`; `test_entra_auth_blocks_are_identical` confere. Mude os dois arquivos juntos. O bloco depende de nomes definidos fora dele (`ConfigError`, `AuthError`, `read_base_url`, `LOGIN_INSTRUCTION` etc.); o teste `test_every_module_defines_the_names_the_block_expects` lista todos.
+- Catálogo (`load_catalog`, `select_pipelines`): INI lido com `configparser` sem interpolação (URL tem `%`). Projeto e `definitionId` saem da URL, que precisa ser do `AZDO_BASE_URL` e da organização configurada. Com catálogo, `fetch_projects` devolve os projetos das URLs, `fetch_runs` pede só as definições escolhidas (`definitions=`, para os builds de pipelines ocupadas não empurrarem as escolhidas para fora do teto de 1000) e `collect_overview` ainda filtra por (projeto, definição). `AZDO_PIPELINES_FILE` junto de `AZDO_PROJECTS`, `AZDO_PIPELINE_WATCH` sem catálogo e seletor inexistente são `ConfigError`. O comando `pipelines` lista o catálogo e marca as escolhidas, sem rede. Testes: `plugins/tests/test_pipeline_catalog.py`.
 - Fluxo: `fetch_projects` → `fetch_runs` por projeto (`statusFilter=completed`, `minTime`, até 1000 execuções) → `summarize` (ranking por média de `finishTime - startTime`; canceladas fora; fila = `startTime - queueTime`, negativo vira 0) → para cada pipeline do ranking, `select_sample` (as execuções mais recentes) → `parse_timeline` de cada uma → `aggregate_steps`.
 - Passo = registro `Task` da timeline, nomeado `Job › Tarefa`. Registro sem data, com duração negativa ou com ciclo de `parentId` é pulado. A espera na fila entra na tabela como o passo `espera na fila`, mas **não** conta como gargalo. `% do total` = média do passo ÷ (média da execução + média da fila).
 - Cache de timelines em `AZDO_STATE_DIR` (chave `timelines`): um build concluído não muda, então a timeline dele nunca é pedida de novo. No máximo `MAXIMUM_TIMELINE_REQUESTS_PER_RUN` (30) timelines novas por leitura, o cache guarda no máximo `MAXIMUM_CACHED_TIMELINES` (300) builds (os de maior id) e a pipeline com amostra incompleta mostra `(parcial)` na dica. Na primeira leitura a amostra é parcial até o cache esquentar.
 - Cada timeline tem um destino: dados (cacheados); **indisponível** (404/400/410 ou timeline sem nenhuma tarefa), lembrado no cache como `null` para nunca mais ser pedido e sem contar na amostra; ou **pendente** (resposta inesperada, limite do teto/prazo, rede ou 429), que não é cacheada, tenta de novo na próxima leitura e marca `(parcial)`. Rede ou 429 numa timeline **param** os pedidos de timeline daquela leitura, mas o que já foi lido é salvo (senão uma rede ruim recomeçaria do zero a cada leitura). Autenticação interrompe tudo.
 - Prazo: `TIMELINE_DEADLINE_SECONDS` (40 s desde o início da leitura, contando projetos e builds) além do teto de 30 timelines, para o widget terminar e gravar o cache antes do `timeout_seconds`. `main` injeta o `clock`.
 - Os passos são médias sobre as execuções **da amostra com dados**; `% do total` e a linha de fila usam os tempos dessas mesmas execuções (`sample_timings`), não a média da janela (que é a do quadro no topo do detalhe).
-- Arquivo de estado = hash de URL base, organização, projetos, janela, ranking, amostra, método, tenant, client id e `AZDO_TITLE`; nenhum segredo entra.
+- Arquivo de estado = hash de URL base, organização, projetos, pipelines escolhidas do catálogo, janela, ranking, amostra, método, tenant, client id e `AZDO_TITLE`; nenhum segredo entra.
 - Limites do protocolo: título das linhas, do cabeçalho e dos passos em 80 caracteres, `mini.value` em 8 (acima disso mostra `999h+`). A Home leva só o ranking (número de execuções e taxa de falhas) para o nome da pipeline caber; o passo mais lento fica no detalhe.
 
 ## Armadilhas
@@ -107,4 +112,7 @@ A prévia mostra o título "Pipelines lentas", as pipelines mais lentas com a du
 | 401 ou "credencial inválida" nas builds | Identidade sem permissão de leitura de **Build** ou fora da organização | Dar a permissão; ver as armadilhas de `mosaic-plugin-azure-devops` |
 | Projeto com espaço no nome falha | Nome sem escape na URL | O plugin já escapa; confira só o nome |
 | Pipelines de release clássicas não aparecem | O widget lê só pipelines de build | Fora do escopo |
+| "AZDO_PIPELINE_WATCH: 'x' não existe no catálogo" | Nome ou grupo digitado diferente do catálogo | A mensagem lista nomes e grupos válidos; `python3 plugins/azure-pipelines/azure_pipelines.py pipelines` mostra tudo |
+| "a url precisa trazer definitionId" | A URL copiada é de uma execução (`buildId`) ou de outra página | Abrir a pipeline (não a execução) e copiar o endereço dessa página |
+| Pipeline do catálogo não aparece no ranking | Sem execuções concluídas na janela | Aumentar `AZDO_PIPELINE_DAYS`; o `pipelines` mostra que ela está selecionada |
 | Widget estoura o tempo | Muitos projetos listados (`AZDO_PROJECTS` vazio) | Listar os projetos; subir `timeout_seconds` |

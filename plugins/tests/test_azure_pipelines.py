@@ -815,7 +815,7 @@ class MainTests(unittest.TestCase):
 
     def test_main_usage_error_exits_two(self):
         self.assertEqual(self.run_main(FakeHttp(), arguments=("outra",)), 2)
-        self.assertEqual(self.stderr.getvalue(), "uso: azure_pipelines.py snapshot|login\n")
+        self.assertEqual(self.stderr.getvalue(), "uso: azure_pipelines.py snapshot|login|pipelines\n")
 
     def test_main_config_error_exits_one(self):
         self.assertEqual(self.run_main(FakeHttp(), AZDO_ORGANIZATION=None), 1)

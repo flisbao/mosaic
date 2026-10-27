@@ -55,6 +55,46 @@ AZDO_AUTH_METHOD = "azure-cli"
 
 O intervalo é de 15 minutos porque o ranking muda devagar e cada leitura faz uma requisição de builds por projeto. Para duas organizações, são dois widgets, cada um com `id` próprio e o seu `[widgets.env]`.
 
+### Catálogo de pipelines (escolher quais monitorar)
+
+Sem catálogo, o widget varre os projetos (`AZDO_PROJECTS`, ou todos) e mostra o ranking de tudo. Para monitorar só algumas pipelines, guarde as URLs delas num arquivo à parte e aponte para ele com `AZDO_PIPELINES_FILE`. O formato é INI (só biblioteca padrão do Python, igual no Linux e no macOS); cada seção é uma pipeline e o nome da seção é o nome que você usa para escolhê-la:
+
+```ini
+# pipelines.ini (ao lado do mosaic.toml)
+[build-api]
+repository = api
+url = https://dev.azure.com/minha-org/Plataforma/_build?definitionId=42
+
+[deploy-api]
+repository = api
+url = https://dev.azure.com/minha-org/Plataforma/_build/latest?definitionId=43
+
+[lint-site]
+repository = site
+url = https://dev.azure.com/minha-org/Marketing/_build?definitionId=7
+```
+
+- `url` (obrigatória): o endereço da pipeline no Azure DevOps, com `definitionId=NÚMERO` (abra a pipeline no navegador e copie). O projeto e o número vêm da própria URL; a organização precisa ser a de `AZDO_ORGANIZATION`.
+- `repository` (opcional): rótulo do repositório, só para agrupar e escolher.
+- O nome da seção não pode ter `/`.
+
+No widget, `AZDO_PIPELINES_FILE = "pipelines.ini"` (relativo à pasta do `mosaic.toml`) e, para escolher, `AZDO_PIPELINE_WATCH` com uma lista separada por vírgula de:
+
+| Escolha | Seleciona |
+| --- | --- |
+| `build-api` | a pipeline com esse nome |
+| `Plataforma/api` | todas as pipelines do projeto `Plataforma` com `repository = api` |
+| `Plataforma/*` | todas as pipelines do projeto `Plataforma` |
+
+Vazio, `AZDO_PIPELINE_WATCH` seleciona o catálogo inteiro. Dois widgets com `AZDO_PIPELINE_WATCH` diferentes dão duas seleções do mesmo arquivo. O widget só pede à API as pipelines escolhidas e o ranking vale só para elas. Um nome que não existe no catálogo é erro, e a mensagem lista os nomes e grupos válidos. Com o catálogo, `AZDO_PROJECTS` não pode estar definido (os projetos vêm das URLs). Para conferir o que o catálogo e a escolha selecionam, sem rede:
+
+```sh
+AZDO_ORGANIZATION=minha-org AZDO_PIPELINES_FILE=~/.config/mosaic/pipelines.ini \
+  python3 ~/.config/mosaic/plugins/azure-pipelines/azure_pipelines.py pipelines
+```
+
+O catálogo é lido a cada atualização: edite o arquivo e aperte `r` no mosaic.
+
 ### Variáveis de ambiente
 
 Vão em `[widgets.env]` (o segredo, por `inherit_env` ou `AZDO_CLIENT_SECRET_FILE`).
@@ -62,7 +102,9 @@ Vão em `[widgets.env]` (o segredo, por `inherit_env` ou `AZDO_CLIENT_SECRET_FIL
 | Variável | Padrão | O que faz |
 | --- | --- | --- |
 | `AZDO_ORGANIZATION` | obrigatória | Nome da organização, ex.: `minha-org` (só o nome, sem URL) |
-| `AZDO_PROJECTS` | vazio | Projetos separados por vírgula (nome exato). Vazio = todos os projetos da organização, até 50 |
+| `AZDO_PROJECTS` | vazio | Projetos separados por vírgula (nome exato). Vazio = todos os projetos da organização, até 50. Não combina com `AZDO_PIPELINES_FILE` |
+| `AZDO_PIPELINES_FILE` | | Caminho do catálogo de pipelines (INI, veja acima). Com ele, só as pipelines do catálogo entram no ranking |
+| `AZDO_PIPELINE_WATCH` | vazio | Quais pipelines do catálogo monitorar: nomes, `projeto/repositório` ou `projeto/*`, separados por vírgula. Vazio = todas. Só vale com `AZDO_PIPELINES_FILE` |
 | `AZDO_PIPELINE_DAYS` | `14` | Janela de histórico, de 1 a 90 dias |
 | `AZDO_PIPELINE_TOP` | `5` | Quantas pipelines entram no ranking, de 1 a 10 |
 | `AZDO_PIPELINE_SAMPLE` | `10` | Quantas execuções recentes de cada pipeline entram na análise dos passos, de 1 a 20 |

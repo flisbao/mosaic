@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import configparser
 import hashlib
 import json
 import os
@@ -29,6 +30,8 @@ API_VERSION = "7.1"
 BASE_URL_VARIABLE = "AZDO_BASE_URL"
 ORGANIZATION_VARIABLE = "AZDO_ORGANIZATION"
 PROJECTS_VARIABLE = "AZDO_PROJECTS"
+CATALOG_FILE_VARIABLE = "AZDO_PIPELINES_FILE"
+WATCH_VARIABLE = "AZDO_PIPELINE_WATCH"
 TITLE_VARIABLE = "AZDO_TITLE"
 STATE_DIRECTORY_VARIABLE = "AZDO_STATE_DIR"
 DAYS_VARIABLE = "AZDO_PIPELINE_DAYS"
@@ -37,8 +40,20 @@ SAMPLE_VARIABLE = "AZDO_PIPELINE_SAMPLE"
 ORGANIZATION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 FRACTION_BEYOND_MICROSECONDS = re.compile(r"(\.\d{6})\d+")
 LIST_SEPARATOR = ","
+CATALOG_URL_KEY = "url"
+CATALOG_REPOSITORY_KEY = "repository"
+CATALOG_KEYS = (CATALOG_URL_KEY, CATALOG_REPOSITORY_KEY)
+SELECTOR_SEPARATOR = "/"
+WHOLE_PROJECT = "*"
+BUILD_PAGE_SEGMENT = "_build"
+DEFINITION_ID_PATTERN = re.compile(r"[0-9]+")
+NO_REPOSITORY_LABEL = "sem repositório"
+SELECTED_MARK = "*"
+UNSELECTED_MARK = " "
 API_VERSION_PARAMETER = "api-version"
 TOP_PARAMETER = "$top"
+DEFINITIONS_PARAMETER = "definitions"
+DEFINITION_ID_PARAMETER = "definitionId"
 STATE_FILTER_PARAMETER = "stateFilter"
 WELL_FORMED_PROJECTS = "wellFormed"
 MIN_TIME_PARAMETER = "minTime"
@@ -86,9 +101,10 @@ TEMPORARY_FILE_SUFFIX = ".tmp"
 STATE_DIRECTORY_MODE = 0o700
 ARGUMENT_ERROR_EXIT_CODE = 2
 FAILURE_EXIT_CODE = 1
-USAGE_MESSAGE = "uso: azure_pipelines.py snapshot|login"
+USAGE_MESSAGE = "uso: azure_pipelines.py snapshot|login|pipelines"
 SNAPSHOT_COMMAND = ["snapshot"]
 LOGIN_COMMAND = ["login"]
+PIPELINES_COMMAND = ["pipelines"]
 LOGIN_INSTRUCTION = "python3 plugins/azure-pipelines/azure_pipelines.py login"
 STATE_KEY_SEPARATOR = "\n"
 PROTOCOL_VERSION = 1
@@ -153,19 +169,24 @@ class PipelinesConfig:
     title: str
     state_dir: Path
     auth: EntraConfig
+    catalog: tuple[CatalogPipeline, ...] = ()
 
 
 def load_config(environ: Mapping[str, str]) -> PipelinesConfig:
+    base_url = read_base_url(environ, BASE_URL_VARIABLE, DEFAULT_BASE_URL)
+    organization = _read_organization(environ)
+    projects = _read_projects(environ)
     return PipelinesConfig(
-        base_url=read_base_url(environ, BASE_URL_VARIABLE, DEFAULT_BASE_URL),
-        organization=_read_organization(environ),
-        projects=_read_projects(environ),
+        base_url=base_url,
+        organization=organization,
+        projects=projects,
         days=_read_bounded_integer(environ, DAYS_SETTING),
         top=_read_bounded_integer(environ, TOP_SETTING),
         sample=_read_bounded_integer(environ, SAMPLE_SETTING),
         title=environ.get(TITLE_VARIABLE, "").strip() or DEFAULT_TITLE,
         state_dir=read_state_dir(environ, STATE_DIRECTORY_VARIABLE, DEFAULT_STATE_DIRECTORY),
         auth=load_entra_config(environ),
+        catalog=_read_catalog(environ, base_url, organization, projects),
     )
 
 
@@ -194,8 +215,129 @@ def _read_organization(environ: Mapping[str, str]) -> str:
 
 
 def _read_projects(environ: Mapping[str, str]) -> tuple[str, ...]:
-    names = (name.strip() for name in environ.get(PROJECTS_VARIABLE, "").split(LIST_SEPARATOR))
-    return tuple(name for name in names if name)
+    return tuple(_split_names(environ.get(PROJECTS_VARIABLE, "")))
+
+
+def _split_names(raw: str) -> list[str]:
+    names = (name.strip() for name in raw.split(LIST_SEPARATOR))
+    return [name for name in names if name]
+
+
+@dataclass(frozen=True)
+class CatalogPipeline:
+    name: str
+    project: str
+    repository: str
+    definition_id: int
+    url: str
+
+
+def _read_catalog(
+    environ: Mapping[str, str], base_url: str, organization: str, projects: tuple[str, ...]
+) -> tuple[CatalogPipeline, ...]:
+    path_text = environ.get(CATALOG_FILE_VARIABLE, "").strip()
+    selectors = _split_names(environ.get(WATCH_VARIABLE, ""))
+    if not path_text:
+        if selectors:
+            raise ConfigError(f"{WATCH_VARIABLE} só vale com {CATALOG_FILE_VARIABLE}")
+        return ()
+    if projects:
+        raise ConfigError(
+            f"use {CATALOG_FILE_VARIABLE} ou {PROJECTS_VARIABLE}, não os dois: com o catálogo os projetos vêm das URLs"
+        )
+    entries = load_catalog(Path(path_text).expanduser(), base_url, organization)
+    return select_pipelines(entries, selectors)
+
+
+def load_catalog(path: Path, base_url: str, organization: str) -> tuple[CatalogPipeline, ...]:
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise ConfigError(f"não consegui ler o catálogo {path}: {error.strerror}") from None
+    except configparser.DuplicateSectionError as error:
+        raise ConfigError(f"[{error.section}] aparece duas vezes no catálogo {path.name}") from None
+    except configparser.Error as error:
+        reason = str(error.message).splitlines()[0]
+        raise ConfigError(f"catálogo {path.name} inválido: {reason}") from None
+    entries = tuple(
+        _catalog_entry(name, parser[name], base_url, organization) for name in parser.sections()
+    )
+    if not entries:
+        raise ConfigError(f"nenhuma pipeline no catálogo {path.name}: crie uma seção [nome] com a url")
+    return entries
+
+
+def _catalog_entry(
+    name: str, section: Mapping[str, str], base_url: str, organization: str
+) -> CatalogPipeline:
+    if SELECTOR_SEPARATOR in name:
+        raise ConfigError(f"[{name}]: o nome não pode ter '{SELECTOR_SEPARATOR}'")
+    unknown = sorted(key for key in section if key not in CATALOG_KEYS)
+    if unknown:
+        raise ConfigError(f"[{name}]: chave desconhecida '{unknown[0]}' (use {' e '.join(CATALOG_KEYS)})")
+    url = section.get(CATALOG_URL_KEY, "").strip()
+    if not url:
+        raise ConfigError(f"[{name}]: falta {CATALOG_URL_KEY}")
+    project, definition_id = _parse_pipeline_url(name, url, base_url, organization)
+    return CatalogPipeline(
+        name=name,
+        project=project,
+        repository=section.get(CATALOG_REPOSITORY_KEY, "").strip(),
+        definition_id=definition_id,
+        url=url,
+    )
+
+
+def _parse_pipeline_url(name: str, url: str, base_url: str, organization: str) -> tuple[str, int]:
+    parsed = urllib.parse.urlparse(url)
+    base = urllib.parse.urlparse(base_url)
+    if (parsed.scheme, parsed.netloc.lower()) != (base.scheme, base.netloc.lower()):
+        raise ConfigError(f"[{name}]: a url precisa ser do Azure DevOps ({base_url})")
+    segments = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    is_pipeline_page = len(segments) >= 3 and segments[2] == BUILD_PAGE_SEGMENT
+    if not is_pipeline_page or segments[0].lower() != organization.lower():
+        raise ConfigError(
+            f"[{name}]: a url precisa ser da pipeline da organização {organization}: {base_url}/{organization}/PROJETO/_build?{DEFINITION_ID_PARAMETER}=NÚMERO"
+        )
+    values = urllib.parse.parse_qs(parsed.query).get(DEFINITION_ID_PARAMETER, [])
+    if len(values) != 1 or DEFINITION_ID_PATTERN.fullmatch(values[0]) is None:
+        raise ConfigError(
+            f"[{name}]: a url precisa trazer {DEFINITION_ID_PARAMETER}=NÚMERO; abra a pipeline no Azure DevOps e copie o endereço dessa página"
+        )
+    return segments[1], int(values[0])
+
+
+def select_pipelines(
+    entries: tuple[CatalogPipeline, ...], selectors: list[str]
+) -> tuple[CatalogPipeline, ...]:
+    if not selectors:
+        return entries
+    chosen: set[str] = set()
+    for selector in selectors:
+        matches = [entry.name for entry in entries if _matches_selector(entry, selector)]
+        if not matches:
+            raise ConfigError(_unknown_selector_message(selector, entries))
+        chosen.update(matches)
+    return tuple(entry for entry in entries if entry.name in chosen)
+
+
+def _matches_selector(entry: CatalogPipeline, selector: str) -> bool:
+    if SELECTOR_SEPARATOR not in selector:
+        return selector == entry.name
+    project, _, repository = selector.partition(SELECTOR_SEPARATOR)
+    if project.casefold() != entry.project.casefold():
+        return False
+    return repository == WHOLE_PROJECT or repository.casefold() == entry.repository.casefold()
+
+
+def _unknown_selector_message(selector: str, entries: tuple[CatalogPipeline, ...]) -> str:
+    names = ", ".join(entry.name for entry in entries)
+    groups = sorted(
+        {f"{entry.project}{SELECTOR_SEPARATOR}{entry.repository}" for entry in entries if entry.repository}
+        | {f"{entry.project}{SELECTOR_SEPARATOR}{WHOLE_PROJECT}" for entry in entries}
+    )
+    return f"{WATCH_VARIABLE}: '{selector}' não existe no catálogo. Nomes: {names}. Grupos: {', '.join(groups)}"
 
 
 def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> str:
@@ -979,6 +1121,8 @@ def _value_list(payload: dict) -> list:
 
 
 def fetch_projects(client: AzureClient, config: PipelinesConfig) -> list[str]:
+    if config.catalog:
+        return list(dict.fromkeys(entry.project for entry in config.catalog))
     if config.projects:
         return list(config.projects)
     payload = client.get_json(
@@ -993,17 +1137,19 @@ def fetch_projects(client: AzureClient, config: PipelinesConfig) -> list[str]:
     return [name for name in names if isinstance(name, str) and name]
 
 
-def fetch_runs(client: AzureClient, project: str, since: datetime) -> list[BuildRun]:
-    payload = client.get_json(
-        BUILDS_PATH_FORMAT.format(project=_quoted(project)),
-        {
-            MIN_TIME_PARAMETER: since.astimezone(timezone.utc).strftime(MINIMUM_TIME_FORMAT),
-            STATUS_FILTER_PARAMETER: COMPLETED_STATUS,
-            QUERY_ORDER_PARAMETER: FINISH_TIME_DESCENDING,
-            TOP_PARAMETER: MAXIMUM_BUILDS_PER_PROJECT,
-            API_VERSION_PARAMETER: API_VERSION,
-        },
-    )
+def fetch_runs(
+    client: AzureClient, project: str, since: datetime, definition_ids: tuple[int, ...] = ()
+) -> list[BuildRun]:
+    query = {
+        MIN_TIME_PARAMETER: since.astimezone(timezone.utc).strftime(MINIMUM_TIME_FORMAT),
+        STATUS_FILTER_PARAMETER: COMPLETED_STATUS,
+        QUERY_ORDER_PARAMETER: FINISH_TIME_DESCENDING,
+        TOP_PARAMETER: MAXIMUM_BUILDS_PER_PROJECT,
+        API_VERSION_PARAMETER: API_VERSION,
+    }
+    if definition_ids:
+        query[DEFINITIONS_PARAMETER] = LIST_SEPARATOR.join(str(identifier) for identifier in definition_ids)
+    payload = client.get_json(BUILDS_PATH_FORMAT.format(project=_quoted(project)), query)
     runs = (parse_build_run(raw, project) for raw in _value_list(payload))
     return [run for run in runs if run is not None]
 
@@ -1223,7 +1369,8 @@ def collect_overview(
     since = now - timedelta(days=config.days)
     runs: list[BuildRun] = []
     for project in fetch_projects(client, config):
-        runs.extend(fetch_runs(client, project, since))
+        runs.extend(fetch_runs(client, project, since, _definition_ids(config, project)))
+    runs = _only_catalog_pipelines(runs, config)
     overview = summarize(runs, config.top)
     groups = group_runs(runs)
     timelines = _valid_timelines(timeline_cache)
@@ -1239,6 +1386,17 @@ def collect_overview(
         for pipeline in overview.ranked
     )
     return replace(overview, ranked=ranked), _bounded_timelines(timelines)
+
+
+def _definition_ids(config: PipelinesConfig, project: str) -> tuple[int, ...]:
+    return tuple(entry.definition_id for entry in config.catalog if entry.project == project)
+
+
+def _only_catalog_pipelines(runs: list[BuildRun], config: PipelinesConfig) -> list[BuildRun]:
+    if not config.catalog:
+        return runs
+    chosen = {(entry.project, entry.definition_id) for entry in config.catalog}
+    return [run for run in runs if (run.project, run.pipeline_id) in chosen]
 
 
 def _with_steps(
@@ -1539,6 +1697,34 @@ def _fail(stderr, error: Exception) -> int:
     return FAILURE_EXIT_CODE
 
 
+def _run_pipelines(environ: Mapping[str, str], stdout, stderr) -> int:
+    try:
+        base_url = read_base_url(environ, BASE_URL_VARIABLE, DEFAULT_BASE_URL)
+        organization = _read_organization(environ)
+        path_text = environ.get(CATALOG_FILE_VARIABLE, "").strip()
+        if not path_text:
+            raise ConfigError(f"defina {CATALOG_FILE_VARIABLE} com o caminho do catálogo de pipelines")
+        entries = load_catalog(Path(path_text).expanduser(), base_url, organization)
+        selected = select_pipelines(entries, _split_names(environ.get(WATCH_VARIABLE, "")))
+    except ConfigError as error:
+        return _fail(stderr, error)
+    print(_catalog_listing(entries, {entry.name for entry in selected}), file=stdout)
+    return 0
+
+
+def _catalog_listing(entries: tuple[CatalogPipeline, ...], selected: set[str]) -> str:
+    lines = [f"{len(selected)} de {len(entries)} pipelines selecionadas ({SELECTED_MARK} = monitorada)"]
+    groups: dict[tuple[str, str], list[CatalogPipeline]] = {}
+    for entry in entries:
+        groups.setdefault((entry.project, entry.repository), []).append(entry)
+    for (project, repository), members in groups.items():
+        lines.append(f"{project}{SELECTOR_SEPARATOR}{repository or NO_REPOSITORY_LABEL}")
+        for entry in members:
+            mark = SELECTED_MARK if entry.name in selected else UNSELECTED_MARK
+            lines.append(f"  {mark} {entry.name}   definição {entry.definition_id}   {entry.url}")
+    return "\n".join(lines)
+
+
 def _run_login(environ: Mapping[str, str], http, sleep, stderr) -> int:
     try:
         run_device_code_login(load_entra_config(environ), http, sleep, stderr)
@@ -1580,6 +1766,7 @@ def state_key(config: PipelinesConfig) -> str:
             config.base_url,
             config.organization,
             LIST_SEPARATOR.join(config.projects),
+            LIST_SEPARATOR.join(f"{entry.project}:{entry.definition_id}" for entry in config.catalog),
             str(config.days),
             str(config.top),
             str(config.sample),
@@ -1651,11 +1838,13 @@ def main(
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
     command = list(arguments)
-    if command not in (SNAPSHOT_COMMAND, LOGIN_COMMAND):
+    if command not in (SNAPSHOT_COMMAND, LOGIN_COMMAND, PIPELINES_COMMAND):
         print(USAGE_MESSAGE, file=stderr)
         return ARGUMENT_ERROR_EXIT_CODE
     if command == LOGIN_COMMAND:
         return _run_login(environ, http, sleep, stderr)
+    if command == PIPELINES_COMMAND:
+        return _run_pipelines(environ, stdout, stderr)
     try:
         config = load_config(environ)
     except ConfigError as error:
