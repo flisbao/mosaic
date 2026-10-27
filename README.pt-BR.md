@@ -61,6 +61,16 @@ args = ["plugins/gallery.py"]
 tab = "Pessoal"
 ```
 
+Um widget sem `tab` vai para a primeira aba. Você não precisa editar o arquivo à mão para usar abas:
+
+```sh
+mosaic tabs list                 # cada aba com os seus widgets
+mosaic tabs add Estudos          # declara uma aba nova
+mosaic plugins setup jira        # também pergunta em que aba o widget fica (ou cria uma aba nova)
+```
+
+Cuidado com a primeira aba: se o arquivo ainda não declara `[[tabs]]`, a primeira que você criar passa a ser a casa de todos os widgets que já existem (eles não têm `tab`), e o mosaic avisa antes de gravar.
+
 Teclas (modo grade, com os widgets visíveis):
 
 | Tecla | Ação |

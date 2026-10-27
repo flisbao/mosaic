@@ -62,6 +62,8 @@ On the first run Mosaic creates `~/.config/mosaic/` with a `mosaic.toml`, a few 
 
 > **Just want to look around?** `scripts/demo.sh` (from the repo) starts Mosaic with fake data and an isolated config. It never touches `~/.config/mosaic`.
 
+Run `mosaic --help` for the commands and the first steps, and `mosaic --version` to see which version you have installed. Any other unknown argument is an error instead of opening the panel.
+
 ## Keys
 
 Press `?` at any time: the help is always one key away, and the bottom line shows the keys that make sense right now.
@@ -180,6 +182,16 @@ max_items = 5
 ```
 
 Without `[[tabs]]` everything lives on a single tab. Check the file any time with `mosaic check --config`.
+
+A tab is a "panel": the widgets whose `tab` names it live there, and a widget without `tab` goes to the first tab. You do not have to edit the file by hand to use them:
+
+```sh
+mosaic tabs list                 # each tab with its widgets
+mosaic tabs add Studies          # declares a new tab
+mosaic plugins setup jira        # also asks which tab the widget goes to (or creates a new one)
+```
+
+Careful with the first tab: when the file declares no `[[tabs]]` yet, the first one you create becomes the home of every widget that already exists (they have no `tab`), and Mosaic warns you before writing.
 
 ## Pomodoro and AI
 
