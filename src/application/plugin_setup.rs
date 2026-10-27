@@ -23,16 +23,31 @@ pub enum SetupError {
     Prompt(#[from] PromptError),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabContext {
+    pub declared: Vec<String>,
+    pub existing_widgets: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SetupOptions {
     pub include_advanced: bool,
     pub existing_ids: Vec<String>,
+    pub tab_context: Option<TabContext>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetupResult {
     pub draft: WidgetDraft,
     pub notes: Vec<String>,
+    pub new_tab: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TabChoice {
+    Keep,
+    Existing(String),
+    New(String),
 }
 
 pub fn run_setup(
@@ -46,6 +61,10 @@ pub fn run_setup(
         None => BTreeMap::new(),
     };
     let widget_id = ask_widget_id(manifest, preset.as_ref(), options, prompter)?;
+    let tab_choice = match &options.tab_context {
+        Some(context) => ask_tab(context, prompter)?,
+        None => TabChoice::Keep,
+    };
     let mut interview = Interview::new(manifest, preset_values);
     for step in &manifest.steps {
         interview.run_step(step, options, prompter)?;
@@ -62,7 +81,104 @@ pub fn run_setup(
         MINIMUM_TIMEOUT_SECONDS..=MAXIMUM_TIMEOUT_SECONDS,
         prompter,
     )?;
-    Ok(interview.finish(widget_id, interval_seconds, timeout_seconds))
+    let mut result = interview.finish(widget_id, interval_seconds, timeout_seconds);
+    apply_tab_choice(&mut result, tab_choice, options.tab_context.as_ref());
+    Ok(result)
+}
+
+fn apply_tab_choice(result: &mut SetupResult, choice: TabChoice, context: Option<&TabContext>) {
+    match choice {
+        TabChoice::Keep => {}
+        TabChoice::Existing(name) => result.draft.tab = Some(name),
+        TabChoice::New(name) => {
+            result.draft.tab = Some(name.clone());
+            result.new_tab = Some(name);
+            if let Some(context) = context
+                .filter(|context| context.declared.is_empty() && context.existing_widgets > 0)
+            {
+                result.notes.push(format!(
+                    "ao declarar a primeira aba, os {} widgets que já existem sem 'tab' passam a ficar nela (a primeira aba declarada)",
+                    context.existing_widgets
+                ));
+            }
+        }
+    }
+}
+
+fn ask_tab(context: &TabContext, prompter: &mut dyn Prompter) -> Result<TabChoice, SetupError> {
+    match context.declared.first() {
+        Some(first) => ask_declared_tab(first, context, prompter),
+        None => ask_first_tab(context, prompter),
+    }
+}
+
+fn ask_first_tab(
+    context: &TabContext,
+    prompter: &mut dyn Prompter,
+) -> Result<TabChoice, SetupError> {
+    prompter.tell(&format!(
+        "O mosaic.toml ainda não declara abas: todos os widgets ficam numa aba única. Digitar um nome cria a primeira aba declarada{}.",
+        if context.existing_widgets > 0 {
+            " e move para ela os widgets que já existem"
+        } else {
+            ""
+        }
+    ));
+    let line = prompter.ask("Aba nova para este widget (Enter = manter a aba única): ")?;
+    match line.trim() {
+        "" => Ok(TabChoice::Keep),
+        name => Ok(TabChoice::New(name.to_string())),
+    }
+}
+
+fn ask_declared_tab(
+    first: &str,
+    context: &TabContext,
+    prompter: &mut dyn Prompter,
+) -> Result<TabChoice, SetupError> {
+    let mut listing: Vec<String> = context
+        .declared
+        .iter()
+        .enumerate()
+        .map(|(index, name)| format!("  {}) {name}", index + 1))
+        .collect();
+    let new_tab_number = context.declared.len() + 1;
+    listing.push(format!("  {new_tab_number}) criar uma aba nova"));
+    prompter.tell(&format!("Abas do painel:\n{}", listing.join("\n")));
+    loop {
+        let line = prompter.ask(&format!("Aba [Enter = {first}, a primeira]: "))?;
+        let line = line.trim();
+        if line.is_empty() {
+            return Ok(TabChoice::Keep);
+        }
+        let chosen = line
+            .parse::<usize>()
+            .ok()
+            .and_then(|number| number.checked_sub(1))
+            .and_then(|index| context.declared.get(index))
+            .or_else(|| context.declared.iter().find(|name| name.as_str() == line));
+        if let Some(name) = chosen {
+            return Ok(TabChoice::Existing(name.clone()));
+        }
+        if line == new_tab_number.to_string() {
+            return ask_new_tab_name(context, prompter).map(TabChoice::New);
+        }
+        prompter.tell("Responda com um dos números listados.");
+    }
+}
+
+fn ask_new_tab_name(
+    context: &TabContext,
+    prompter: &mut dyn Prompter,
+) -> Result<String, SetupError> {
+    loop {
+        let name = ask_required_text("Nome da aba nova", prompter)?;
+        if context.declared.contains(&name) {
+            prompter.tell(&format!("Já existe uma aba chamada \"{name}\"."));
+        } else {
+            return Ok(name);
+        }
+    }
 }
 
 struct Interview<'a> {
@@ -193,10 +309,12 @@ impl<'a> Interview<'a> {
                 arguments: self.arguments,
                 interval_seconds,
                 timeout_seconds,
+                tab: None,
                 inherit_env: self.inherit_env,
                 environment: self.environment,
             },
             notes,
+            new_tab: None,
         }
     }
 }
@@ -506,6 +624,7 @@ mod tests {
         Condition {
             variable: variable.to_string(),
             any_of: any_of.iter().map(|value| value.to_string()).collect(),
+            present: None,
         }
     }
 
@@ -674,7 +793,7 @@ mod tests {
         let mut prompter = ScriptedPrompter::new(&["", "/tmp/estado", "", ""]);
         let options = SetupOptions {
             include_advanced: true,
-            existing_ids: Vec::new(),
+            ..SetupOptions::default()
         };
         let result = run_setup(&manifest, &options, &mut prompter).unwrap();
         assert_eq!(
@@ -800,8 +919,8 @@ mod tests {
     fn the_widget_id_must_be_valid_and_unused() {
         let manifest = manifest(Vec::new());
         let options = SetupOptions {
-            include_advanced: false,
             existing_ids: vec!["demo".to_string()],
+            ..SetupOptions::default()
         };
         let mut prompter = ScriptedPrompter::new(&["", "Meu Widget", "demo-dois", "", ""]);
         let result = run_setup(&manifest, &options, &mut prompter).unwrap();
@@ -866,6 +985,78 @@ mod tests {
             .told
             .iter()
             .any(|text| text.contains("Modelo desconhecido")));
+    }
+
+    fn run_with_tabs(
+        context: TabContext,
+        answers: &[&str],
+    ) -> (Result<SetupResult, SetupError>, ScriptedPrompter) {
+        let mut prompter = ScriptedPrompter::new(answers);
+        let options = SetupOptions {
+            tab_context: Some(context),
+            ..SetupOptions::default()
+        };
+        let result = run_setup(&manifest(Vec::new()), &options, &mut prompter);
+        (result, prompter)
+    }
+
+    fn declared(names: &[&str], existing_widgets: usize) -> TabContext {
+        TabContext {
+            declared: names.iter().map(|name| name.to_string()).collect(),
+            existing_widgets,
+        }
+    }
+
+    #[test]
+    fn enter_on_the_tab_question_writes_no_tab_key() {
+        let (result, _) = run_with_tabs(declared(&["Work", "Home"], 3), &["", "", "", ""]);
+        let result = result.unwrap();
+        assert_eq!(result.draft.tab, None);
+        assert_eq!(result.new_tab, None);
+    }
+
+    #[test]
+    fn a_declared_tab_is_chosen_by_number_or_name() {
+        let (by_number, _) = run_with_tabs(declared(&["Work", "Home"], 1), &["", "2", "", ""]);
+        assert_eq!(by_number.unwrap().draft.tab.as_deref(), Some("Home"));
+        let (by_name, _) = run_with_tabs(declared(&["Work", "Home"], 1), &["", "Work", "", ""]);
+        assert_eq!(by_name.unwrap().draft.tab.as_deref(), Some("Work"));
+    }
+
+    #[test]
+    fn creating_a_new_tab_next_to_declared_ones_asks_for_a_free_name() {
+        let (result, prompter) = run_with_tabs(
+            declared(&["Work", "Home"], 1),
+            &["", "3", "Work", "Estudos", "", ""],
+        );
+        let result = result.unwrap();
+        assert_eq!(result.draft.tab.as_deref(), Some("Estudos"));
+        assert_eq!(result.new_tab.as_deref(), Some("Estudos"));
+        assert!(prompter
+            .told
+            .iter()
+            .any(|text| text.contains("Já existe uma aba")));
+        assert!(result.notes.is_empty());
+    }
+
+    #[test]
+    fn the_first_declared_tab_warns_that_existing_widgets_move_into_it() {
+        let (result, prompter) = run_with_tabs(declared(&[], 4), &["", "Trabalho", "", ""]);
+        let result = result.unwrap();
+        assert_eq!(result.new_tab.as_deref(), Some("Trabalho"));
+        assert!(result.notes.iter().any(|note| note.contains("4 widgets")));
+        assert!(prompter
+            .told
+            .iter()
+            .any(|text| text.contains("ainda não declara abas")));
+    }
+
+    #[test]
+    fn without_declared_tabs_enter_keeps_the_single_tab() {
+        let (result, _) = run_with_tabs(declared(&[], 0), &["", "", "", ""]);
+        let result = result.unwrap();
+        assert_eq!(result.draft.tab, None);
+        assert!(result.notes.is_empty());
     }
 
     #[test]

@@ -1,9 +1,12 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod check_command;
+mod cli_info;
+mod confirmation;
 mod plugin_setup_command;
 mod plugins_command;
 mod skills_command;
+mod tabs_command;
 mod themes_command;
 
 use std::collections::HashMap;
@@ -76,6 +79,7 @@ const CHECK_SUBCOMMAND: &str = "check";
 const SKILLS_SUBCOMMAND: &str = "skills";
 const PLUGINS_SUBCOMMAND: &str = "plugins";
 const THEMES_SUBCOMMAND: &str = "themes";
+const TABS_SUBCOMMAND: &str = "tabs";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 
@@ -132,8 +136,14 @@ fn main() -> ExitCode {
     if arguments.first().map(String::as_str) == Some(PLUGINS_SUBCOMMAND) {
         return plugins_command::run(&arguments[1..]);
     }
+    if arguments.first().map(String::as_str) == Some(TABS_SUBCOMMAND) {
+        return tabs_command::run(&arguments[1..]);
+    }
     if arguments.first().map(String::as_str) == Some(THEMES_SUBCOMMAND) {
         return themes_command::run(&arguments[1..]);
+    }
+    if let Some(exit_code) = cli_info::run(&arguments) {
+        return exit_code;
     }
     match run() {
         Ok(()) => ExitCode::SUCCESS,

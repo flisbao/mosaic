@@ -65,7 +65,7 @@ fn config_with_demo_plugin() -> tempfile::TempDir {
     directory
 }
 
-const ANSWERS: &str = "demo-um\nempresa.exemplo\n1\nDEMO_TOKEN_EMPRESA\n\n\ns\n";
+const ANSWERS: &str = "demo-um\n\nempresa.exemplo\n1\nDEMO_TOKEN_EMPRESA\n\n\ns\n";
 
 #[test]
 fn the_interview_appends_the_widget_and_keeps_the_rest_of_the_file() {
@@ -109,7 +109,7 @@ fn declining_the_confirmation_writes_nothing() {
 #[test]
 fn print_shows_the_block_without_asking_or_writing() {
     let directory = config_with_demo_plugin();
-    let answers = "demo-um\nempresa.exemplo\n1\nDEMO_TOKEN_EMPRESA\n\n\n";
+    let answers = "demo-um\n\nempresa.exemplo\n1\nDEMO_TOKEN_EMPRESA\n\n\n";
     let output = setup(directory.path(), &["--print"], answers);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert!(text(&output.stdout).contains("[[widgets]]"));
@@ -129,7 +129,7 @@ fn an_id_already_in_the_config_is_asked_again() {
 #[test]
 fn input_that_ends_early_cancels_without_writing() {
     let directory = config_with_demo_plugin();
-    let output = setup(directory.path(), &[], "demo-um\nempresa.exemplo\n");
+    let output = setup(directory.path(), &[], "demo-um\n\nempresa.exemplo\n");
     assert_eq!(output.status.code(), Some(EXIT_FAILURE));
     assert!(text(&output.stderr).contains("configuração cancelada"));
     let config = fs::read_to_string(directory.path().join("mosaic.toml")).unwrap();
@@ -154,4 +154,38 @@ fn a_missing_name_is_a_usage_error() {
         .unwrap();
     assert_eq!(output.status.code(), Some(EXIT_USAGE));
     assert!(text(&output.stderr).contains("uso: mosaic plugins"));
+}
+
+#[test]
+fn a_new_tab_is_declared_before_the_widget_that_uses_it() {
+    let directory = config_with_demo_plugin();
+    let answers = ANSWERS.replacen("demo-um\n\n", "demo-um\nTrabalho\n", 1);
+    let output = setup(directory.path(), &[], &answers);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let config = fs::read_to_string(directory.path().join("mosaic.toml")).unwrap();
+    let tab_position = config.find("[[tabs]]\nname = \"Trabalho\"").unwrap();
+    let widget_position = config.find("id = \"demo-um\"").unwrap();
+    assert!(tab_position < widget_position, "{config}");
+    assert!(config.contains("tab = \"Trabalho\""), "{config}");
+    assert!(
+        text(&output.stdout).contains("1 widgets que já existem"),
+        "{}",
+        text(&output.stdout)
+    );
+}
+
+#[test]
+fn an_existing_tab_is_chosen_by_number_and_nothing_new_is_declared() {
+    let directory = config_with_demo_plugin();
+    fs::write(
+        directory.path().join("mosaic.toml"),
+        "[[tabs]]\nname = \"Work\"\n[[tabs]]\nname = \"Home\"\n",
+    )
+    .unwrap();
+    let answers = ANSWERS.replacen("demo-um\n\n", "demo-um\n2\n", 1);
+    let output = setup(directory.path(), &[], &answers);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let config = fs::read_to_string(directory.path().join("mosaic.toml")).unwrap();
+    assert!(config.contains("tab = \"Home\""), "{config}");
+    assert_eq!(config.matches("[[tabs]]").count(), 2, "{config}");
 }

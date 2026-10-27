@@ -52,8 +52,9 @@ struct RawManifest {
 #[serde(deny_unknown_fields)]
 struct RawCondition {
     variable: String,
-    #[serde(rename = "in")]
+    #[serde(rename = "in", default)]
     any_of: Vec<String>,
+    present: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -154,17 +155,40 @@ pub fn parse_manifest(text: &str) -> Result<SetupManifest, String> {
         interval_seconds: raw.interval_seconds,
         timeout_seconds: raw.timeout_seconds,
         steps,
-        inherit_rules: raw.inherit.into_iter().map(convert_inherit).collect(),
+        inherit_rules: raw
+            .inherit
+            .into_iter()
+            .map(convert_inherit)
+            .collect::<Result<Vec<_>, _>>()?,
         presets,
-        notes: raw.notes.into_iter().map(convert_note).collect(),
+        notes: raw
+            .notes
+            .into_iter()
+            .map(convert_note)
+            .collect::<Result<Vec<_>, _>>()?,
     })
 }
 
-fn convert_condition(raw: RawCondition) -> Condition {
-    Condition {
-        variable: raw.variable,
-        any_of: raw.any_of,
+fn convert_condition(raw: RawCondition) -> Result<Condition, String> {
+    match (&raw.any_of.is_empty(), raw.present) {
+        (true, None) => Err(format!(
+            "condição em {} precisa de 'in' ou de 'present'",
+            raw.variable
+        )),
+        (false, Some(_)) => Err(format!(
+            "condição em {} não pode ter 'in' e 'present' juntos",
+            raw.variable
+        )),
+        _ => Ok(Condition {
+            variable: raw.variable,
+            any_of: raw.any_of,
+            present: raw.present,
+        }),
     }
+}
+
+fn convert_optional_condition(raw: Option<RawCondition>) -> Result<Option<Condition>, String> {
+    raw.map(convert_condition).transpose()
 }
 
 fn convert_step(raw: RawStep) -> Result<Step, String> {
@@ -175,11 +199,14 @@ fn convert_step(raw: RawStep) -> Result<Step, String> {
     }
 }
 
-fn requirement_of(required: bool, required_when: Option<RawCondition>) -> Requirement {
+fn requirement_of(
+    required: bool,
+    required_when: Option<RawCondition>,
+) -> Result<Requirement, String> {
     match (required, required_when) {
-        (true, _) => Requirement::Always,
-        (false, Some(condition)) => Requirement::When(convert_condition(condition)),
-        (false, None) => Requirement::Optional,
+        (true, _) => Ok(Requirement::Always),
+        (false, Some(condition)) => convert_condition(condition).map(Requirement::When),
+        (false, None) => Ok(Requirement::Optional),
     }
 }
 
@@ -194,8 +221,8 @@ fn convert_secret(raw: RawStep) -> Result<SecretQuestion, String> {
         file_key,
         names_are_list: raw.list,
         allow_both: raw.both,
-        requirement: requirement_of(raw.required, raw.required_when),
-        condition: raw.when.map(convert_condition),
+        requirement: requirement_of(raw.required, raw.required_when)?,
+        condition: convert_optional_condition(raw.when)?,
     })
 }
 
@@ -217,10 +244,10 @@ fn convert_question(raw: RawStep) -> Result<Question, String> {
         target,
         prompt: raw.prompt,
         kind,
-        requirement: requirement_of(raw.required, raw.required_when),
+        requirement: requirement_of(raw.required, raw.required_when)?,
         default: raw.default,
         advanced: raw.advanced,
-        condition: raw.when.map(convert_condition),
+        condition: convert_optional_condition(raw.when)?,
     })
 }
 
@@ -254,18 +281,18 @@ fn convert_kind(
     }
 }
 
-fn convert_inherit(raw: RawInherit) -> InheritRule {
-    InheritRule {
+fn convert_inherit(raw: RawInherit) -> Result<InheritRule, String> {
+    Ok(InheritRule {
         name: raw.name,
-        condition: raw.when.map(convert_condition),
-    }
+        condition: convert_optional_condition(raw.when)?,
+    })
 }
 
-fn convert_note(raw: RawNote) -> Note {
-    Note {
+fn convert_note(raw: RawNote) -> Result<Note, String> {
+    Ok(Note {
         text: raw.text,
-        condition: raw.when.map(convert_condition),
-    }
+        condition: convert_optional_condition(raw.when)?,
+    })
 }
 
 fn convert_preset(raw: RawPreset) -> Preset {
@@ -484,6 +511,35 @@ prompt = "b"
     fn a_preset_cannot_set_a_flag_the_plugin_does_not_ask() {
         let text = MINIMAL.replace("\"--days\" = \"3\"", "\"--other\" = \"3\"");
         assert!(parse_manifest(&text).unwrap_err().contains("--other"));
+    }
+
+    #[test]
+    fn a_presence_condition_is_read_and_a_vague_one_is_rejected() {
+        let with_presence = MINIMAL.replace(
+            "when = { variable = \"DEMO_METHOD\", in = [\"a\"] }",
+            "when = { variable = \"DEMO_METHOD\", present = true }",
+        );
+        let manifest = parse_manifest(&with_presence).unwrap();
+        assert_eq!(
+            manifest.inherit_rules[0]
+                .condition
+                .as_ref()
+                .unwrap()
+                .present,
+            Some(true)
+        );
+        let vague = MINIMAL.replace(
+            "when = { variable = \"DEMO_METHOD\", in = [\"a\"] }",
+            "when = { variable = \"DEMO_METHOD\" }",
+        );
+        assert!(parse_manifest(&vague)
+            .unwrap_err()
+            .contains("'in' ou de 'present'"));
+        let both = MINIMAL.replace(
+            "when = { variable = \"DEMO_METHOD\", in = [\"a\"] }",
+            "when = { variable = \"DEMO_METHOD\", in = [\"a\"], present = true }",
+        );
+        assert!(parse_manifest(&both).unwrap_err().contains("juntos"));
     }
 
     #[test]

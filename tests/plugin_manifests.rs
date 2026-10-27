@@ -323,6 +323,7 @@ fn azure_pipelines_with_the_default_method_asks_only_the_pipeline_settings() {
         &[
             "",
             "minha-org",
+            "",
             "meu-projeto",
             "30",
             "",
@@ -346,6 +347,36 @@ fn azure_pipelines_with_the_default_method_asks_only_the_pipeline_settings() {
         (result.draft.interval_seconds, result.draft.timeout_seconds),
         (900, 60)
     );
+}
+
+#[test]
+fn azure_pipelines_with_a_catalog_asks_what_to_watch_and_not_the_projects() {
+    let result = interview(
+        "azure-pipelines",
+        &[
+            "",
+            "minha-org",
+            "pipelines.ini",
+            "Plataforma/api, build-site",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ],
+    );
+    assert_eq!(
+        environment(&result),
+        vec![
+            ("AZDO_ORGANIZATION", "minha-org"),
+            ("AZDO_PIPELINES_FILE", "pipelines.ini"),
+            ("AZDO_PIPELINE_WATCH", "Plataforma/api,build-site"),
+        ]
+    );
+    assert!(result.notes.iter().any(|note| note.contains("pipelines")));
 }
 
 #[test]

@@ -43,13 +43,16 @@ impl Step {
 pub struct Condition {
     pub variable: String,
     pub any_of: Vec<String>,
+    pub present: Option<bool>,
 }
 
 impl Condition {
     pub fn holds(&self, values: &BTreeMap<String, String>) -> bool {
-        values
-            .get(&self.variable)
-            .is_some_and(|value| self.any_of.contains(value))
+        let value = values.get(&self.variable).filter(|value| !value.is_empty());
+        match self.present {
+            Some(expected) => value.is_some() == expected,
+            None => value.is_some_and(|value| self.any_of.contains(value)),
+        }
     }
 }
 
@@ -257,6 +260,7 @@ mod tests {
         let condition = Condition {
             variable: "METHOD".to_string(),
             any_of: vec!["a".to_string(), "b".to_string()],
+            present: None,
         };
         assert!(condition.holds(&values(&[("METHOD", "b")])));
         assert!(!condition.holds(&values(&[("METHOD", "c")])));
@@ -264,10 +268,29 @@ mod tests {
     }
 
     #[test]
+    fn a_presence_condition_checks_whether_the_variable_has_a_value() {
+        let set = Condition {
+            variable: "FILE".to_string(),
+            any_of: Vec::new(),
+            present: Some(true),
+        };
+        let unset = Condition {
+            present: Some(false),
+            ..set.clone()
+        };
+        let with_value = values(&[("FILE", "pipelines.ini")]);
+        let with_blank = values(&[("FILE", "")]);
+        assert!(set.holds(&with_value) && !unset.holds(&with_value));
+        assert!(!set.holds(&with_blank) && unset.holds(&with_blank));
+        assert!(!set.holds(&values(&[])) && unset.holds(&values(&[])));
+    }
+
+    #[test]
     fn requirement_applies_always_never_or_by_condition() {
         let condition = Condition {
             variable: "METHOD".to_string(),
             any_of: vec!["a".to_string()],
+            present: None,
         };
         let current = values(&[("METHOD", "a")]);
         assert!(Requirement::Always.applies(&current));

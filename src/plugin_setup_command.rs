@@ -2,14 +2,21 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use mosaic::application::plugin_setup::{run_setup, SetupError, SetupOptions, SetupResult};
+use mosaic::application::plugin_setup::{
+    run_setup, SetupError, SetupOptions, SetupResult, TabContext,
+};
 use mosaic::application::ports::{PromptError, Prompter};
+use mosaic::domain::widget_draft::tab_toml_block;
 use mosaic::infrastructure::app_paths::config_directory;
 use mosaic::infrastructure::config::{config_file_path, PLUGINS_DIRECTORY_NAME};
-use mosaic::infrastructure::config_appender::{append_widget, existing_widget_ids, AppendError};
+use mosaic::infrastructure::config_appender::{
+    append_blocks, inspect_config, AppendError, ConfigOverview,
+};
 use mosaic::infrastructure::setup_manifest::{read_manifest, ManifestError, MANIFEST_FILE_NAME};
 use mosaic::infrastructure::stream_prompter::StreamPrompter;
 use thiserror::Error;
+
+use crate::confirmation::confirm;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
@@ -18,8 +25,6 @@ pub const SETUP_USAGE: &str =
 const CONFIG_DIR_FLAG: &str = "--config-dir";
 const ADVANCED_FLAG: &str = "--advanced";
 const PRINT_FLAG: &str = "--print";
-const AFFIRMATIVE_ANSWERS: [&str; 3] = ["s", "sim", "y"];
-const NEGATIVE_ANSWERS: [&str; 3] = ["n", "nao", "não"];
 const BLOCK_RULE: &str = "----------------------------------------";
 
 #[derive(Debug, Error, PartialEq)]
@@ -120,26 +125,23 @@ fn execute(
     output: &mut impl Write,
 ) -> Result<(), SetupFailure> {
     let manifest = load_manifest(&invocation.config_directory, &invocation.name)?;
-    let existing_ids = if invocation.print_only {
-        existing_widget_ids(&invocation.config_directory).unwrap_or_default()
+    let overview = if invocation.print_only {
+        inspect_config(&invocation.config_directory).ok()
     } else {
-        existing_widget_ids(&invocation.config_directory)?
+        Some(inspect_config(&invocation.config_directory)?)
     };
-    let options = SetupOptions {
-        include_advanced: invocation.include_advanced,
-        existing_ids,
-    };
+    let options = setup_options(invocation, overview);
     let result = run_setup(&manifest, &options, prompter)?;
     show_block(&result, output)?;
     if invocation.print_only {
         return Ok(());
     }
     let config_path = config_file_path(&invocation.config_directory);
-    if !confirm(prompter, &config_path)? {
+    if !confirm_write(prompter, &config_path)? {
         writeln_checked(output, "Nada foi gravado.")?;
         return Ok(());
     }
-    append_widget(&invocation.config_directory, &result.draft.to_toml_block())?;
+    append_blocks(&invocation.config_directory, &blocks_to_append(&result))?;
     writeln_checked(
         output,
         &format!(
@@ -148,6 +150,29 @@ fn execute(
             config_path.display()
         ),
     )
+}
+
+fn setup_options(invocation: &SetupInvocation, overview: Option<ConfigOverview>) -> SetupOptions {
+    SetupOptions {
+        include_advanced: invocation.include_advanced,
+        existing_ids: overview
+            .as_ref()
+            .map(|overview| overview.widget_ids.clone())
+            .unwrap_or_default(),
+        tab_context: overview.map(|overview| TabContext {
+            declared: overview.declared_tabs,
+            existing_widgets: overview.widget_ids.len(),
+        }),
+    }
+}
+
+fn blocks_to_append(result: &SetupResult) -> Vec<String> {
+    result
+        .new_tab
+        .iter()
+        .map(|name| tab_toml_block(name))
+        .chain(std::iter::once(result.draft.to_toml_block()))
+        .collect()
 }
 
 fn load_manifest(
@@ -167,8 +192,9 @@ fn load_manifest(
 
 fn show_block(result: &SetupResult, output: &mut impl Write) -> Result<(), SetupFailure> {
     writeln_checked(output, &format!("\n{BLOCK_RULE}"))?;
-    write!(output, "{}", result.draft.to_toml_block())
-        .map_err(|error| SetupFailure::Output(error.to_string()))?;
+    for block in blocks_to_append(result) {
+        writeln_checked(output, &block)?;
+    }
     writeln_checked(output, BLOCK_RULE)?;
     for note in &result.notes {
         writeln_checked(output, &format!("Atenção: {note}"))?;
@@ -176,21 +202,9 @@ fn show_block(result: &SetupResult, output: &mut impl Write) -> Result<(), Setup
     Ok(())
 }
 
-fn confirm(prompter: &mut impl Prompter, config_path: &Path) -> Result<bool, SetupFailure> {
-    loop {
-        let question = format!("Gravar este widget em {}? [S/n]: ", config_path.display());
-        let line = prompter
-            .ask(&question)
-            .map_err(|error| SetupFailure::Setup(SetupError::Prompt(error)))?;
-        let answer = line.trim().to_lowercase();
-        if answer.is_empty() || AFFIRMATIVE_ANSWERS.contains(&answer.as_str()) {
-            return Ok(true);
-        }
-        if NEGATIVE_ANSWERS.contains(&answer.as_str()) {
-            return Ok(false);
-        }
-        prompter.tell("Responda s ou n.");
-    }
+fn confirm_write(prompter: &mut impl Prompter, config_path: &Path) -> Result<bool, SetupFailure> {
+    let question = format!("Gravar este widget em {}? [S/n]: ", config_path.display());
+    confirm(prompter, &question).map_err(|error| SetupFailure::Setup(SetupError::Prompt(error)))
 }
 
 fn writeln_checked(output: &mut impl Write, text: &str) -> Result<(), SetupFailure> {

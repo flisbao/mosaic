@@ -9,8 +9,15 @@ pub struct WidgetDraft {
     pub arguments: Vec<String>,
     pub interval_seconds: u64,
     pub timeout_seconds: u64,
+    pub tab: Option<String>,
     pub inherit_env: Vec<String>,
     pub environment: Vec<(String, String)>,
+}
+
+pub fn tab_toml_block(name: &str) -> String {
+    let mut block = String::from("[[tabs]]\n");
+    push_assignment(&mut block, "name", &quoted(name));
+    block
 }
 
 impl WidgetDraft {
@@ -29,6 +36,9 @@ impl WidgetDraft {
             "timeout_seconds",
             &self.timeout_seconds.to_string(),
         );
+        if let Some(tab) = &self.tab {
+            push_assignment(&mut block, "tab", &quoted(tab));
+        }
         if !self.inherit_env.is_empty() {
             push_assignment(&mut block, "inherit_env", &quoted_list(&self.inherit_env));
         }
@@ -92,6 +102,7 @@ mod tests {
             ],
             interval_seconds: 120,
             timeout_seconds: 45,
+            tab: None,
             inherit_env: vec!["JIRA_TOKEN_EMPRESA".to_string()],
             environment: vec![
                 ("JIRA_SITE".to_string(), "empresa.atlassian.net".to_string()),
@@ -117,6 +128,22 @@ inherit_env = [\"JIRA_TOKEN_EMPRESA\"]\n\
 JIRA_SITE = \"empresa.atlassian.net\"\n\
 JIRA_TOKEN_ENV = \"JIRA_TOKEN_EMPRESA\"\n";
         assert_eq!(draft().to_toml_block(), expected);
+    }
+
+    #[test]
+    fn the_tab_is_written_after_the_timeout_only_when_chosen() {
+        let mut placed = draft();
+        placed.tab = Some("Trabalho \"A\"".to_string());
+        let block = placed.to_toml_block();
+        assert!(block.contains("timeout_seconds = 45\ntab = \"Trabalho \\\"A\\\"\"\ninherit_env"));
+        assert!(!draft().to_toml_block().contains("tab ="));
+    }
+
+    #[test]
+    fn a_tab_block_is_a_table_with_the_escaped_name() {
+        assert_eq!(tab_toml_block("Pessoal"), "[[tabs]]\nname = \"Pessoal\"\n");
+        let parsed: toml::Table = toml::from_str(&tab_toml_block("a\"b")).unwrap();
+        assert_eq!(parsed["tabs"][0]["name"].as_str().unwrap(), "a\"b");
     }
 
     #[test]
