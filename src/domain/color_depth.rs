@@ -1,0 +1,140 @@
+const COLOR_TERMINAL_VARIABLE: &str = "COLORTERM";
+const TERMINAL_VARIABLE: &str = "TERM";
+const TRUE_COLOR_VALUES: [&str; 2] = ["truecolor", "24bit"];
+const INDEXED_TERMINAL_SUFFIX: &str = "256color";
+const DIRECT_COLOR_TERMINAL_SUFFIX: &str = "-direct";
+const MODERN_TERMINALS: [&str; 5] = [
+    "xterm-kitty",
+    "alacritty",
+    "foot",
+    "xterm-ghostty",
+    "wezterm",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorDepth {
+    TrueColor,
+    Indexed256,
+    Basic,
+}
+
+impl ColorDepth {
+    pub fn detect(variable: impl Fn(&str) -> Option<String>) -> ColorDepth {
+        let announces_true_color = variable(COLOR_TERMINAL_VARIABLE)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .is_some_and(|value| TRUE_COLOR_VALUES.contains(&value.as_str()));
+        if announces_true_color {
+            return ColorDepth::TrueColor;
+        }
+        let terminal = variable(TERMINAL_VARIABLE)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        Self::from_terminal_name(&terminal)
+    }
+
+    fn from_terminal_name(terminal: &str) -> ColorDepth {
+        if terminal.ends_with(DIRECT_COLOR_TERMINAL_SUFFIX) {
+            ColorDepth::TrueColor
+        } else if terminal.ends_with(INDEXED_TERMINAL_SUFFIX)
+            || MODERN_TERMINALS.contains(&terminal)
+        {
+            ColorDepth::Indexed256
+        } else {
+            ColorDepth::Basic
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detect(pairs: &[(&str, &str)]) -> ColorDepth {
+        ColorDepth::detect(|name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        })
+    }
+
+    #[test]
+    fn colorterm_truecolor_and_24bit_are_truecolor() {
+        for value in ["truecolor", "24bit", "TrueColor", "24BIT", " truecolor "] {
+            assert_eq!(
+                detect(&[("COLORTERM", value)]),
+                ColorDepth::TrueColor,
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn term_with_256color_is_indexed() {
+        assert_eq!(
+            detect(&[("TERM", "xterm-256color")]),
+            ColorDepth::Indexed256
+        );
+        assert_eq!(
+            detect(&[("TERM", "screen-256color")]),
+            ColorDepth::Indexed256
+        );
+    }
+
+    #[test]
+    fn modern_terminals_are_indexed_even_without_colorterm() {
+        for terminal in [
+            "xterm-kitty",
+            "alacritty",
+            "foot",
+            "xterm-ghostty",
+            "wezterm",
+        ] {
+            assert_eq!(
+                detect(&[("TERM", terminal)]),
+                ColorDepth::Indexed256,
+                "{terminal}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_color_terms_are_truecolor() {
+        for terminal in ["xterm-direct", "tmux-direct"] {
+            assert_eq!(
+                detect(&[("TERM", terminal)]),
+                ColorDepth::TrueColor,
+                "{terminal}"
+            );
+        }
+    }
+
+    #[test]
+    fn colorterm_wins_over_term() {
+        let pairs = [("COLORTERM", "truecolor"), ("TERM", "xterm")];
+        assert_eq!(detect(&pairs), ColorDepth::TrueColor);
+    }
+
+    #[test]
+    fn an_unrelated_colorterm_value_does_not_hide_the_term_palette() {
+        let pairs = [("COLORTERM", "yes"), ("TERM", "xterm-256color")];
+        assert_eq!(detect(&pairs), ColorDepth::Indexed256);
+    }
+
+    #[test]
+    fn plain_xterm_is_basic() {
+        assert_eq!(detect(&[("TERM", "xterm")]), ColorDepth::Basic);
+        assert_eq!(detect(&[("TERM", "linux")]), ColorDepth::Basic);
+    }
+
+    #[test]
+    fn no_variables_is_basic() {
+        assert_eq!(detect(&[]), ColorDepth::Basic);
+    }
+
+    #[test]
+    fn no_color_does_not_change_the_depth() {
+        let pairs = [("NO_COLOR", "1"), ("COLORTERM", "truecolor")];
+        assert_eq!(detect(&pairs), ColorDepth::TrueColor);
+    }
+}

@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
@@ -8,6 +8,7 @@ const RUNTIME_EXTENSIONS: [&str; 2] = ["py", "js"];
 const DOCUMENTATION_FILE_NAME: &str = "README.md";
 const EXCLUDED_FOLDER_NAMES: [&str; 1] = ["tests"];
 const TEMPORARY_FOLDER_MARKER: &str = ".tmp-";
+const BACKUP_FOLDER_MARKER: &str = ".old-";
 
 #[derive(Debug, Error, PartialEq)]
 pub enum PluginsError {
@@ -51,7 +52,7 @@ pub fn available_plugins(source: &Path) -> Result<Vec<String>, PluginsError> {
     for entry in fs::read_dir(source).map_err(PluginsError::io(source))? {
         let entry = entry.map_err(PluginsError::io(source))?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if is_plugin_folder(&entry.path(), &name) {
+        if is_plugin_folder(&entry.path(), &name)? {
             names.push(name);
         }
     }
@@ -64,13 +65,14 @@ pub fn install_plugins(
     target: &Path,
     names: &[String],
     overwrite: Overwrite,
-) -> Result<Vec<PluginOutcome>, PluginsError> {
+    mut on_outcome: impl FnMut(PluginOutcome),
+) -> Result<(), PluginsError> {
     let selected = select_plugins(source, names)?;
     fs::create_dir_all(target).map_err(PluginsError::io(target))?;
-    selected
-        .into_iter()
-        .map(|name| install_one(&source.join(&name), target, name, overwrite))
-        .collect()
+    for name in selected {
+        on_outcome(install_one(&source.join(&name), target, name, overwrite)?);
+    }
+    Ok(())
 }
 
 fn select_plugins(source: &Path, names: &[String]) -> Result<Vec<String>, PluginsError> {
@@ -101,13 +103,15 @@ fn is_plain_name(name: &str) -> bool {
         })
 }
 
-fn is_plugin_folder(path: &Path, name: &str) -> bool {
-    let is_real_folder = fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir());
-    is_real_folder
-        && is_plain_name(name)
-        && !EXCLUDED_FOLDER_NAMES.contains(&name)
-        && copyable_files(path)
-            .is_ok_and(|files| files.iter().any(|file| has_runtime_extension(file)))
+fn is_plugin_folder(path: &Path, name: &str) -> Result<bool, PluginsError> {
+    let metadata = fs::symlink_metadata(path).map_err(PluginsError::io(path))?;
+    let is_candidate =
+        metadata.is_dir() && is_plain_name(name) && !EXCLUDED_FOLDER_NAMES.contains(&name);
+    if !is_candidate {
+        return Ok(false);
+    }
+    let files = copyable_files(path)?;
+    Ok(files.iter().any(|file| has_runtime_extension(file)))
 }
 
 fn has_runtime_extension(path: &Path) -> bool {
@@ -116,12 +120,14 @@ fn has_runtime_extension(path: &Path) -> bool {
         .is_some_and(|extension| RUNTIME_EXTENSIONS.contains(&extension))
 }
 
-fn copyable_files(folder: &Path) -> Result<Vec<std::path::PathBuf>, PluginsError> {
+fn copyable_files(folder: &Path) -> Result<Vec<PathBuf>, PluginsError> {
     let mut files = Vec::new();
     for entry in fs::read_dir(folder).map_err(PluginsError::io(folder))? {
         let entry = entry.map_err(PluginsError::io(folder))?;
         let path = entry.path();
-        let is_regular_file = fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file());
+        let is_regular_file = fs::symlink_metadata(&path)
+            .map_err(PluginsError::io(&path))?
+            .is_file();
         let is_documentation = entry.file_name() == DOCUMENTATION_FILE_NAME;
         if is_regular_file && (has_runtime_extension(&path) || is_documentation) {
             files.push(path);
@@ -147,14 +153,26 @@ fn install_one(
         std::process::id()
     ));
     copy_into_staging(plugin_folder, &staging)?;
+    let backup = target.join(format!(
+        ".{name}{BACKUP_FOLDER_MARKER}{}",
+        std::process::id()
+    ));
     if already_exists {
-        fs::remove_dir_all(&destination)
+        discard(&backup);
+        fs::rename(&destination, &backup)
             .map_err(PluginsError::io(&destination))
             .inspect_err(|_| discard(&staging))?;
     }
-    fs::rename(&staging, &destination)
-        .map_err(PluginsError::io(&destination))
-        .inspect_err(|_| discard(&staging))?;
+    if let Err(error) = fs::rename(&staging, &destination) {
+        discard(&staging);
+        if already_exists {
+            let _ = fs::rename(&backup, &destination);
+        }
+        return Err(PluginsError::io(&destination)(error));
+    }
+    if already_exists {
+        discard(&backup);
+    }
     Ok(if already_exists {
         PluginOutcome::Replaced(name)
     } else {
@@ -170,10 +188,8 @@ fn copy_into_staging(plugin_folder: &Path, staging: &Path) -> Result<(), Plugins
 
 fn copy_files(plugin_folder: &Path, staging: &Path) -> Result<(), PluginsError> {
     for file in copyable_files(plugin_folder)? {
-        let Some(file_name) = file.file_name() else {
-            continue;
-        };
-        fs::copy(&file, staging.join(file_name)).map_err(PluginsError::io(&file))?;
+        let destination = staging.join(file.file_name().unwrap_or_default());
+        fs::copy(&file, destination).map_err(PluginsError::io(&file))?;
     }
     Ok(())
 }
@@ -214,7 +230,22 @@ mod tests {
         wanted: &[&str],
         overwrite: Overwrite,
     ) -> Vec<PluginOutcome> {
-        install_plugins(source, target, &names(wanted), overwrite).unwrap()
+        let (outcomes, result) = try_install(source, target, wanted, overwrite);
+        result.unwrap();
+        outcomes
+    }
+
+    fn try_install(
+        source: &Path,
+        target: &Path,
+        wanted: &[&str],
+        overwrite: Overwrite,
+    ) -> (Vec<PluginOutcome>, Result<(), PluginsError>) {
+        let mut outcomes = Vec::new();
+        let result = install_plugins(source, target, &names(wanted), overwrite, |outcome| {
+            outcomes.push(outcome)
+        });
+        (outcomes, result)
     }
 
     #[test]
@@ -276,12 +307,7 @@ mod tests {
         let source = source_with_plugins();
         let target = tempfile::tempdir().unwrap();
         for bad in ["", "..", "a/b", "Jira", "jira.py", "../jira"] {
-            let result = install_plugins(
-                source.path(),
-                target.path(),
-                &names(&[bad]),
-                Overwrite::Keep,
-            );
+            let (_, result) = try_install(source.path(), target.path(), &[bad], Overwrite::Keep);
             assert_eq!(
                 result,
                 Err(PluginsError::InvalidName(bad.to_string())),
@@ -295,10 +321,10 @@ mod tests {
     fn unknown_plugin_is_reported_and_nothing_is_copied() {
         let source = source_with_plugins();
         let target = tempfile::tempdir().unwrap();
-        let result = install_plugins(
+        let (_, result) = try_install(
             source.path(),
             target.path(),
-            &names(&["jira", "nope"]),
+            &["jira", "nope"],
             Overwrite::Keep,
         );
         assert_eq!(result, Err(PluginsError::UnknownPlugin("nope".to_string())));
@@ -328,6 +354,38 @@ mod tests {
     }
 
     #[test]
+    fn replacing_leaves_no_temporary_folders_behind() {
+        let source = source_with_plugins();
+        let target = tempfile::tempdir().unwrap();
+        install(source.path(), target.path(), &["jira"], Overwrite::Keep);
+        install(source.path(), target.path(), &["jira"], Overwrite::Replace);
+        let mut entries: Vec<String> = fs::read_dir(target.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, names(&["jira"]));
+    }
+
+    #[test]
+    fn a_failed_replacement_keeps_the_previous_plugin() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let source = source_with_plugins();
+        let target = tempfile::tempdir().unwrap();
+        write(&target.path().join("jira/jira.py"), "meu ajuste");
+        fs::set_permissions(target.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let (_, result) = try_install(source.path(), target.path(), &["jira"], Overwrite::Replace);
+        fs::set_permissions(target.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(result, Err(PluginsError::Io { .. })));
+        assert_eq!(
+            fs::read_to_string(target.path().join("jira/jira.py")).unwrap(),
+            "meu ajuste"
+        );
+    }
+
+    #[test]
     fn does_not_follow_symlinks_in_the_source() {
         let source = source_with_plugins();
         let outside = tempfile::tempdir().unwrap();
@@ -353,15 +411,44 @@ mod tests {
         let unreadable = source.path().join("jira/jira.py");
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
         let target = tempfile::tempdir().unwrap();
-        let result = install_plugins(
-            source.path(),
-            target.path(),
-            &names(&["jira"]),
-            Overwrite::Keep,
-        );
+        let (_, result) = try_install(source.path(), target.path(), &["jira"], Overwrite::Keep);
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(result, Err(PluginsError::Io { .. })));
         assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn outcomes_before_a_failure_are_still_reported() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let source = source_with_plugins();
+        let unreadable = source.path().join("jira/jira.py");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let (outcomes, result) = try_install(source.path(), target.path(), &[], Overwrite::Keep);
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(result, Err(PluginsError::Io { .. })));
+        assert_eq!(
+            outcomes,
+            vec![
+                PluginOutcome::Installed("calendar".to_string()),
+                PluginOutcome::Installed("github".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unreadable_plugin_folder_is_an_error_not_a_missing_plugin() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let source = source_with_plugins();
+        let folder = source.path().join("jira");
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = available_plugins(source.path());
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(result, Err(PluginsError::Io { .. })));
     }
 
     #[test]

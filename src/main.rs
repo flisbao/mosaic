@@ -3,6 +3,7 @@
 mod check_command;
 mod plugins_command;
 mod skills_command;
+mod themes_command;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations}
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::domain::action::ConfirmedAction;
+use mosaic::domain::color_depth::ColorDepth;
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
 use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
@@ -59,6 +61,7 @@ use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
 };
+use mosaic::presentation::theme_application::apply_theme;
 use ratatui::crossterm::event::{self, Event};
 use thiserror::Error;
 
@@ -71,6 +74,7 @@ const NO_STATE_DIRECTORY_STORE_WARNING: &str =
 const CHECK_SUBCOMMAND: &str = "check";
 const SKILLS_SUBCOMMAND: &str = "skills";
 const PLUGINS_SUBCOMMAND: &str = "plugins";
+const THEMES_SUBCOMMAND: &str = "themes";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 
@@ -100,6 +104,7 @@ struct Services {
     notifier: CompositeNotifier,
     config_directory: PathBuf,
     config: AppConfig,
+    color_depth: ColorDepth,
 }
 
 struct EventChannel {
@@ -126,6 +131,9 @@ fn main() -> ExitCode {
     if arguments.first().map(String::as_str) == Some(PLUGINS_SUBCOMMAND) {
         return plugins_command::run(&arguments[1..]);
     }
+    if arguments.first().map(String::as_str) == Some(THEMES_SUBCOMMAND) {
+        return themes_command::run(&arguments[1..]);
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -141,7 +149,14 @@ fn run() -> Result<(), AppError> {
     let config = load_config(&directory)?;
     let termination = termination_requested()?;
     let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
-    let services = build_services(&config, &directory, &sender, Arc::clone(&termination));
+    let color_depth = ColorDepth::detect(|name| std::env::var(name).ok());
+    let services = build_services(
+        &config,
+        &directory,
+        &sender,
+        Arc::clone(&termination),
+        color_depth,
+    );
     let (state, spans) = initial_state(&config, &services, &SystemClock);
     let mut app = App {
         state,
@@ -177,7 +192,13 @@ fn initial_state(
         recommendation_record,
     );
     let mut state = AppState::new(entries, tabs);
-    if let Some(notice) = startup_notice(&startup_warnings(config, services)) {
+    let warnings = apply_theme(
+        &mut state,
+        &config.theme,
+        services.color_depth,
+        startup_warnings(config, services),
+    );
+    if let Some(notice) = startup_notice(&warnings) {
         state.show_notice(notice);
     }
     if config.pomodoro.enabled {
@@ -224,6 +245,7 @@ fn build_services(
     directory: &Path,
     sender: &SyncSender<AppEvent>,
     termination: Arc<AtomicBool>,
+    color_depth: ColorDepth,
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
     let working_directory = directory.to_path_buf();
@@ -272,6 +294,7 @@ fn build_services(
         notifier,
         config_directory: directory.to_path_buf(),
         config: config.clone(),
+        color_depth,
     }
 }
 
@@ -484,7 +507,13 @@ fn apply_reloaded_config(
     next: AppConfig,
     plan: &ReloadPlan,
 ) {
-    let notice = reload_notice(&restart_sections(&services.config, &next), &next.warnings);
+    let warnings = apply_theme(
+        state,
+        &next.theme,
+        services.color_depth,
+        next.warnings.clone(),
+    );
+    let notice = reload_notice(&restart_sections(&services.config, &next), &warnings);
     let TabLayout {
         entries,
         tabs,

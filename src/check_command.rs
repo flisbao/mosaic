@@ -11,6 +11,7 @@ use mosaic::infrastructure::config::{
 };
 use mosaic::infrastructure::plugin_runner::PluginRunner;
 use mosaic::infrastructure::protocol_report::parse_snapshot_report;
+use mosaic::presentation::theme_styles::ThemeStyles;
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
 
@@ -128,6 +129,7 @@ fn check_preview(snapshot: &WidgetSnapshot) -> Vec<String> {
     lines_to_plain_text(&render_blocks(
         &snapshot.summary.blocks,
         CHECK_PREVIEW_WIDTH,
+        &ThemeStyles::ansi(),
     ))
 }
 

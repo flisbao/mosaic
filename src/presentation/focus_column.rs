@@ -1,10 +1,11 @@
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Line;
 
 use crate::domain::widget_content::Tone;
 use crate::presentation::app_state::WidgetEntry;
-use crate::presentation::text_fit::{tone_style, truncate_to_width};
-use crate::presentation::widget_box::{entry_title, FAILURE_COLOR, FAILURE_MARK};
+use crate::presentation::text_fit::truncate_to_width;
+use crate::presentation::theme_styles::ThemeStyles;
+use crate::presentation::widget_box::{entry_title, FAILURE_MARK};
 
 const ITEM_COUNT_SUFFIX: &str = " itens";
 const VALUE_SEPARATOR: &str = " ";
@@ -13,15 +14,21 @@ pub fn focus_column_lines(
     entries: &[&WidgetEntry],
     focused: Option<usize>,
     width: usize,
+    styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
     entries
         .iter()
         .enumerate()
-        .map(|(position, entry)| focus_row(entry, Some(position) == focused, width))
+        .map(|(position, entry)| focus_row(entry, Some(position) == focused, width, styles))
         .collect()
 }
 
-fn focus_row(entry: &WidgetEntry, focused: bool, width: usize) -> Line<'static> {
+fn focus_row(
+    entry: &WidgetEntry,
+    focused: bool,
+    width: usize,
+    styles: &ThemeStyles,
+) -> Line<'static> {
     let mark = if entry.record.is_failing() {
         FAILURE_MARK
     } else {
@@ -32,7 +39,10 @@ fn focus_row(entry: &WidgetEntry, focused: bool, width: usize) -> Line<'static> 
         entry_title(entry),
         summary_value(entry)
     );
-    Line::styled(truncate_to_width(&text, width), row_style(entry, focused))
+    Line::styled(
+        truncate_to_width(&text, width),
+        row_style(entry, focused, styles),
+    )
 }
 
 fn summary_value(entry: &WidgetEntry) -> String {
@@ -57,21 +67,19 @@ fn displayed_item_count(entry: &WidgetEntry) -> usize {
     entry.max_items.map_or(total, |limit| total.min(limit))
 }
 
-fn row_style(entry: &WidgetEntry, focused: bool) -> Style {
+fn row_style(entry: &WidgetEntry, focused: bool, styles: &ThemeStyles) -> Style {
     if focused {
-        return Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
+        return styles.tone(Tone::Current);
     }
     if entry.record.is_failing() {
-        return Style::default().fg(FAILURE_COLOR);
+        return styles.danger();
     }
     let tone = entry
         .record
         .snapshot()
         .and_then(|snapshot| snapshot.mini.as_ref())
         .map_or(Tone::Normal, |mini| mini.tone);
-    tone_style(tone)
+    styles.tone(tone)
 }
 
 #[cfg(test)]
@@ -79,6 +87,7 @@ mod tests {
     use super::*;
     use crate::domain::widget::{Mini, WidgetId, WidgetRecord, WidgetSnapshot};
     use crate::domain::widget_content::Tone;
+    use crate::presentation::theme_styles::ThemeStyles;
     use ratatui::style::{Color, Modifier};
 
     fn titled_snapshot(title: &str) -> WidgetSnapshot {
@@ -162,7 +171,7 @@ mod tests {
             Some(1),
         );
         let entries = [&agenda, &kanban, &capped];
-        let rows: Vec<String> = focus_column_lines(&entries, Some(0), 40)
+        let rows: Vec<String> = focus_column_lines(&entries, Some(0), 40, &ThemeStyles::ansi())
             .iter()
             .map(line_text)
             .collect();
@@ -177,7 +186,7 @@ mod tests {
         let failing = entry("kanban", failed(), None);
         let healthy = entry("agenda", ready(titled_snapshot("Agenda")), None);
         let entries = [&healthy, &failing];
-        let lines = focus_column_lines(&entries, Some(0), 40);
+        let lines = focus_column_lines(&entries, Some(0), 40, &ThemeStyles::ansi());
         let failing_line = &lines[1];
         assert!(line_text(failing_line).starts_with('⚠'), "{failing_line:?}");
         assert_eq!(failing_line.style.fg, Some(Color::Red));

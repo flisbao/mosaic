@@ -11,7 +11,8 @@ mod validation;
 pub use paths::{config_directory, config_file_path, read_config_file};
 use raw::RawConfig;
 use validation::{
-    build_tabs, convert_llm, convert_pomodoro, convert_widget, named_tab, TabAssignment,
+    build_tabs, build_theme, convert_llm, convert_pomodoro, convert_widget, named_tab,
+    TabAssignment,
 };
 
 use crate::application::launch_spec::{ProviderCommand, WidgetLaunchSpec, WidgetSchedule};
@@ -20,6 +21,7 @@ use crate::application::reload::PreparedWidgets;
 use crate::application::reload_plan::plan_reload;
 use crate::application::reload_policy::RestartSections;
 use crate::domain::pomodoro::{PomodoroSettings, SECONDS_PER_MINUTE};
+use crate::domain::theme::Theme;
 use crate::domain::widget::WidgetId;
 use crate::infrastructure::private_directory::verify_trusted_path;
 
@@ -177,6 +179,7 @@ pub struct AppConfig {
     pub tabs: Vec<TabSettings>,
     pub pomodoro: PomodoroConfig,
     pub llm: LlmConfig,
+    pub theme: Theme,
     pub warnings: Vec<String>,
 }
 
@@ -272,6 +275,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         tabs: build_tabs(raw.tabs, &tab_assignments)?,
         pomodoro: convert_pomodoro(raw.pomodoro, &mut warnings)?,
         llm: convert_llm(raw.llm)?,
+        theme: build_theme(raw.theme, &mut warnings),
         warnings,
     })
 }
@@ -1188,5 +1192,151 @@ command = "sh"
     fn config_file_lives_inside_the_directory() {
         let path = config_file_path(std::path::Path::new("/etc/panel"));
         assert_eq!(path, std::path::PathBuf::from("/etc/panel/mosaic.toml"));
+    }
+
+    fn theme_of(text: &str) -> (crate::domain::theme::Theme, Vec<String>) {
+        let config = parse_config(text).unwrap();
+        (config.theme, config.warnings)
+    }
+
+    fn preset(name: &str) -> crate::domain::theme::Theme {
+        crate::domain::theme::Theme::preset(name).unwrap()
+    }
+
+    #[test]
+    fn missing_theme_section_is_the_ansi_theme() {
+        let (theme, warnings) = theme_of("");
+        assert_eq!(theme, crate::domain::theme::Theme::Ansi);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn named_preset_is_resolved() {
+        let (theme, warnings) = theme_of("[theme]\nname = \"tokyo-night\"\n");
+        assert_eq!(theme, preset("tokyo-night"));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn blank_or_default_name_is_the_ansi_theme() {
+        for name in ["", "  ", "default"] {
+            let (theme, warnings) = theme_of(&format!("[theme]\nname = \"{name}\"\n"));
+            assert_eq!(theme, crate::domain::theme::Theme::Ansi, "{name:?}");
+            assert!(warnings.is_empty(), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_preset_warns_and_falls_back_to_default() {
+        let (theme, warnings) = theme_of("[theme]\nname = \"neon\"\n");
+        assert_eq!(theme, crate::domain::theme::Theme::Ansi);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("[theme]"), "{}", warnings[0]);
+        assert_eq!(
+            warnings[0],
+            "[theme] tema desconhecido 'neon'; veja `mosaic themes`"
+        );
+    }
+
+    #[test]
+    fn wrong_types_in_the_theme_section_are_warnings_not_errors() {
+        let (theme, warnings) =
+            theme_of("[theme]\nname = 1\npaint_background = \"yes\"\n[theme.colors]\naccent = 5\n");
+        assert_eq!(theme, crate::domain::theme::Theme::Ansi);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        let (theme, warnings) = theme_of(
+            "[theme]\nname = \"nord\"\npaint_background = \"yes\"\n[theme.colors]\naccent = 5\n",
+        );
+        assert_eq!(theme, preset("nord"));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("paint_background")));
+        assert!(warnings.iter().any(|warning| warning.contains("accent")));
+    }
+
+    #[test]
+    fn long_theme_values_are_shortened_in_every_warning() {
+        let long = "x".repeat(200);
+        let (_, by_name) = theme_of(&format!("[theme]\nname = \"{long}\"\n"));
+        let (_, by_role) = theme_of(&format!(
+            "[theme]\nname = \"nord\"\n[theme.colors]\n{long} = \"#000000\"\n"
+        ));
+        let (_, by_key) = theme_of(&format!(
+            "[theme]\nname = \"nord\"\n[theme.colors]\naccent = \"{long}\"\n"
+        ));
+        for warnings in [by_name, by_role, by_key] {
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].len() < 150, "{}", warnings[0]);
+        }
+    }
+
+    #[test]
+    fn unknown_preset_with_colors_warns_only_once() {
+        let (_, warnings) =
+            theme_of("[theme]\nname = \"neon\"\n[theme.colors]\naccent = \"#ff9e64\"\n");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn invalid_hex_is_a_warning_not_an_error() {
+        let (theme, warnings) =
+            theme_of("[theme]\nname = \"nord\"\n[theme.colors]\naccent = \"#12345\"\n");
+        assert_eq!(theme, preset("nord"));
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("accent") && warnings[0].contains("#12345"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn unknown_role_is_a_warning() {
+        let (theme, warnings) =
+            theme_of("[theme]\nname = \"nord\"\n[theme.colors]\nfundo = \"#000000\"\n");
+        assert_eq!(theme, preset("nord"));
+        assert!(warnings[0].contains("fundo"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn valid_overrides_apply_even_when_another_one_is_invalid() {
+        use crate::domain::theme::{Rgb, ThemeRole};
+        let (theme, warnings) = theme_of(
+            "[theme]\nname = \"tokyo-night\"\n[theme.colors]\naccent = \"#ff9e64\"\nmuted = \"azul\"\n",
+        );
+        let expected = preset("tokyo-night")
+            .with_overrides(&[(ThemeRole::Accent, Rgb::new(0xff, 0x9e, 0x64))]);
+        assert_eq!(theme, expected);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn colors_on_the_default_theme_warn_and_change_nothing() {
+        let (theme, warnings) = theme_of("[theme.colors]\naccent = \"#ff9e64\"\n");
+        assert_eq!(theme, crate::domain::theme::Theme::Ansi);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("default"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn paint_background_false_keeps_the_palette_without_the_background() {
+        let (theme, _) = theme_of("[theme]\nname = \"dracula\"\npaint_background = false\n");
+        assert_eq!(theme, preset("dracula").without_background());
+    }
+
+    #[test]
+    fn paint_background_is_ignored_on_the_default_theme() {
+        let (theme, warnings) = theme_of("[theme]\npaint_background = true\n");
+        assert_eq!(theme, crate::domain::theme::Theme::Ansi);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn long_values_are_cut_in_warnings() {
+        let long = "x".repeat(500);
+        let (_, warnings) = theme_of(&format!("[theme]\nname = \"{long}\"\n"));
+        assert!(warnings[0].len() < 300, "{}", warnings[0].len());
+        assert!(warnings[0].contains('…'));
     }
 }

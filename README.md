@@ -85,6 +85,22 @@ Press `?` at any time: the help is always one key away, and the bottom line show
 
 `Alt` needs your terminal to send `Esc` before the letter (on macOS, enable "Option as Meta").
 
+## Themes
+
+By default Mosaic uses your terminal's own colors. Pick a built-in theme in `mosaic.toml` (press `R` to reload it):
+
+```toml
+[theme]
+name = "tokyo-night"
+# paint_background = false        # keep your terminal background (normal text then uses the terminal's own color)
+# [theme.colors]                   # override single roles
+# accent = "#ff9e64"
+```
+
+Built-in themes: `tokyo-night`, `tokyo-night-storm`, `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `nord`, `catppuccin-mocha`, `one-dark`, `monokai` and `everforest-dark` (plus `default`, the terminal's colors). Run `mosaic themes` to list them (with color swatches on truecolor terminals), or `mosaic themes nord` to see the roles, hex values and contrast ratios.
+
+A colored theme paints the whole screen background and needs a terminal with truecolor (`COLORTERM=truecolor`) or 256 colors; on a basic terminal Mosaic falls back to `default` and tells you. Widgets are unaffected: they only choose a tone (`normal`, `muted`, `ok`, `warn`, `danger`, `current`) and the theme decides how it looks.
+
 ## Batteries included
 
 | Widget | What it shows | Setup guide |
@@ -107,7 +123,7 @@ mosaic plugins install jira github       # or just some
 mosaic plugins install --force           # update the ones you already installed (overwrites local edits)
 ```
 
-Install `mosaic-plugins_<version>_all.deb` (it puts them in `/usr/share/mosaic/plugins`) or unpack `mosaic-plugins-<version>.tar.gz` and pass `--from mosaic-plugins-<version>/plugins`. The matching Claude Code skills are in `skills/`: `mosaic skills install --from mosaic-plugins-<version>/skills`. Then uncomment the widget you want in `mosaic.toml`.
+Download `mosaic-plugins_<version>_all.deb` or `mosaic-plugins-<version>.tar.gz` from the [plugins releases](https://github.com/flisbao/mosaic/releases?q=plugins-v) (the "latest" release is the core, not the plugins). The `.deb` puts them in `/usr/share/mosaic/plugins`; with the tarball, unpack it and pass `--from mosaic-plugins-<version>/plugins`. The matching Claude Code skills are in `skills/`: `mosaic skills install --from mosaic-plugins-<version>/skills`. Then uncomment the widget you want in `mosaic.toml`.
 
 The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 

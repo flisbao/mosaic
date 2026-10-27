@@ -1,7 +1,9 @@
 pub mod action;
 pub mod blocks;
+pub mod color_depth;
 pub mod error;
 pub mod pomodoro;
 pub mod snapshot_report;
+pub mod theme;
 pub mod widget;
 pub mod widget_content;

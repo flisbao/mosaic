@@ -6,6 +6,7 @@ mod table;
 use ratatui::text::Line;
 
 use crate::domain::blocks::Block;
+use crate::presentation::theme_styles::ThemeStyles;
 
 use lines::LinesRenderer;
 use rows::RowsRenderer;
@@ -15,24 +16,30 @@ use table::TableRenderer;
 const INVALID_BLOCK_TEXT: &str = "⚠ bloco inválido";
 
 pub trait BlockRenderer: Sync {
-    fn render(&self, block: &Block, width: usize) -> Option<Vec<Line<'static>>>;
+    fn render(
+        &self,
+        block: &Block,
+        width: usize,
+        styles: &ThemeStyles,
+    ) -> Option<Vec<Line<'static>>>;
 }
 
 const RENDERERS: [&dyn BlockRenderer; 4] =
     [&LinesRenderer, &RowsRenderer, &StatRenderer, &TableRenderer];
 
-pub fn render_block(block: &Block, width: usize) -> Vec<Line<'static>> {
-    render_block_with(&RENDERERS, block, width)
+pub fn render_block(block: &Block, width: usize, styles: &ThemeStyles) -> Vec<Line<'static>> {
+    render_block_with(&RENDERERS, block, width, styles)
 }
 
 fn render_block_with(
     renderers: &[&dyn BlockRenderer],
     block: &Block,
     width: usize,
+    styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
     renderers
         .iter()
-        .find_map(|renderer| renderer.render(block, width))
+        .find_map(|renderer| renderer.render(block, width, styles))
         .unwrap_or_else(|| vec![Line::from(INVALID_BLOCK_TEXT)])
 }
 
@@ -47,11 +54,17 @@ mod tests {
         BLOCK_TYPE_NAMES,
     };
     use crate::domain::widget_content::{Align, Tone};
+    use crate::presentation::theme_styles::ThemeStyles;
 
     struct RejectAll;
 
     impl BlockRenderer for RejectAll {
-        fn render(&self, _block: &Block, _width: usize) -> Option<Vec<Line<'static>>> {
+        fn render(
+            &self,
+            _block: &Block,
+            _width: usize,
+            _styles: &ThemeStyles,
+        ) -> Option<Vec<Line<'static>>> {
             None
         }
     }
@@ -103,7 +116,7 @@ mod tests {
     #[test]
     fn every_block_variant_has_a_renderer() {
         for block in one_block_of_each_variant() {
-            let lines = render_block(&block, 40);
+            let lines = render_block(&block, 40, &ThemeStyles::ansi());
             assert!(!is_invalid_block_line(&lines), "{block:?}");
         }
     }
@@ -115,7 +128,12 @@ mod tests {
 
     #[test]
     fn no_renderer_accepting_a_block_yields_invalid_block_line() {
-        let lines = render_block_with(&[&RejectAll], &Block::Lines(vec![]), 10);
+        let lines = render_block_with(
+            &[&RejectAll],
+            &Block::Lines(vec![]),
+            10,
+            &ThemeStyles::ansi(),
+        );
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans[0].content, INVALID_BLOCK_TEXT);
     }

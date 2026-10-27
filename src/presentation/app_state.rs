@@ -12,6 +12,7 @@ use crate::domain::widget::{
 };
 use crate::presentation::key_input::KeyInput;
 use crate::presentation::shortcuts::assign_shortcuts;
+use crate::presentation::theme_styles::ThemeStyles;
 
 mod alert_queue;
 mod focus_navigation;
@@ -119,6 +120,7 @@ pub struct AppState {
     pomodoro: PomodoroControl,
     alerts: AlertQueue,
     pending_actions: PendingActions,
+    theme_styles: ThemeStyles,
 }
 
 impl AppState {
@@ -135,7 +137,16 @@ impl AppState {
             pomodoro: PomodoroControl::default(),
             alerts: AlertQueue::default(),
             pending_actions: PendingActions::default(),
+            theme_styles: ThemeStyles::ansi(),
         }
+    }
+
+    pub fn styles(&self) -> &ThemeStyles {
+        &self.theme_styles
+    }
+
+    pub fn set_theme_styles(&mut self, styles: ThemeStyles) {
+        self.theme_styles = styles;
     }
 
     pub fn replace_tabs(&mut self, entries: Vec<WidgetEntry>, tabs: Vec<TabView>) {
@@ -1494,5 +1505,21 @@ mod tests {
             }],
         );
         assert!(without.recommendation_record().is_none());
+    }
+
+    #[test]
+    fn replacing_the_theme_keeps_the_rest_of_the_state() {
+        use crate::domain::color_depth::ColorDepth;
+        use crate::domain::theme::Theme;
+        let mut app = app();
+        press(&mut app, &[KeyInput::Down, KeyInput::Enter]);
+        let focus = app.focused_entry();
+        let expanded = app.is_expanded();
+        let styles = ThemeStyles::new(&Theme::preset("nord").unwrap(), ColorDepth::TrueColor);
+        app.set_theme_styles(styles.clone());
+        assert_eq!(app.styles(), &styles);
+        assert_eq!(app.focused_entry(), focus);
+        assert_eq!(app.is_expanded(), expanded);
+        assert_eq!(app.tabs().len(), 2);
     }
 }

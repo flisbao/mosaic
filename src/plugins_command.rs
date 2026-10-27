@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use mosaic::infrastructure::app_paths::config_directory;
@@ -117,14 +117,20 @@ fn run_install(arguments: &[String]) -> ExitCode {
         Ok(invocation) => invocation,
         Err(error) => return usage_failure(&error),
     };
-    match install_plugins(
+    let mut outcomes = Vec::new();
+    let result = install_plugins(
         &invocation.source,
         &invocation.target,
         &invocation.names,
         invocation.overwrite,
-    ) {
-        Ok(outcomes) => {
-            report(&outcomes, &invocation);
+        |outcome| {
+            report_outcome(&outcome);
+            outcomes.push(outcome);
+        },
+    );
+    match result {
+        Ok(()) => {
+            println!("{}", summary_line(&outcomes, &invocation.target));
             ExitCode::SUCCESS
         }
         Err(PluginsError::InvalidName(name)) => {
@@ -154,21 +160,27 @@ fn failure(error: &PluginsError) -> ExitCode {
     ExitCode::from(EXIT_CODE_FAILURE)
 }
 
-fn report(outcomes: &[PluginOutcome], invocation: &InstallInvocation) {
-    for outcome in outcomes {
-        match outcome {
-            PluginOutcome::Installed(name) => println!("instalado: {name}"),
-            PluginOutcome::Replaced(name) => println!("substituído: {name}"),
-            PluginOutcome::AlreadyInstalled(name) => {
-                println!("já instalado: {name} (use {FORCE_FLAG} para substituir)")
-            }
+fn report_outcome(outcome: &PluginOutcome) {
+    match outcome {
+        PluginOutcome::Installed(name) => println!("instalado: {name}"),
+        PluginOutcome::Replaced(name) => println!("substituído: {name}"),
+        PluginOutcome::AlreadyInstalled(name) => {
+            println!("já instalado: {name} (use {FORCE_FLAG} para substituir)")
         }
     }
-    println!(
-        "{} plugins em {}",
-        outcomes.len(),
-        invocation.target.display()
-    );
+}
+
+fn summary_line(outcomes: &[PluginOutcome], target: &Path) -> String {
+    let written = outcomes
+        .iter()
+        .filter(|outcome| !matches!(outcome, PluginOutcome::AlreadyInstalled(_)))
+        .count();
+    let directory = target.display();
+    match written {
+        0 => format!("nenhum plugin instalado em {directory}"),
+        1 => format!("1 plugin instalado em {directory}"),
+        count => format!("{count} plugins instalados em {directory}"),
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +189,25 @@ mod tests {
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn summary_counts_only_written_plugins_and_agrees_in_number() {
+        let target = Path::new("/destino");
+        let installed = |name: &str| PluginOutcome::Installed(name.to_string());
+        let kept = PluginOutcome::AlreadyInstalled("jira".to_string());
+        assert_eq!(
+            summary_line(&[], target),
+            "nenhum plugin instalado em /destino"
+        );
+        assert_eq!(
+            summary_line(&[kept, installed("github")], target),
+            "1 plugin instalado em /destino"
+        );
+        assert_eq!(
+            summary_line(&[installed("a"), installed("b")], target),
+            "2 plugins instalados em /destino"
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::infrastructure::config::{config_file_path, ConfigError};
 
 const PLUGINS_DIRECTORY_NAME: &str = "plugins";
 
-const DEFAULT_CONFIG: &str = r#"[[widgets]]
+const DEFAULT_CONFIG: &str = r##"[[widgets]]
 id = "kanban"
 command = "python3"
 args = ["plugins/kanban.py"]
@@ -46,6 +46,15 @@ harness = "claude"
 timeout_seconds = 120
 confirm_before_send = true
 priority_prompt = "prompts/prioridade.md"
+
+# --- Tema de cores (descomente para trocar; `mosaic themes` lista os presets com amostras) ---
+# Sem esta seção o Mosaic usa as cores do seu terminal (tema "default"). Os temas coloridos
+# pintam o fundo da tela inteira e pedem um terminal com truecolor ou 256 cores.
+# [theme]
+# name = "tokyo-night"
+# # paint_background = false   # não pinta o fundo (o texto normal usa a cor do terminal; os demais papéis seguem o tema)
+# # [theme.colors]             # sobrescreve papéis: foreground, background, muted, ok, warn, danger, accent, on_accent
+# # accent = "#ff9e64"
 
 # --- Plugins de serviço (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, agenda) ---
 # Eles não vêm no binário: instale-os com `mosaic plugins install` (todos) ou
@@ -166,7 +175,7 @@ priority_prompt = "prompts/prioridade.md"
 # command = "node"
 # args = ["plugins/gallery.js"]
 # span = 2
-"#;
+"##;
 
 const PRIORITY_PROMPT: &str = include_str!("../../prompts/prioridade.md");
 
@@ -416,6 +425,17 @@ mod tests {
             .widgets
             .iter()
             .all(|widget| widget.id.as_str() != "azure-pipelines"));
+    }
+
+    #[test]
+    fn default_config_documents_the_theme_section() {
+        let text = default_config_text();
+        assert!(text.contains("# [theme]"));
+        assert!(text.contains("# name = \"tokyo-night\""));
+        assert!(text.contains("mosaic themes"));
+        let config = parse_config(text).unwrap();
+        assert_eq!(config.theme, crate::domain::theme::Theme::Ansi);
+        assert!(config.warnings.is_empty());
     }
 
     #[test]
