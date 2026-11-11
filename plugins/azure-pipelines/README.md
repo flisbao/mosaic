@@ -2,6 +2,8 @@
 
 > Instalação: `mosaic plugins install azure-pipelines` (o plugin não vem no binário; veja o README da raiz). Configuração guiada, sem editar o `mosaic.toml` à mão: `mosaic plugins setup azure-pipelines` (pergunta só o que este plugin lê, mostra o bloco e grava depois que você confirmar).
 
+Instalação remota requer Git e Mosaic 0.0.10 ou mais recente. O atalho acima equivale a `mosaic plugins install flisbao/mosaic/plugins/azure-pipelines`. Confirme com `s`; Enter cancela, `--yes` autoriza sem pergunta e `--force` permite substituir edições locais. `version` e `min_mosaic_version` no `setup.toml` controlam versão individual e compatibilidade. Para copiar uma instalação antiga offline: `mosaic plugins install --from /usr/share/mosaic/plugins azure-pipelines`.
+
 `plugins/azure-pipelines/azure_pipelines.py` é um provider do Mosaic que mostra as pipelines de build mais lentas do Azure DevOps e, ao abrir o detalhe do widget (Enter), os passos que mais demoram em cada uma. Ele só faz `GET` na API REST (`api-version` 7.1) e só fala com `https://dev.azure.com` e, para autenticar, com o Microsoft Entra ID. Nenhum segredo vai em argumento.
 
 ## O que mostra

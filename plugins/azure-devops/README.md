@@ -2,6 +2,8 @@
 
 > Instalação: `mosaic plugins install azure-devops` (o plugin não vem no binário; veja o README da raiz). Configuração guiada, sem editar o `mosaic.toml` à mão: `mosaic plugins setup azure-devops` (pergunta só o que este plugin lê, mostra o bloco e grava depois que você confirmar).
 
+Instalação remota requer Git e Mosaic 0.0.10 ou mais recente. O atalho acima equivale a `mosaic plugins install flisbao/mosaic/plugins/azure-devops`. Confirme com `s`; Enter cancela, `--yes` autoriza sem pergunta e `--force` permite substituir edições locais. `version` e `min_mosaic_version` no `setup.toml` controlam versão individual e compatibilidade. Para copiar uma instalação antiga offline: `mosaic plugins install --from /usr/share/mosaic/plugins azure-devops`.
+
 `plugins/azure-devops/azure_devops.py` é um provider do Mosaic que mostra os pull requests do Azure DevOps que esperam por você: os que pediram sua revisão e os que você abriu. Ele só faz `GET` na API REST (`api-version` 7.1) e só fala com `https://dev.azure.com`. A autenticação é feita com **Microsoft Entra ID** (token de acesso curto, enviado como `Bearer`); o PAT não é mais suportado. Nenhum segredo vai em argumento: o plugin lê o **nome** de uma variável (ou um arquivo) e, no `device-code`, um arquivo de credencial só seu.
 
 ## O que mostra

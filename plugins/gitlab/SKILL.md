@@ -15,12 +15,14 @@ description: Use quando for configurar, depurar ou alterar o widget de merge req
 
 Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, ele é interativo):
 
-1. `mosaic plugins list`: lista os plugins disponíveis no pacote (`/usr/share/mosaic/plugins`).
-2. `mosaic plugins install gitlab`: copia a pasta para `~/.config/mosaic/plugins/gitlab/` (script, `README.md`, esta `SKILL.md` e o `setup.toml`) e liga esta skill ao Claude Code em `~/.claude/skills/mosaic-plugin-gitlab`, se `~/.claude` existir. Não sobrescreve nada: depois de instalar um pacote novo, use `--force`. `--no-skill` pula a skill; `--from DIR`, `--to DIR` e `--skills-dir DIR` apontam para outras pastas (tarball, testes).
+1. `mosaic plugins list`: lista os seis atalhos oficiais, sem rede; plugins de terceiros usam uma referência completa.
+2. `mosaic plugins install gitlab`: baixa `flisbao/mosaic/plugins/gitlab` pelo Git (repositório público do GitHub) e mostra origem, versão, mínimo do Mosaic e destino antes de perguntar `[s/N]`. Git é necessário; Enter ou EOF cancela. `--yes` autoriza sem pergunta. Copia script, `README.md`, esta `SKILL.md` e `setup.toml` para `~/.config/mosaic/plugins/gitlab/`; liga a skill ao Claude Code se `~/.claude` existir. Preserva edições locais; para atualizar, `mosaic plugins install gitlab --force` (a confirmação continua valendo). `--no-skill` pula o vínculo; `--to DIR` e `--skills-dir DIR` mudam os destinos. `--from DIR` mantém a instalação local offline, inclusive de um pacote antigo em `/usr/share/mosaic/plugins`.
 3. `mosaic plugins setup gitlab`: entrevista no terminal, só com o que o plugin já lê (veja "Todas as opções"), mais a aba do painel em que o widget fica (dá para criar uma aba nova na hora; `mosaic tabs list` mostra as abas e `mosaic tabs add NOME` cria uma). Mostra o `[[widgets]]` pronto e só grava no `mosaic.toml` depois de um "S". Nunca pede o valor do segredo: só o nome da variável ou o caminho do arquivo. `--print` só mostra o bloco, `--advanced` inclui as opções avançadas e `--config-dir DIR` usa outra pasta de configuração. Para um segundo widget (outra conta, outro filtro), rode de novo com outro id: cada execução acrescenta um bloco.
 4. Aperte `R` no mosaic para recarregar; `mosaic check --config` valida o arquivo.
 
 Dentro do Claude Code, a pessoa pode rodar `! mosaic plugins setup gitlab` sem sair da conversa. Se ela preferir conversar, siga a entrevista abaixo e entregue o bloco para colar.
+
+O `setup.toml` declara `version` e `min_mosaic_version` como versões estáveis de três números. A versão deste plugin avança individualmente quando ele muda; o mínimo só sobe quando exigir recurso novo do núcleo. O instalador recusa mínimo incompatível mesmo com `--force`. A origem segue a branch padrão, sem fixar revisão. Para origem externa, use `mosaic plugins install owner/repo/subdir`; o campo `script` descreve o caminho depois de instalar, e o arquivo vem diretamente da pasta selecionada.
 
 ## Configurar com a pessoa
 

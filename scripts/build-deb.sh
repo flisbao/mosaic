@@ -28,16 +28,15 @@ Section: utils
 Priority: optional
 Architecture: $ARCHITECTURE
 Depends: libc6 (>= ${MINIMUM_GLIBC:-2.17})
-Recommends: python3
-Suggests: mosaic-plugins
+Recommends: python3, git
 Maintainer: Lisbao <flisbao@gmail.com>
 Homepage: https://github.com/flisbao/mosaic
 Description: Terminal dashboard built from pluggable widgets
  Qualquer programa que imprime JSON vira um widget do painel.
  Os widgets de exemplo (kanban, example, gallery) são instalados em
  ~/.config/mosaic na primeira execução. Os widgets de serviço (Jira,
- GitHub, GitLab, Azure DevOps, agenda) vêm no pacote mosaic-plugins:
- rode "mosaic plugins install" para copiá-los.
+ GitHub, GitLab, Azure DevOps, agenda) são baixados do GitHub via Git:
+ rode "mosaic plugins install jira" ou use owner/repo/subdir.
  A skill do protocolo fica em /usr/share/mosaic/skills;
  rode "mosaic skills install" para ligá-la ao seu ~/.claude/skills.
 CONTROL

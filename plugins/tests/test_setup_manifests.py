@@ -49,6 +49,15 @@ def manifest_flags(manifest):
 
 
 class SetupManifestTests(unittest.TestCase):
+    def test_every_plugin_declares_stable_individual_versions(self):
+        version_pattern = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+        for name in plugin_names():
+            with self.subTest(plugin=name):
+                manifest = load_manifest(name)
+                for field in ("version", "min_mosaic_version"):
+                    self.assertIsInstance(manifest.get(field), str)
+                    self.assertRegex(manifest[field], version_pattern)
+
     def test_every_plugin_has_a_manifest(self):
         for name in plugin_names():
             with self.subTest(plugin=name):

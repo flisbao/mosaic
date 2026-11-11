@@ -21,7 +21,7 @@ description: Use quando for configurar, depurar ou alterar o widget de <serviço
 Uma ou duas frases: o que o widget mostra, de onde vem, se é só leitura. Link para `plugins/<pasta>/README.md`.
 
 ## Instalar e configurar com o mosaic plugins
-Os passos de terminal, na ordem: `mosaic plugins list`, `mosaic plugins install <pasta>` (copia o plugin, a skill e o `setup.toml` e liga a skill ao Claude Code; `--force`, `--no-skill`, `--from`, `--to`, `--skills-dir`), `mosaic plugins setup <pasta>` (`--print`, `--advanced`, `--config-dir`) e `R` no mosaic. Diga que o agente não roda o `setup` (é interativo) e que dentro do Claude Code a pessoa usa `! mosaic plugins setup <pasta>`.
+Os passos de terminal, na ordem: `mosaic plugins list` (catálogo de atalhos oficiais sem rede), `mosaic plugins install owner/repo/subdir` (baixa por Git e pede `[s/N]`; Enter cancela, `--yes` autoriza sem pergunta; copia plugin, skill e `setup.toml` e liga a skill ao Claude Code; `--force` permite substituir sem dispensar a confirmação, `--no-skill`, `--from DIR` offline/legado, `--to`, `--skills-dir`), `mosaic plugins setup <pasta>` (`--print`, `--advanced`, `--config-dir`) e `R` no mosaic. Diga que o agente não roda o `setup` (é interativo) e que dentro do Claude Code a pessoa usa `! mosaic plugins setup <pasta>`.
 
 ## Configurar com a pessoa
 Perguntas na ordem, uma por vez, e o que cada resposta vira no `mosaic.toml`.
@@ -47,10 +47,14 @@ Seções obrigatórias (títulos exatos, nesta ordem): `Visão geral`, `Instalar
 
 ## O `setup.toml`
 
+Declare `version` e `min_mosaic_version` como versões estáveis `MAJOR.MINOR.PATCH`; incremente a versão só deste plugin ao alterá-lo. O instalador recusa mínimo incompatível mesmo com `--force`. Explique que a fonte segue a branch padrão sem fixar revisão, e que o campo `script` usa o caminho instalado `plugins/<pasta>/<arquivo>.py`, embora o arquivo seja lido diretamente da pasta selecionada no clone.
+
 O roteiro do `mosaic plugins setup`, ao lado do `README.md`. Só o que o plugin já lê:
 
 ```toml
 plugin = "<pasta>"
+version = "0.1.0"
+min_mosaic_version = "0.0.10"
 script = "plugins/<pasta>/<nome>.py"
 default_id = "<id sugerido>"
 interval_seconds = 120

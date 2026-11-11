@@ -2,6 +2,8 @@
 
 > Instalação: `mosaic plugins install github` (o plugin não vem no binário; veja o README da raiz). Configuração guiada, sem editar o `mosaic.toml` à mão: `mosaic plugins setup github` (pergunta só o que este plugin lê, mostra o bloco e grava depois que você confirmar).
 
+Instalação remota requer Git e Mosaic 0.0.10 ou mais recente. O atalho acima equivale a `mosaic plugins install flisbao/mosaic/plugins/github`. Confirme com `s`; Enter cancela, `--yes` autoriza sem pergunta e `--force` permite substituir edições locais. `version` e `min_mosaic_version` no `setup.toml` controlam versão individual e compatibilidade. Para copiar uma instalação antiga offline: `mosaic plugins install --from /usr/share/mosaic/plugins github`.
+
 `plugins/github/github_prs.py` é um provider do Mosaic que mostra os pull requests que esperam por você no GitHub: os que pediram sua revisão e os que você abriu. Ele só lê (GraphQL, sem mutation) e só fala com `https://api.github.com`. O token nunca vai em argumento: `GITHUB_TOKEN_ENV` guarda o **nome** da variável que contém o token (ou use `GITHUB_TOKEN_FILE`).
 
 ## O que mostra

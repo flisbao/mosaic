@@ -1,3 +1,5 @@
+version = "0.0.4"
+min_mosaic_version = "0.0.10"
 plugin = "github"
 script = "plugins/github/github_prs.py"
 default_id = "github-prs"

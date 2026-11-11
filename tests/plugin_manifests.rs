@@ -5,9 +5,12 @@ use std::path::PathBuf;
 
 use mosaic::application::plugin_setup::{run_setup, SetupOptions, SetupResult};
 use mosaic::application::ports::{PromptError, Prompter};
+use mosaic::domain::plugin_package::PluginVersion;
 use mosaic::domain::plugin_setup::{AnswerKind, SetupManifest, Step, Target};
 use mosaic::infrastructure::config::parse_config;
-use mosaic::infrastructure::setup_manifest::{read_manifest, MANIFEST_FILE_NAME};
+use mosaic::infrastructure::setup_manifest::{
+    parse_package_manifest, read_manifest, MANIFEST_FILE_NAME,
+};
 
 const NOT_PLUGIN_FOLDERS: [&str; 2] = ["tests", "__pycache__"];
 const SERVICE_PLUGINS: [&str; 6] = [
@@ -436,5 +439,17 @@ fn every_manifest_variable_is_documented_in_the_plugin_readme() {
                 assert!(documented || is_flag, "{plugin}: {key} não está no README");
             }
         }
+    }
+}
+
+#[test]
+fn every_service_plugin_has_compatible_version_metadata() {
+    let current = PluginVersion::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    for name in SERVICE_PLUGINS {
+        let text =
+            fs::read_to_string(plugins_directory().join(name).join(MANIFEST_FILE_NAME)).unwrap();
+        let package = parse_package_manifest(&text).unwrap();
+        assert_eq!(package.setup.plugin, name);
+        package.metadata.ensure_compatible(&current).unwrap();
     }
 }

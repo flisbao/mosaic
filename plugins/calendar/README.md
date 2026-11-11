@@ -2,6 +2,8 @@
 
 > Instalação: `mosaic plugins install calendar` (o plugin não vem no binário; veja o README da raiz). Configuração guiada, sem editar o `mosaic.toml` à mão: `mosaic plugins setup calendar` (pergunta só o que este plugin lê, mostra o bloco e grava depois que você confirmar).
 
+Instalação remota requer Git e Mosaic 0.0.10 ou mais recente. O atalho acima equivale a `mosaic plugins install flisbao/mosaic/plugins/calendar`. Confirme com `s`; Enter cancela, `--yes` autoriza sem pergunta e `--force` permite substituir edições locais. `version` e `min_mosaic_version` no `setup.toml` controlam versão individual e compatibilidade. Para copiar uma instalação antiga offline: `mosaic plugins install --from /usr/share/mosaic/plugins calendar`.
+
 Plugin do mosaic que mostra a sua agenda da semana: de **agora** até a **próxima segunda-feira às 00:00** (no fuso local, então domingo à noite ainda mostra os eventos de domingo). Os eventos que já terminaram somem sozinhos a cada atualização.
 
 Há três fontes de dados, escolhidas com `CALENDAR_SOURCE`:

@@ -1,3 +1,5 @@
+version = "0.0.4"
+min_mosaic_version = "0.0.10"
 plugin = "azure-devops"
 script = "plugins/azure-devops/azure_devops.py"
 default_id = "azure-devops-prs"

@@ -15,7 +15,9 @@ Um widget é um comando completo (script + argumentos) que o Mosaic executa em i
 
 **Plugin novo só é aceito com a sua skill** `plugins/<pasta>/SKILL.md` (e o link `.claude/skills/mosaic-plugin-<pasta>` → `../../plugins/<pasta>`), escrita a partir de [plugin-skill-template.md](plugin-skill-template.md), **e com o roteiro** `plugins/<pasta>/setup.toml` do `mosaic plugins setup`. `python3 -m unittest discover -s plugins/tests` falha se uma pasta de plugin não tiver skill ou roteiro, se a skill estiver mal formada, se citar uma variável que o código do plugin não conhece ou se esquecer uma opção do roteiro.
 
-O `setup.toml` só lista o que o plugin **já** lê (variáveis do README, opções de linha de comando, padrões, faixas, condições e os modelos prontos do README). Não invente configuração que o código não implementa: `test_setup_manifests.py` confere o arquivo com o README e com o código.
+O `setup.toml` declara também `version` e `min_mosaic_version`, versões estáveis `MAJOR.MINOR.PATCH`. Ao alterar um plugin, incremente só sua `version`; aumente o mínimo quando depender de recurso novo do núcleo. O instalador recusa mínimo incompatível mesmo com `--force`. A instalação segue a branch padrão, sem fixar revisão. O script precisa estar diretamente na pasta selecionada; `script = "plugins/<pasta>/<arquivo>.py"` descreve seu caminho depois de instalado.
+
+O roteiro do `setup.toml` só lista o que o plugin **já** lê (variáveis do README, opções de linha de comando, padrões, faixas, condições e os modelos prontos do README). Não invente configuração que o código não implementa: `test_setup_manifests.py` confere o arquivo com o README e com o código.
 
 Skills existentes: `mosaic-plugin-jira`, `-github`, `-gitlab`, `-azure-devops`, `-azure-pipelines`, `-calendar`. Ao mexer em um deles, use a skill dele junto com esta.
 
@@ -59,7 +61,7 @@ Forma do código (copie de `plugins/github/github_prs.py`):
 2. **REQUIRED SUB-SKILL:** `superpowers:test-driven-development`. Teste primeiro (`plugins/tests/test_<nome>.py`), veja falhar, implemente.
 3. `python3 -m unittest discover -s plugins/tests` (suíte inteira, não só o arquivo novo).
 4. `mosaic check --cwd ~/.config/mosaic ... python3 plugins/<pasta>/<nome>.py` (ou `--config` para validar o `mosaic.toml`). Atenção: `check` passa o ambiente inteiro do shell e **não aplica `inherit_env`**; confira `inherit_env` à mão.
-5. Empacotar: o plugin entra sozinho no pacote **mosaic-plugins** (`scripts/stage-package.sh plugins`) quando existe `plugins/<pasta>/SKILL.md`; o usuário o instala com `mosaic plugins install <pasta>` (que também liga a skill ao Claude Code) e o configura com `mosaic plugins setup <pasta>`. Ele **não** é embutido no binário. Opcional: bloco **comentado** no `REFERENCE_CONFIG` (`src/infrastructure/default_files.rs`). Mencionar o plugin no `README.md` da raiz.
+5. Distribuir a pasta em repositório público do GitHub: `mosaic plugins install owner/repo/subdir` usa Git, mostra origem/versão/destino e pede `[s/N]` (Enter cancela; `--yes` autoriza sem pergunta). `--force` permite substituir edições locais, mas não dispensa confirmação. O plugin continua fora do binário; apenas os seis nomes do catálogo oficial têm atalhos. `--from DIR` preserva cópia local offline e migração do pacote antigo. O instalador liga a skill ao Claude Code, salvo `--no-skill`; `mosaic plugins setup <pasta>` configura o widget. Mencionar o plugin no README da raiz.
 6. Escrever a skill do plugin pelo template, o `setup.toml` e o link em `.claude/skills/`, e conferir que os testes de skills e de roteiro passam.
 7. `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`; ao final `cargo clean`.
 8. Revisão do plugin pronto por um modelo mais forte que o implementador (a equipe usa Sonnet 5.5, ou gpt-6-sol-1 em harness OpenAI). Critical e Important voltam com teste que falha primeiro.
@@ -74,5 +76,5 @@ Forma do código (copie de `plugins/github/github_prs.py`):
 | `interval_seconds = 5` | Mínimo efetivo é 30; use `r` para forçar |
 | Opção do plugin depois de `snapshot` | O Mosaic acrescenta `snapshot` no fim; opções vão em `args` |
 | Id de alerta com data ou contador | Mesmo evento, mesmo id; senão o aviso repete ou esconde o próximo |
-| Plugin com pasta mas sem skill, ou com arquivo de teste solto na pasta | Fica fora do pacote (sem skill) ou vira lixo no pacote: o `stage-package.sh` só leva `*.py`, `*.js` e `README.md`; testes ficam em `plugins/tests/` |
+| Plugin com pasta mas sem skill, ou com arquivo de teste solto na pasta | A instalação remota exige `SKILL.md` e manifesto versionado; só copia arquivos diretos `.py`, `.js`, `README.md`, `SKILL.md` e `setup.toml`; testes ficam em `plugins/tests/` |
 | Plugin sem skill | O teste de skills falha; crie a skill pelo template |

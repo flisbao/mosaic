@@ -1,3 +1,5 @@
+version = "0.0.4"
+min_mosaic_version = "0.0.10"
 plugin = "gitlab"
 script = "plugins/gitlab/gitlab_mrs.py"
 default_id = "gitlab-mrs"

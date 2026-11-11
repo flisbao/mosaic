@@ -116,19 +116,23 @@ A colored theme paints the whole screen background and needs a terminal with tru
 | **Kanban** | A folder of Markdown files per column, with a "move task" action | `plugins/kanban.py` |
 | **Gallery** | Every block type, for the curious (and for copy-pasting) | `plugins/gallery.py` |
 
-Only Kanban, `example` and `gallery` ship inside the binary. The service widgets (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, Calendar) come in the separate **mosaic-plugins** package, versioned on its own (release tags `plugins-v*`):
+Only Kanban, `example` and `gallery` ship inside the binary. Install service plugins directly from a public GitHub repository with **Git** and Mosaic 0.0.10 or later:
 
 ```sh
-mosaic plugins list                      # what the package offers
-mosaic plugins install                   # copy all of them to ~/.config/mosaic/plugins
-mosaic plugins install jira github       # or just some
-mosaic plugins install --force           # update the ones you already installed (overwrites local edits)
-mosaic plugins setup jira                # answer a few questions; it writes the widget into mosaic.toml
+mosaic plugins list                                      # six official shortcuts, no network
+mosaic plugins install jira github                       # official shortcuts
+mosaic plugins install flisbao/mosaic/plugins/jira        # owner/repo/subdir
+mosaic plugins install owner/repo                         # setup.toml at repository root
+mosaic plugins install jira --force                      # replace local edits, after confirmation
+mosaic plugins install jira --yes                        # skip the confirmation for automation
+mosaic plugins setup jira                                # write a widget through the terminal interview
 ```
 
-`mosaic plugins setup <name>` is an interview in the terminal built from what that plugin already reads (its variables and options, listed in `plugins/<name>/setup.toml`). It asks one thing at a time, shows the finished `[[widgets]]` block and only appends it to `mosaic.toml` after you confirm; it never asks for a token, only the name of the environment variable or the path of the file that holds it. `--print` just shows the block, `--advanced` also asks the optional settings and `--config-dir DIR` uses another configuration folder. Run it again with another id for a second widget.
+Remote installation shows source, plugin version, minimum Mosaic version and destination, then asks `[s/N]`; Enter or EOF cancels. `--force` permits replacement and still requires confirmation unless `--yes` is present. Each plugin declares `version` and `min_mosaic_version` in its `setup.toml`; incompatible versions are rejected even with `--force`. Git follows the repository's default branch; installations do not pin a revision. A third-party plugin uses `owner/repo[/subdir]`; only the six names listed by `plugins list` have shortcuts. A full reference must be installed on its own; multiple official shortcuts can be installed together.
 
-Download `mosaic-plugins_<version>_all.deb` or `mosaic-plugins-<version>.tar.gz` from the [plugins releases](https://github.com/flisbao/mosaic/releases?q=plugins-v) (the "latest" release is the core, not the plugins). The `.deb` puts them in `/usr/share/mosaic/plugins`; with the tarball, unpack it and pass `--from mosaic-plugins-<version>/plugins`. Each plugin folder also carries its Claude Code skill (`SKILL.md`) and its `setup.toml`; `mosaic plugins install` copies them and links the skill into `~/.claude/skills` when Claude Code is there (`--no-skill` skips it). Then run `mosaic plugins setup <name>`, or copy the widget block you want from `mosaic --default-config` into `mosaic.toml`.
+The old collective **mosaic-plugins** package is retired. Existing installations remain usable and are never removed automatically. To copy its files offline, run `mosaic plugins install --from /usr/share/mosaic/plugins jira`; `--from DIR` also accepts a local checkout's `plugins` directory. The panel and local installation do not need Git. `--to DIR` changes the plugins destination. Remote packages contain a regular script, `SKILL.md` and a versioned `setup.toml`. The installer copies only direct `.py`/`.js` files and `README.md`, `SKILL.md`, `setup.toml`; it does not install dependencies or run the plugin. The manifest's `script` describes the installed path (`plugins/<name>/<file>.py`), while the source file lives directly in the selected repository folder. The installer links the skill into `~/.claude/skills` when Claude Code is present; `--no-skill` skips linking and `--skills-dir DIR` selects another directory.
+
+`mosaic plugins setup <name>` asks one question at a time, shows the finished `[[widgets]]` block and only appends it to `mosaic.toml` after confirmation. It never asks for a token, only the environment variable name or file path. `--print` shows the block, `--advanced` asks optional settings and `--config-dir DIR` selects another configuration folder. Run it again with another id for a second widget, or copy an example from `mosaic --default-config`.
 
 The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 
@@ -213,7 +217,7 @@ Mosaic ships [Claude Code](https://claude.com/claude-code) skills that interview
 mosaic skills install
 ```
 
-Without the packages, the skills live in this repository: [`plugins/<name>/SKILL.md`](plugins) (linked from [`.claude/skills`](.claude/skills)) and `.claude/skills/mosaic-widget-authoring`.
+With a local checkout, the skills also live in this repository: [`plugins/<name>/SKILL.md`](plugins) (linked from [`.claude/skills`](.claude/skills)) and `.claude/skills/mosaic-widget-authoring`.
 
 ## Contributing
 

@@ -1,3 +1,5 @@
+version = "0.0.4"
+min_mosaic_version = "0.0.10"
 plugin = "jira"
 script = "plugins/jira/jira.py"
 default_id = "jira"
