@@ -3,6 +3,7 @@ use mosaic::application::plugin_catalog::{resolve_plugin_source, OFFICIAL_PLUGIN
 use mosaic::domain::plugin_package::GitHubSource;
 use mosaic::infrastructure::git_plugin_fetcher::GitPluginFetcher;
 use mosaic::infrastructure::stream_prompter::StreamPrompter;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -226,7 +227,7 @@ fn run_install(arguments: &[String]) -> ExitCode {
                 }
                 Err(error) => {
                     link_skills(&invocation, error.completed());
-                    eprintln!("mosaic: {error}");
+                    eprintln!("mosaic: {}", error.diagnostic());
                     ExitCode::from(EXIT_CODE_FAILURE)
                 }
             }
@@ -281,6 +282,13 @@ fn link_skills(invocation: &InstallInvocation, outcomes: &[PluginOutcome]) {
         if !plugin_directory.join(SKILL_FILE_NAME).is_file() {
             continue;
         }
+        let plugin_directory = match fs::canonicalize(&plugin_directory) {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("aviso: não consegui resolver a pasta da skill de {name}: {error}");
+                continue;
+            }
+        };
         let skill_name = format!("{SKILL_NAME_PREFIX}{name}");
         match link_skill_directory(&plugin_directory, &skills_directory, &skill_name) {
             Ok(SkillOutcome::Linked(skill)) => println!("skill instalada: {skill}"),

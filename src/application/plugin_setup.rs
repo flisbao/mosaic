@@ -7,7 +7,7 @@ use crate::domain::plugin_setup::{
     ensure_environment_name, normalize_list, split_list, AnswerKind, Condition, Preset, Question,
     SecretQuestion, SetupManifest, Step, Target,
 };
-use crate::domain::widget_draft::WidgetDraft;
+use crate::domain::widget_draft::{WidgetDraft, JAVASCRIPT_PLUGIN_COMMAND, PLUGIN_COMMAND};
 
 const MINIMUM_INTERVAL_SECONDS: u64 = 30;
 const MAXIMUM_INTERVAL_SECONDS: u64 = 86_400;
@@ -306,6 +306,12 @@ impl<'a> Interview<'a> {
         SetupResult {
             draft: WidgetDraft {
                 id: widget_id,
+                command: if self.manifest.script.ends_with(".js") {
+                    JAVASCRIPT_PLUGIN_COMMAND
+                } else {
+                    PLUGIN_COMMAND
+                }
+                .to_string(),
                 arguments: self.arguments,
                 interval_seconds,
                 timeout_seconds,

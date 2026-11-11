@@ -226,3 +226,129 @@ fn remote_usage_errors_and_offline_catalog_do_not_download() {
         "azure-devops\nazure-pipelines\ncalendar\ngithub\ngitlab\njira\n"
     );
 }
+
+#[test]
+fn malformed_remote_metadata_is_safe_before_confirmation() {
+    for (field, original) in [
+        ("version", "0.0.4"),
+        ("min_mosaic_version", "0.0.0"),
+        ("plugin", "github"),
+    ] {
+        let fixture = Fixture::new();
+        let manifest = fixture.path("repository/setup.toml");
+        let text = fs::read_to_string(&manifest).unwrap();
+        fs::write(
+            &manifest,
+            text.replace(
+                &format!("{field} = \"{original}\""),
+                &format!(r#"{field} = "\u001B[2J\u001B[H\u000Aforged""#),
+            ),
+        )
+        .unwrap();
+        let output = fixture.run(&["owner/repo"], "");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains('\u{1b}'), "{stderr:?}");
+        assert_eq!(stderr.lines().count(), 1, "{stderr:?}");
+        assert!(output.stdout.is_empty());
+        assert!(!fixture.path("target").exists());
+    }
+    let fixture = Fixture::new();
+    let manifest = fixture.path("repository/setup.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        text.replace(
+            "version = \"0.0.4\"",
+            &format!("version = \"{}\"", "x".repeat(5000)),
+        ),
+    )
+    .unwrap();
+    let output = fixture.run(&["owner/repo"], "");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).chars().count() <= 510);
+}
+
+#[test]
+fn installing_javascript_then_setup_uses_node() {
+    let fixture = Fixture::new();
+    let manifest = fixture.path("repository/setup.toml");
+    fs::write(
+        &manifest,
+        fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("github.py", "github.js"),
+    )
+    .unwrap();
+    fs::rename(
+        fixture.path("repository/github.py"),
+        fixture.path("repository/github.js"),
+    )
+    .unwrap();
+    fs::write(
+        fixture.path("repository/github.js"),
+        "console.log('fixture');",
+    )
+    .unwrap();
+    let output = fixture.run(
+        &[
+            "owner/repo",
+            "--yes",
+            "--no-skill",
+            "--to",
+            fixture.path("configuration/plugins").to_str().unwrap(),
+        ],
+        "",
+    );
+    assert!(output.status.success(), "{}", text(&output));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(["plugins", "setup", "github", "--print", "--config-dir"])
+        .arg(fixture.path("configuration"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"\n\n\n\n\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("command = \"node\""),
+        "{}",
+        text(&output)
+    );
+    assert!(text(&output).contains("plugins/github/github.js"));
+}
+
+#[test]
+fn relative_destination_creates_a_working_skill_link_and_is_repeatable() {
+    let fixture = Fixture::new();
+    for expected in ["skill instalada", "skill já instalada"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+            .current_dir(fixture.root.path())
+            .env("PATH", fixture.path("bin"))
+            .args([
+                "plugins",
+                "install",
+                "owner/repo",
+                "--yes",
+                "--to",
+                "plugins",
+                "--skills-dir",
+                "skills",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(fixture
+            .path("skills/mosaic-plugin-github/SKILL.md")
+            .is_file());
+        assert!(text(&output).contains(expected), "{}", text(&output));
+    }
+}

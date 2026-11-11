@@ -6,13 +6,14 @@ use thiserror::Error;
 use crate::confirmation::confirm_default_no;
 use mosaic::application::ports::{PluginFetcher, PromptError, Prompter};
 use mosaic::domain::plugin_package::{GitHubSource, PluginPackageError, PluginVersion};
-use mosaic::infrastructure::plugins_installer::{Overwrite, PluginOutcome};
+use mosaic::infrastructure::plugins_installer::{Overwrite, PluginOutcome, PluginsError};
 use mosaic::infrastructure::remote_plugins::{
     install_prepared_plugin, prepare_remote_plugin, RemotePluginError,
 };
 
 const INSTALL_QUESTION: &str = "Plugins são código de terceiros e terão acesso ao seu usuário quando executados. Instalar? [s/N]: ";
 const CANCELLED: &str = "Instalação cancelada; nenhum plugin foi alterado.";
+const MAXIMUM_PACKAGE_DIAGNOSTIC_CHARACTERS: usize = 500;
 
 pub struct RemoteInstallOptions {
     pub target: PathBuf,
@@ -41,6 +42,28 @@ pub enum RemoteCommandError {
 }
 
 impl RemoteCommandError {
+    pub fn diagnostic(&self) -> String {
+        let message: String = self
+            .to_string()
+            .chars()
+            .map(|character| {
+                if character.is_control() {
+                    '?'
+                } else {
+                    character
+                }
+            })
+            .collect();
+        match self {
+            Self::Prepare(RemotePluginError::InvalidPackage(_))
+            | Self::Prepare(RemotePluginError::Install(PluginsError::InvalidName(_))) => message
+                .chars()
+                .take(MAXIMUM_PACKAGE_DIAGNOSTIC_CHARACTERS)
+                .collect(),
+            _ => message,
+        }
+    }
+
     pub fn completed(&self) -> &[PluginOutcome] {
         match self {
             Self::Output { completed, .. } | Self::Installation { completed, .. } => completed,

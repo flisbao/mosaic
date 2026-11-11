@@ -1,11 +1,13 @@
 use std::fmt::Write;
 
 pub const PLUGIN_COMMAND: &str = "python3";
+pub const JAVASCRIPT_PLUGIN_COMMAND: &str = "node";
 const UNICODE_ESCAPE_WIDTH: usize = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WidgetDraft {
     pub id: String,
+    pub command: String,
     pub arguments: Vec<String>,
     pub interval_seconds: u64,
     pub timeout_seconds: u64,
@@ -24,7 +26,7 @@ impl WidgetDraft {
     pub fn to_toml_block(&self) -> String {
         let mut block = String::from("[[widgets]]\n");
         push_assignment(&mut block, "id", &quoted(&self.id));
-        push_assignment(&mut block, "command", &quoted(PLUGIN_COMMAND));
+        push_assignment(&mut block, "command", &quoted(&self.command));
         push_assignment(&mut block, "args", &quoted_list(&self.arguments));
         push_assignment(
             &mut block,
@@ -95,6 +97,7 @@ mod tests {
     fn draft() -> WidgetDraft {
         WidgetDraft {
             id: "jira-minhas-tarefas".to_string(),
+            command: PLUGIN_COMMAND.to_string(),
             arguments: vec![
                 "plugins/jira/jira.py".to_string(),
                 "--jql".to_string(),
