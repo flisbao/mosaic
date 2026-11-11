@@ -5,6 +5,7 @@ mod cli_info;
 mod confirmation;
 mod plugin_setup_command;
 mod plugins_command;
+mod remote_plugins_command;
 mod skills_command;
 mod tabs_command;
 mod themes_command;

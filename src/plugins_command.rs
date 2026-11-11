@@ -1,3 +1,9 @@
+use crate::remote_plugins_command::{execute_remote_install, RemoteInstallOptions};
+use mosaic::application::plugin_catalog::{resolve_plugin_source, OFFICIAL_PLUGINS};
+use mosaic::domain::plugin_package::GitHubSource;
+use mosaic::infrastructure::git_plugin_fetcher::GitPluginFetcher;
+use mosaic::infrastructure::stream_prompter::StreamPrompter;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -12,7 +18,7 @@ use crate::plugin_setup_command;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
-const PLUGINS_USAGE: &str = "uso: mosaic plugins install [--from DIR] [--to DIR] [--force] [--no-skill] [NOME...] | mosaic plugins list [--from DIR] | mosaic plugins setup NOME [--config-dir DIR] [--advanced] [--print]";
+const PLUGINS_USAGE: &str = "uso: mosaic plugins install owner/repo[/subdir] | NOME... [--yes] [--to DIR] [--force] [--no-skill] [--skills-dir DIR] | mosaic plugins install --from DIR [NOME...] | mosaic plugins list [--from DIR] | mosaic plugins setup NOME [--config-dir DIR] [--advanced] [--print]\nexemplo: mosaic plugins install flisbao/mosaic/plugins/jira\npacote antigo: mosaic plugins install --from /usr/share/mosaic/plugins";
 const INSTALL_SUBCOMMAND: &str = "install";
 const LIST_SUBCOMMAND: &str = "list";
 const SETUP_SUBCOMMAND: &str = "setup";
@@ -26,7 +32,7 @@ const SKILL_NAME_PREFIX: &str = "mosaic-plugin-";
 const CLAUDE_DIRECTORY_NAME: &str = ".claude";
 const CLAUDE_SKILLS_FOLDER: &str = "skills";
 const END_OF_FLAGS: &str = "--";
-const PACKAGED_PLUGINS_DIRECTORY: &str = "/usr/share/mosaic/plugins";
+const YES_FLAG: &str = "--yes";
 const INSTALLED_PLUGINS_FOLDER: &str = "plugins";
 
 #[derive(Debug, Error, PartialEq)]
@@ -39,6 +45,8 @@ enum PluginsUsageError {
     UnknownFlag(String),
     #[error("não foi possível descobrir a pasta de configuração; use {TO_FLAG}\n{PLUGINS_USAGE}")]
     NoConfigDirectory,
+    #[error("nome de plugin inválido ou fontes incompatíveis; use uma referência owner/repo[/subdir], atalhos oficiais, ou --from DIR\n{PLUGINS_USAGE}")]
+    InvalidSources,
 }
 
 #[derive(Debug, PartialEq)]
@@ -49,16 +57,26 @@ enum SkillLinking {
 }
 
 #[derive(Debug, PartialEq)]
+enum InstallSource {
+    Local {
+        directory: PathBuf,
+        names: Vec<String>,
+    },
+    Remote(Vec<GitHubSource>),
+}
+
+#[derive(Debug, PartialEq)]
 struct InstallInvocation {
-    source: PathBuf,
+    source: InstallSource,
     target: PathBuf,
     overwrite: Overwrite,
     skill_linking: SkillLinking,
-    names: Vec<String>,
+    assume_yes: bool,
 }
 
 fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, PluginsUsageError> {
     let mut source = None;
+    let mut assume_yes = false;
     let mut target = None;
     let mut overwrite = Overwrite::Keep;
     let mut skills_directory = None;
@@ -73,6 +91,7 @@ fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, Pl
         }
         match argument.as_str() {
             END_OF_FLAGS => flags_ended = true,
+            YES_FLAG => assume_yes = true,
             FORCE_FLAG => overwrite = Overwrite::Replace,
             NO_SKILL_FLAG => link_skills = false,
             SKILLS_DIR_FLAG => {
@@ -84,15 +103,43 @@ fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, Pl
         }
     }
     Ok(InstallInvocation {
-        source: source.unwrap_or_else(packaged_directory),
+        source: resolve_install_source(source, names)?,
         target: match target {
             Some(target) => target,
             None => default_target()?,
         },
         overwrite,
         skill_linking: skill_linking(link_skills, skills_directory),
-        names,
+        assume_yes,
     })
+}
+
+fn resolve_install_source(
+    directory: Option<PathBuf>,
+    names: Vec<String>,
+) -> Result<InstallSource, PluginsUsageError> {
+    if let Some(directory) = directory {
+        if names.iter().any(|name| name.contains('/')) {
+            return Err(PluginsUsageError::InvalidSources);
+        }
+        return Ok(InstallSource::Local { directory, names });
+    }
+    if names.is_empty()
+        || (names.len() > 1
+            && !names
+                .iter()
+                .all(|name| OFFICIAL_PLUGINS.contains(&name.as_str())))
+    {
+        return Err(PluginsUsageError::InvalidSources);
+    }
+    let mut sources = Vec::new();
+    for name in names {
+        let source = resolve_plugin_source(&name).map_err(|_| PluginsUsageError::InvalidSources)?;
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    Ok(InstallSource::Remote(sources))
 }
 
 fn skill_linking(link_skills: bool, skills_directory: Option<PathBuf>) -> SkillLinking {
@@ -112,21 +159,20 @@ fn directory_value<'a>(
 ) -> Result<PathBuf, PluginsUsageError> {
     remaining
         .next()
+        .filter(|value| !value.starts_with('-'))
         .map(PathBuf::from)
         .ok_or(PluginsUsageError::FlagWithoutValue(flag))
 }
 
-fn parse_list_arguments(arguments: &[String]) -> Result<PathBuf, PluginsUsageError> {
+fn parse_list_arguments(arguments: &[String]) -> Result<Option<PathBuf>, PluginsUsageError> {
     match arguments {
-        [] => Ok(packaged_directory()),
-        [flag, value] if flag == FROM_FLAG => Ok(PathBuf::from(value)),
-        [flag] if flag == FROM_FLAG => Err(PluginsUsageError::FlagWithoutValue(FROM_FLAG)),
+        [] => Ok(None),
+        [flag, value] if flag == FROM_FLAG && !value.starts_with('-') => {
+            Ok(Some(PathBuf::from(value)))
+        }
+        [flag, ..] if flag == FROM_FLAG => Err(PluginsUsageError::FlagWithoutValue(FROM_FLAG)),
         [other, ..] => Err(PluginsUsageError::UnknownFlag(other.clone())),
     }
-}
-
-fn packaged_directory() -> PathBuf {
-    PathBuf::from(PACKAGED_PLUGINS_DIRECTORY)
 }
 
 fn default_target() -> Result<PathBuf, PluginsUsageError> {
@@ -156,21 +202,58 @@ fn run_install(arguments: &[String]) -> ExitCode {
         Ok(invocation) => invocation,
         Err(error) => return usage_failure(&error),
     };
+    match &invocation.source {
+        InstallSource::Local { directory, names } => {
+            run_local_install(&invocation, directory, names)
+        }
+        InstallSource::Remote(sources) => {
+            let options = RemoteInstallOptions {
+                target: invocation.target.clone(),
+                overwrite: invocation.overwrite,
+                assume_yes: invocation.assume_yes,
+            };
+            let mut prompter = StreamPrompter::new(io::stdin().lock(), io::stdout());
+            match execute_remote_install(
+                sources,
+                &options,
+                &GitPluginFetcher::new(),
+                &mut prompter,
+                &mut io::stdout(),
+            ) {
+                Ok(outcomes) => {
+                    link_skills(&invocation, &outcomes);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    link_skills(&invocation, error.completed());
+                    eprintln!("mosaic: {error}");
+                    ExitCode::from(EXIT_CODE_FAILURE)
+                }
+            }
+        }
+    }
+}
+
+fn run_local_install(
+    invocation: &InstallInvocation,
+    directory: &Path,
+    names: &[String],
+) -> ExitCode {
     let mut outcomes = Vec::new();
     let result = install_plugins(
-        &invocation.source,
+        directory,
         &invocation.target,
-        &invocation.names,
+        names,
         invocation.overwrite,
         |outcome| {
             report_outcome(&outcome);
             outcomes.push(outcome);
         },
     );
+    link_skills(invocation, &outcomes);
     match result {
         Ok(()) => {
             println!("{}", summary_line(&outcomes, &invocation.target));
-            link_skills(&invocation, &outcomes);
             ExitCode::SUCCESS
         }
         Err(PluginsError::InvalidName(name)) => {
@@ -221,7 +304,11 @@ fn outcome_name(outcome: &PluginOutcome) -> &str {
 
 fn run_list(arguments: &[String]) -> ExitCode {
     let source = match parse_list_arguments(arguments) {
-        Ok(source) => source,
+        Ok(Some(source)) => source,
+        Ok(None) => {
+            OFFICIAL_PLUGINS.iter().for_each(|name| println!("{name}"));
+            return ExitCode::SUCCESS;
+        }
         Err(error) => return usage_failure(&error),
     };
     match available_plugins(&source) {
@@ -294,19 +381,40 @@ mod tests {
             "--from", "/a", "--to", "/b", "--force", "jira", "github",
         ]))
         .unwrap();
-        assert_eq!(invocation.source, PathBuf::from("/a"));
+        assert_eq!(
+            invocation.source,
+            InstallSource::Local {
+                directory: PathBuf::from("/a"),
+                names: arguments(&["jira", "github"])
+            }
+        );
         assert_eq!(invocation.target, PathBuf::from("/b"));
         assert_eq!(invocation.overwrite, Overwrite::Replace);
-        assert_eq!(invocation.names, arguments(&["jira", "github"]));
     }
 
     #[test]
-    fn defaults_come_from_the_package_and_the_config_directory() {
-        let invocation = parse_install_arguments(&[]).unwrap();
-        assert_eq!(invocation.source, PathBuf::from(PACKAGED_PLUGINS_DIRECTORY));
+    fn remote_defaults_use_official_sources_and_preserve_argument_order() {
+        assert!(parse_install_arguments(&[]).is_err());
+        let invocation =
+            parse_install_arguments(&arguments(&["jira", "github", "jira", "--yes"])).unwrap();
+        assert_eq!(
+            invocation.source,
+            InstallSource::Remote(vec![
+                resolve_plugin_source("jira").unwrap(),
+                resolve_plugin_source("github").unwrap()
+            ])
+        );
         assert!(invocation.target.ends_with("mosaic/plugins"));
         assert_eq!(invocation.overwrite, Overwrite::Keep);
-        assert!(invocation.names.is_empty());
+        assert!(invocation.assume_yes);
+        for args in [
+            vec!["jira", "owner/repo"],
+            vec!["owner/repo", "a/b"],
+            vec!["--to", "--force", "jira"],
+            vec!["--from", "/a", "owner/repo"],
+        ] {
+            assert!(parse_install_arguments(&arguments(&args)).is_err());
+        }
     }
 
     #[test]
@@ -328,20 +436,24 @@ mod tests {
     #[test]
     fn arguments_after_the_double_dash_are_names() {
         let invocation =
-            parse_install_arguments(&arguments(&["--to", "/b", "--", "--force"])).unwrap();
-        assert_eq!(invocation.names, arguments(&["--force"]));
+            parse_install_arguments(&arguments(&["--from", "/a", "--to", "/b", "--", "--force"]))
+                .unwrap();
+        assert_eq!(
+            invocation.source,
+            InstallSource::Local {
+                directory: PathBuf::from("/a"),
+                names: arguments(&["--force"])
+            }
+        );
         assert_eq!(invocation.overwrite, Overwrite::Keep);
     }
 
     #[test]
-    fn list_without_from_uses_the_packaged_directory() {
-        assert_eq!(
-            parse_list_arguments(&[]).unwrap(),
-            PathBuf::from(PACKAGED_PLUGINS_DIRECTORY)
-        );
+    fn list_without_from_uses_the_official_catalog() {
+        assert_eq!(parse_list_arguments(&[]).unwrap(), None);
         assert_eq!(
             parse_list_arguments(&arguments(&["--from", "/a"])).unwrap(),
-            PathBuf::from("/a")
+            Some(PathBuf::from("/a"))
         );
     }
 

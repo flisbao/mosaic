@@ -4,9 +4,27 @@ const AFFIRMATIVE_ANSWERS: [&str; 3] = ["s", "sim", "y"];
 const NEGATIVE_ANSWERS: [&str; 3] = ["n", "nao", "não"];
 
 pub fn confirm(prompter: &mut impl Prompter, question: &str) -> Result<bool, PromptError> {
+    confirm_with_default(prompter, question, true)
+}
+
+pub fn confirm_default_no(
+    prompter: &mut impl Prompter,
+    question: &str,
+) -> Result<bool, PromptError> {
+    confirm_with_default(prompter, question, false)
+}
+
+fn confirm_with_default(
+    prompter: &mut impl Prompter,
+    question: &str,
+    default: bool,
+) -> Result<bool, PromptError> {
     loop {
         let answer = prompter.ask(question)?.trim().to_lowercase();
-        if answer.is_empty() || AFFIRMATIVE_ANSWERS.contains(&answer.as_str()) {
+        if answer.is_empty() {
+            return Ok(default);
+        }
+        if AFFIRMATIVE_ANSWERS.contains(&answer.as_str()) {
             return Ok(true);
         }
         if NEGATIVE_ANSWERS.contains(&answer.as_str()) {
@@ -35,6 +53,21 @@ mod tests {
 
     fn scripted(answers: Vec<&'static str>) -> Scripted {
         Scripted(answers.into_iter())
+    }
+
+    #[test]
+    fn default_no_accepts_only_explicit_yes_and_preserves_eof() {
+        for answer in ["", "n", "nao", "não"] {
+            assert!(!confirm_default_no(&mut scripted(vec![answer]), "?").unwrap());
+        }
+        for answer in ["S", "sim", "y"] {
+            assert!(confirm_default_no(&mut scripted(vec![answer]), "?").unwrap());
+        }
+        assert!(confirm_default_no(&mut scripted(vec!["talvez", "s"]), "?").unwrap());
+        assert_eq!(
+            confirm_default_no(&mut scripted(vec![]), "?").unwrap_err(),
+            PromptError::EndOfInput
+        );
     }
 
     #[test]

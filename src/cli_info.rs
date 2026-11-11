@@ -68,8 +68,8 @@ Uso:
   mosaic --help | -h | help         mostra esta ajuda
   mosaic --version | -V | version   mostra a versão instalada
   mosaic --default-config           imprime o mosaic.toml de referência, com todas as opções comentadas
-  mosaic plugins list               lista os plugins de serviço (Jira, GitHub, GitLab, Azure, agenda)
-  mosaic plugins install [NOME...]  copia plugins para a pasta de configuração e liga a skill do Claude Code
+  mosaic plugins list               lista os atalhos oficiais, sem rede
+  mosaic plugins install owner/repo[/subdir] [--yes]  baixa um plugin público com Git; pede confirmação [s/N]\n  mosaic plugins install NOME...   instala atalhos oficiais; --from DIR copia plugins locais
   mosaic plugins setup NOME         entrevista no terminal que monta o widget e grava no mosaic.toml
   mosaic tabs list | add NOME       lista as abas do mosaic.toml ou cria uma aba nova
   mosaic themes [NOME]              lista os temas de cor ou mostra um
@@ -79,6 +79,7 @@ Uso:
 Primeiros passos:
   mosaic plugins list
   mosaic plugins install jira
+  mosaic plugins install flisbao/mosaic/plugins/jira --yes
   mosaic plugins setup jira
   mosaic                          (aperte R para recarregar o mosaic.toml)
 

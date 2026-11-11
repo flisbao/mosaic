@@ -43,9 +43,9 @@ enum SetupUsageError {
 
 #[derive(Debug, Error)]
 enum SetupFailure {
-    #[error("o plugin '{0}' não está instalado; rode: mosaic plugins install {0}")]
+    #[error("o plugin '{0}' não está instalado; use mosaic plugins install {0} se for oficial, ou instale pela referência owner/repo[/subdir] ou --from DIR")]
     NotInstalled(String),
-    #[error("o plugin '{0}' não tem {MANIFEST_FILE_NAME}: reinstale com: mosaic plugins install --force {0}")]
+    #[error("o plugin '{0}' não tem {MANIFEST_FILE_NAME}: reinstale com --force pela origem usada (referência owner/repo[/subdir], atalho oficial ou --from DIR)")]
     NoManifest(String),
     #[error(transparent)]
     Manifest(#[from] ManifestError),
