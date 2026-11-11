@@ -6,10 +6,12 @@ use thiserror::Error;
 
 mod paths;
 mod raw;
+mod unknown_keys;
 mod validation;
 
 pub use paths::{config_directory, config_file_path, read_config_file};
 use raw::RawConfig;
+use unknown_keys::unknown_key_warnings;
 use validation::{
     build_tabs, build_theme, convert_llm, convert_pomodoro, convert_widget, named_tab,
     TabAssignment,
@@ -250,6 +252,8 @@ impl ConfigError {
 pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
     let raw: RawConfig = toml::from_str(text)
         .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error)))?;
+    let document: toml::Table = toml::from_str(text)
+        .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error)))?;
     let mut seen = HashSet::new();
     let mut widgets = Vec::new();
     let mut tab_assignments = Vec::new();
@@ -270,12 +274,17 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         });
         widgets.push(convert_widget(widget)?);
     }
+    let tabs = build_tabs(raw.tabs, &tab_assignments)?;
+    let pomodoro = convert_pomodoro(raw.pomodoro, &mut warnings)?;
+    let llm = convert_llm(raw.llm)?;
+    let theme = build_theme(raw.theme, &mut warnings);
+    warnings.extend(unknown_key_warnings(&document));
     Ok(AppConfig {
         widgets,
-        tabs: build_tabs(raw.tabs, &tab_assignments)?,
-        pomodoro: convert_pomodoro(raw.pomodoro, &mut warnings)?,
-        llm: convert_llm(raw.llm)?,
-        theme: build_theme(raw.theme, &mut warnings),
+        tabs,
+        pomodoro,
+        llm,
+        theme,
         warnings,
     })
 }
@@ -1338,5 +1347,148 @@ command = "sh"
         let (_, warnings) = theme_of(&format!("[theme]\nname = \"{long}\"\n"));
         assert!(warnings[0].len() < 300, "{}", warnings[0].len());
         assert!(warnings[0].contains('…'));
+    }
+
+    const EVERY_KNOWN_KEY: &str = r##"
+[[tabs]]
+name = "A"
+
+[[widgets]]
+id = "a"
+command = "x"
+args = ["y"]
+inherit_env = ["HOME"]
+interval_seconds = 60
+timeout_seconds = 5
+span = 2
+tab = "A"
+max_items = 3
+llm_sections = ["s"]
+llm_max_items = 5
+llm_max_characters_per_item = 50
+
+[widgets.env]
+QUALQUER_NOME = "v"
+
+[pomodoro]
+enabled = true
+focus_minutes = 25
+short_break_minutes = 5
+long_break_minutes = 15
+cycles_before_long_break = 4
+suggestions = ["a"]
+bell = true
+notify_command = ["notify-send"]
+
+[llm]
+enabled = true
+harness = "claude"
+model = "m"
+max_budget_usd = 1.0
+timeout_seconds = 120
+confirm_before_send = true
+priority_prompt = "prompts/prioridade.md"
+
+[theme]
+name = "nord"
+paint_background = true
+
+[theme.colors]
+accent = "#ff9e64"
+"##;
+
+    #[test]
+    fn every_known_key_parses_without_warnings() {
+        let config = parse_config(EVERY_KNOWN_KEY).unwrap();
+        assert_eq!(config.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn unknown_widget_key_is_a_warning_and_the_widget_still_loads() {
+        let config =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ninterval_second = 300\n")
+                .unwrap();
+        assert_eq!(
+            config.warnings,
+            vec!["widget 'a': chave desconhecida 'interval_second' (ignorada)".to_string()]
+        );
+        assert_eq!(config.widgets[0].interval_seconds, MINIMUM_INTERVAL_SECONDS);
+    }
+
+    #[test]
+    fn unknown_root_section_is_a_warning() {
+        let config = parse_config("[themee]\nname = \"nord\"\n").unwrap();
+        assert_eq!(
+            config.warnings,
+            vec!["chave desconhecida 'themee' no mosaic.toml (ignorada)".to_string()]
+        );
+    }
+
+    #[test]
+    fn unknown_keys_in_tabs_and_sections_are_warnings_in_a_fixed_order() {
+        let config = parse_config(
+            "[theme]\nnome = \"nord\"\n[llm]\nmodelo = \"m\"\n[pomodoro]\nbel = true\n[[tabs]]\nname = \"A\"\nnome = \"B\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.warnings,
+            vec![
+                "[[tabs]]: chave desconhecida 'nome' (ignorada)".to_string(),
+                "[pomodoro]: chave desconhecida 'bel' (ignorada)".to_string(),
+                "[llm]: chave desconhecida 'modelo' (ignorada)".to_string(),
+                "[theme]: chave desconhecida 'nome' (ignorada)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_widget_reports_its_own_unknown_key() {
+        let config = parse_config(
+            "[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntabb = \"T\"\n[[widgets]]\nid = \"b\"\ncommand = \"x\"\ntabb = \"T\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.warnings,
+            vec![
+                "widget 'a': chave desconhecida 'tabb' (ignorada)".to_string(),
+                "widget 'b': chave desconhecida 'tabb' (ignorada)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_key_warnings_come_after_the_existing_warnings() {
+        let config =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = true\ntabb = 1\n")
+                .unwrap();
+        assert_eq!(
+            config.warnings,
+            vec![
+                "widget 'a': 'tab = true' foi aposentado e é ignorado".to_string(),
+                "widget 'a': chave desconhecida 'tabb' (ignorada)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_very_long_unknown_key_is_shortened_in_the_warning() {
+        let long_key = "k".repeat(5000);
+        let config = parse_config(&format!("{long_key} = 1\n")).unwrap();
+        let shown = format!("{}…", "k".repeat(40));
+        assert_eq!(
+            config.warnings,
+            vec![format!(
+                "chave desconhecida '{shown}' no mosaic.toml (ignorada)"
+            )]
+        );
+    }
+
+    #[test]
+    fn control_characters_in_an_unknown_key_are_replaced() {
+        let config = parse_config("\"\\u001b[31mx\" = 1\n").unwrap();
+        assert_eq!(
+            config.warnings,
+            vec!["chave desconhecida '?[31mx' no mosaic.toml (ignorada)".to_string()]
+        );
     }
 }

@@ -246,6 +246,34 @@ fn check_config_flag_exits_zero_on_valid_and_one_on_invalid() {
 }
 
 #[test]
+fn check_config_warns_about_unknown_keys_and_still_exits_zero() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("typo.toml");
+    fs::write(
+        &path,
+        "[[widgets]]\nid = \"a\"\ncommand = \"echo\"\ninterval_second = 5\n\n[futuro]\nopcao = 1\n",
+    )
+    .unwrap();
+
+    let output = run_mosaic(
+        directory.path(),
+        &["check", "--config", path.to_str().unwrap()],
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let printed = stdout(&output);
+    assert!(
+        printed.contains("aviso: chave desconhecida 'futuro' no mosaic.toml (ignorada)"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("aviso: widget 'a': chave desconhecida 'interval_second' (ignorada)"),
+        "{printed}"
+    );
+    assert!(printed.contains("configuração válida"), "{printed}");
+}
+
+#[test]
 fn check_config_with_two_paths_is_a_usage_error() {
     let directory = tempfile::tempdir().unwrap();
 

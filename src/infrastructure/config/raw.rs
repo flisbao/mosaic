@@ -85,3 +85,46 @@ pub(super) struct RawTheme {
     #[serde(default)]
     pub(super) colors: BTreeMap<String, toml::Value>,
 }
+
+pub(super) const ROOT_KEYS: [&str; 5] = ["tabs", "widgets", "pomodoro", "llm", "theme"];
+
+pub(super) const TAB_KEYS: [&str; 1] = ["name"];
+
+pub(super) const WIDGET_KEYS: [&str; 13] = [
+    "id",
+    "command",
+    "args",
+    "env",
+    "inherit_env",
+    "interval_seconds",
+    "timeout_seconds",
+    "span",
+    "tab",
+    "max_items",
+    "llm_sections",
+    "llm_max_items",
+    "llm_max_characters_per_item",
+];
+
+pub(super) const POMODORO_KEYS: [&str; 8] = [
+    "enabled",
+    "focus_minutes",
+    "short_break_minutes",
+    "long_break_minutes",
+    "cycles_before_long_break",
+    "suggestions",
+    "bell",
+    "notify_command",
+];
+
+pub(super) const LLM_KEYS: [&str; 7] = [
+    "enabled",
+    "harness",
+    "model",
+    "max_budget_usd",
+    "timeout_seconds",
+    "confirm_before_send",
+    "priority_prompt",
+];
+
+pub(super) const THEME_KEYS: [&str; 3] = ["name", "paint_background", "colors"];
