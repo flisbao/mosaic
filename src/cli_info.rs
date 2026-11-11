@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use mosaic::infrastructure::app_paths::config_directory;
+use mosaic::infrastructure::default_files::reference_config_text;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -8,10 +9,12 @@ const DOCUMENTATION_URL: &str = "https://github.com/flisbao/mosaic";
 const UNKNOWN_CONFIG_DIRECTORY: &str = "(pasta de configuração do sistema)";
 const VERSION_ARGUMENTS: [&str; 3] = ["--version", "-V", "version"];
 const HELP_ARGUMENTS: [&str; 3] = ["--help", "-h", "help"];
+const DEFAULT_CONFIG_ARGUMENT: &str = "--default-config";
 
 enum Request<'a> {
     Version,
     Help,
+    DefaultConfig,
     Unknown(&'a str),
 }
 
@@ -20,6 +23,8 @@ fn recognize(argument: &str) -> Request<'_> {
         Request::Version
     } else if HELP_ARGUMENTS.contains(&argument) {
         Request::Help
+    } else if argument == DEFAULT_CONFIG_ARGUMENT {
+        Request::DefaultConfig
     } else {
         Request::Unknown(argument)
     }
@@ -34,6 +39,10 @@ pub fn run(arguments: &[String]) -> Option<ExitCode> {
         }
         Request::Help => {
             println!("{}", help_text());
+            ExitCode::SUCCESS
+        }
+        Request::DefaultConfig => {
+            print!("{}", reference_config_text());
             ExitCode::SUCCESS
         }
         Request::Unknown(argument) => {
@@ -58,6 +67,7 @@ Uso:
   mosaic                            abre o painel
   mosaic --help | -h | help         mostra esta ajuda
   mosaic --version | -V | version   mostra a versão instalada
+  mosaic --default-config           imprime o mosaic.toml de referência, com todas as opções comentadas
   mosaic plugins list               lista os plugins de serviço (Jira, GitHub, GitLab, Azure, agenda)
   mosaic plugins install [NOME...]  copia plugins para a pasta de configuração e liga a skill do Claude Code
   mosaic plugins setup NOME         entrevista no terminal que monta o widget e grava no mosaic.toml
@@ -111,6 +121,7 @@ mod tests {
             );
         }
         assert!(help.contains("Primeiros passos"));
+        assert!(help.contains("mosaic --default-config"));
     }
 
     #[test]

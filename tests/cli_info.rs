@@ -47,6 +47,7 @@ fn every_help_spelling_explains_what_to_do_and_never_opens_the_panel() {
             "mosaic check",
             "mosaic.toml",
             "--version",
+            "--default-config",
         ] {
             assert!(
                 stdout.contains(expected),
@@ -68,4 +69,25 @@ fn an_unknown_argument_is_a_usage_error_instead_of_opening_the_panel() {
         assert!(stderr.contains("mosaic --help"), "{stderr}");
         assert!(output.stdout.is_empty());
     }
+}
+
+#[test]
+fn default_config_flag_prints_the_reference_and_creates_nothing() {
+    let output = run_mosaic(&["--default-config"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let stdout = text(&output.stdout);
+    for expected in [
+        "[[widgets]]",
+        "[pomodoro]",
+        "[llm]",
+        "# [theme]",
+        "# --- Jira",
+    ] {
+        assert!(stdout.contains(expected), "falta {expected}");
+    }
+    let config = mosaic::infrastructure::config::parse_config(&stdout).unwrap();
+    assert_eq!(config.warnings, Vec::<String>::new());
+    assert!(!stdout.contains('\x1b'));
+    assert!(!std::path::Path::new("/nonexistent-mosaic-test").exists());
 }

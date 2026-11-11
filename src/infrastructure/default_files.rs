@@ -10,7 +10,31 @@ use crate::infrastructure::config::{config_file_path, ConfigError};
 
 const PLUGINS_DIRECTORY_NAME: &str = "plugins";
 
-const DEFAULT_CONFIG: &str = r##"[[widgets]]
+const DEFAULT_CONFIG: &str = r##"# Mosaic: cada bloco [[widgets]] abaixo é um widget do painel.
+# Depois de editar este arquivo, aperte R no painel para recarregar.
+#
+#   mosaic plugins install jira     copia um plugin de serviço (veja `mosaic plugins list`)
+#   mosaic plugins setup jira       faz as perguntas e grava o widget aqui
+#   mosaic check --config           confere este arquivo
+#   mosaic --default-config         mostra todas as opções, comentadas
+
+[[widgets]]
+id = "example-python"
+command = "python3"
+args = ["plugins/example.py"]
+
+[[widgets]]
+id = "kanban"
+command = "python3"
+args = ["plugins/kanban.py"]
+interval_seconds = 30
+llm_sections = ["inbox", "in progress", "acompanhar_jira"]
+
+[widgets.env]
+KANBAN_DIR = "~/kanban"
+"##;
+
+const REFERENCE_CONFIG: &str = r##"[[widgets]]
 id = "kanban"
 command = "python3"
 args = ["plugins/kanban.py"]
@@ -191,6 +215,10 @@ pub fn default_config_text() -> &'static str {
     DEFAULT_CONFIG
 }
 
+pub fn reference_config_text() -> &'static str {
+    REFERENCE_CONFIG
+}
+
 pub fn default_priority_prompt() -> &'static str {
     PRIORITY_PROMPT
 }
@@ -266,8 +294,8 @@ mod tests {
     use crate::infrastructure::config::{config_file_path, parse_config};
 
     #[test]
-    fn default_config_parses_without_duplicates() {
-        let config = parse_config(default_config_text()).unwrap();
+    fn reference_config_parses_without_duplicates() {
+        let config = parse_config(reference_config_text()).unwrap();
         let ids: Vec<&str> = config.widgets.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, vec!["kanban", "example-python", "example-node"]);
         assert!(config.warnings.is_empty());
@@ -289,7 +317,7 @@ mod tests {
 
     #[test]
     fn default_kanban_uses_the_minimum_interval() {
-        let config = crate::infrastructure::config::parse_config(default_config_text()).unwrap();
+        let config = crate::infrastructure::config::parse_config(reference_config_text()).unwrap();
         let kanban = &config.widgets[0];
         assert_eq!(kanban.id.as_str(), "kanban");
         assert_eq!(kanban.interval_seconds, 30);
@@ -297,8 +325,8 @@ mod tests {
     }
 
     #[test]
-    fn default_config_enables_kanban_for_the_llm() {
-        let config = parse_config(default_config_text()).unwrap();
+    fn reference_config_enables_kanban_for_the_llm() {
+        let config = parse_config(reference_config_text()).unwrap();
         assert_eq!(
             config.widgets[0].llm_selection.sections,
             vec!["inbox", "in progress", "acompanhar_jira"]
@@ -307,8 +335,8 @@ mod tests {
     }
 
     #[test]
-    fn default_config_parses_with_pomodoro_and_llm_sections() {
-        let config = parse_config(default_config_text()).unwrap();
+    fn reference_config_parses_with_pomodoro_and_llm_sections() {
+        let config = parse_config(reference_config_text()).unwrap();
         assert!(config.pomodoro.enabled);
         assert_eq!(config.pomodoro.notify_command, None);
         assert!(config.llm.confirm_before_send);
@@ -349,16 +377,16 @@ mod tests {
     }
 
     #[test]
-    fn default_config_tells_how_to_install_the_service_plugins() {
-        let text = default_config_text();
+    fn reference_config_tells_how_to_install_the_service_plugins() {
+        let text = reference_config_text();
         assert!(text.contains("mosaic plugins install"));
         let first_service_block = text.find("# --- Jira").unwrap();
         assert!(text.find("mosaic plugins install").unwrap() < first_service_block);
     }
 
     #[test]
-    fn default_config_still_parses_and_has_no_active_jira_widget() {
-        let config = parse_config(default_config_text()).unwrap();
+    fn reference_config_still_parses_and_has_no_active_jira_widget() {
+        let config = parse_config(reference_config_text()).unwrap();
         assert!(config
             .widgets
             .iter()
@@ -366,8 +394,8 @@ mod tests {
     }
 
     #[test]
-    fn default_config_documents_jira_examples() {
-        let text = default_config_text();
+    fn reference_config_documents_jira_examples() {
+        let text = reference_config_text();
         assert!(text.contains("JIRA_SITE"));
         assert!(text.contains("--jql"));
         assert!(text.contains("currentUser()"));
@@ -386,8 +414,8 @@ mod tests {
     }
 
     #[test]
-    fn default_config_documents_the_gallery_examples() {
-        let text = default_config_text();
+    fn reference_config_documents_the_gallery_examples() {
+        let text = reference_config_text();
         assert!(text.contains("# args = [\"plugins/gallery.py\"]"));
         assert!(text.contains("# args = [\"plugins/gallery.js\"]"));
         let config = parse_config(text).unwrap();
@@ -398,15 +426,15 @@ mod tests {
     }
 
     #[test]
-    fn default_config_has_commented_calendar_widget() {
-        let text = default_config_text();
+    fn reference_config_has_commented_calendar_widget() {
+        let text = reference_config_text();
         assert!(text.contains("# args = [\"plugins/calendar/calendar_widget.py\"]"));
         assert!(text.contains("# CALENDAR_SOURCE = \"ics\""));
     }
 
     #[test]
-    fn default_config_has_commented_pull_request_widgets() {
-        let text = default_config_text();
+    fn reference_config_has_commented_pull_request_widgets() {
+        let text = reference_config_text();
         assert!(text.contains("# args = [\"plugins/github/github_prs.py\"]"));
         assert!(text.contains("# args = [\"plugins/azure-devops/azure_devops.py\"]"));
         assert!(text.contains("# args = [\"plugins/gitlab/gitlab_mrs.py\"]"));
@@ -416,8 +444,8 @@ mod tests {
     }
 
     #[test]
-    fn default_config_has_commented_azure_pipelines_widget() {
-        let text = default_config_text();
+    fn reference_config_has_commented_azure_pipelines_widget() {
+        let text = reference_config_text();
         assert!(text.contains("# args = [\"plugins/azure-pipelines/azure_pipelines.py\"]"));
         assert!(text.contains("# AZDO_PROJECTS = \"meu-projeto\""));
         let config = parse_config(text).unwrap();
@@ -428,14 +456,61 @@ mod tests {
     }
 
     #[test]
-    fn default_config_documents_the_theme_section() {
-        let text = default_config_text();
+    fn reference_config_documents_the_theme_section() {
+        let text = reference_config_text();
         assert!(text.contains("# [theme]"));
         assert!(text.contains("# name = \"tokyo-night\""));
         assert!(text.contains("mosaic themes"));
         let config = parse_config(text).unwrap();
         assert_eq!(config.theme, crate::domain::theme::Theme::Ansi);
         assert!(config.warnings.is_empty());
+    }
+
+    const MAXIMUM_DEFAULT_CONFIG_LINES: usize = 30;
+
+    #[test]
+    fn default_config_is_short_and_needs_only_python() {
+        let text = default_config_text();
+        assert!(
+            text.lines().count() <= MAXIMUM_DEFAULT_CONFIG_LINES,
+            "{} linhas",
+            text.lines().count()
+        );
+        let config = parse_config(text).unwrap();
+        let ids: Vec<&str> = config.widgets.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, vec!["example-python", "kanban"]);
+        assert!(config.widgets.iter().all(|w| w.command == "python3"));
+        assert_eq!(config.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn default_config_points_to_the_next_steps() {
+        let text = default_config_text();
+        for expected in [
+            "mosaic plugins install",
+            "mosaic plugins setup",
+            "mosaic check --config",
+            "mosaic --default-config",
+        ] {
+            assert!(text.contains(expected), "falta {expected}");
+        }
+    }
+
+    #[test]
+    fn default_config_keeps_the_kanban_sections_for_the_llm() {
+        let config = parse_config(default_config_text()).unwrap();
+        assert_eq!(
+            config.widgets[1].llm_selection.sections,
+            vec!["inbox", "in progress", "acompanhar_jira"]
+        );
+    }
+
+    #[test]
+    fn install_writes_the_short_default_config() {
+        let directory = tempfile::tempdir().unwrap();
+        install_defaults_if_missing(directory.path()).unwrap();
+        let installed = std::fs::read_to_string(config_file_path(directory.path())).unwrap();
+        assert_eq!(installed, default_config_text());
     }
 
     #[test]

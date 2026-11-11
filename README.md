@@ -58,7 +58,7 @@ Then just run:
 mosaic
 ```
 
-On the first run Mosaic creates `~/.config/mosaic/` with a `mosaic.toml`, a few example widgets and **ready-to-uncomment blocks** for Jira, Google Calendar, GitHub, GitLab and Azure DevOps. Edit, press `R`, done.
+On the first run Mosaic creates `~/.config/mosaic/` with a short `mosaic.toml`: two example widgets that only need `python3`. Add service widgets with `mosaic plugins setup <name>`, or run `mosaic --default-config` to see every option, commented. A key Mosaic does not know is ignored with a warning, in the panel and in `mosaic check --config`. Edit, press `R`, done.
 
 > **Just want to look around?** `scripts/demo.sh` (from the repo) starts Mosaic with fake data and an isolated config. It never touches `~/.config/mosaic`.
 
