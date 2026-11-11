@@ -183,6 +183,18 @@ class PackagingTests(unittest.TestCase):
         self.assertIn('- "v*"', text)
         self.assertNotIn("plugins-v", text)
 
+    def test_ci_workflow_runs_every_check_on_push_and_pull_request(self):
+        text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        for expected in (
+            "pull_request:",
+            "branches: [main]",
+            "cargo fmt --check",
+            "cargo clippy --all-targets -- -D warnings",
+            "cargo test",
+            "python3 -m unittest discover -s plugins/tests",
+        ):
+            self.assertIn(expected, text)
+
     def fake_repository(self):
         repository = Path(self.temporary.name) / "repo"
         (repository / "plugins" / "alpha").mkdir(parents=True)
