@@ -1457,6 +1457,19 @@ accent = "#ff9e64"
     }
 
     #[test]
+    fn unknown_keys_of_one_table_are_reported_in_alphabetical_order() {
+        let config =
+            parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\nzeta = 1\nalfa = 2\n").unwrap();
+        assert_eq!(
+            config.warnings,
+            vec![
+                "widget 'a': chave desconhecida 'alfa' (ignorada)".to_string(),
+                "widget 'a': chave desconhecida 'zeta' (ignorada)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn unknown_key_warnings_come_after_the_existing_warnings() {
         let config =
             parse_config("[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = true\ntabb = 1\n")

@@ -36,7 +36,7 @@ O `login` serve aos dois widgets quando o tenant e o client id são os mesmos.
 
 ## Configurar
 
-Adicione ao `mosaic.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
+Adicione ao `mosaic.toml` (o bloco também aparece em `mosaic --default-config`):
 
 ```toml
 [[widgets]]

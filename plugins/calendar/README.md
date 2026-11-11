@@ -22,7 +22,7 @@ O plugin não vem no binário. Instale-o com:
 mosaic plugins install calendar
 ```
 
-Isso copia `calendar_widget.py` para `~/.config/mosaic/plugins/calendar/`. Depois rode `mosaic plugins setup calendar` ou descomente o bloco "Agenda Google" no `mosaic.toml`. Para atualizar uma cópia já instalada, use `mosaic plugins install calendar --force` (sobrescreve edições locais).
+Isso copia `calendar_widget.py` para `~/.config/mosaic/plugins/calendar/`. Depois rode `mosaic plugins setup calendar` ou copie o bloco "Agenda Google" de `mosaic --default-config` para o `mosaic.toml`. Para atualizar uma cópia já instalada, use `mosaic plugins install calendar --force` (sobrescreve edições locais).
 
 ## Variáveis `CALENDAR_*`
 

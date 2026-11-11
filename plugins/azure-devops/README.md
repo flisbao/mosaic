@@ -73,7 +73,7 @@ Só funciona numa VM (ou serviço) do Azure com identidade gerenciada. Adicione 
 
 ## Configurar
 
-Adicione ao `mosaic.toml` (o bloco também vem comentado no arquivo instalado pelo Mosaic):
+Adicione ao `mosaic.toml` (o bloco também aparece em `mosaic --default-config`):
 
 ```toml
 [[widgets]]
