@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::domain::plugin_package::{PackageMetadata, PluginVersion};
 use crate::domain::plugin_setup::{
     AnswerKind, Choice, Condition, InheritRule, Note, Preset, PresetInput, Question, Requirement,
     SecretQuestion, SetupManifest, Step, Target,
@@ -30,6 +31,8 @@ pub enum ManifestError {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {
+    version: Option<String>,
+    min_mosaic_version: Option<String>,
     plugin: String,
     script: String,
     default_id: String,
@@ -138,8 +141,32 @@ pub fn read_manifest(path: &Path) -> Result<SetupManifest, ManifestError> {
     })
 }
 
+#[derive(Debug)]
+pub struct PackageManifest {
+    pub setup: SetupManifest,
+    pub metadata: PackageMetadata,
+}
+
 pub fn parse_manifest(text: &str) -> Result<SetupManifest, String> {
+    parse_document(text).map(|(setup, _)| setup)
+}
+
+pub fn parse_package_manifest(text: &str) -> Result<PackageManifest, String> {
+    let (setup, metadata) = parse_document(text)?;
+    let metadata = metadata.ok_or("plugin remoto precisa de version e min_mosaic_version")?;
+    Ok(PackageManifest { setup, metadata })
+}
+
+fn parse_document(text: &str) -> Result<(SetupManifest, Option<PackageMetadata>), String> {
     let raw: RawManifest = toml::from_str(text).map_err(|error| error.message().to_string())?;
+    let metadata = match (&raw.version, &raw.min_mosaic_version) {
+        (None, None) => None,
+        (Some(version), Some(minimum)) => Some(PackageMetadata {
+            version: PluginVersion::parse(version).map_err(|error| error.to_string())?,
+            min_mosaic_version: PluginVersion::parse(minimum).map_err(|error| error.to_string())?,
+        }),
+        _ => return Err("version e min_mosaic_version precisam aparecer juntos".to_string()),
+    };
     let steps = raw
         .steps
         .into_iter()
@@ -148,25 +175,28 @@ pub fn parse_manifest(text: &str) -> Result<SetupManifest, String> {
     ensure_conditions_point_backwards(&steps)?;
     let presets: Vec<Preset> = raw.presets.into_iter().map(convert_preset).collect();
     ensure_preset_flags_exist(&presets, &steps)?;
-    Ok(SetupManifest {
-        plugin: raw.plugin,
-        script: raw.script,
-        default_id: raw.default_id,
-        interval_seconds: raw.interval_seconds,
-        timeout_seconds: raw.timeout_seconds,
-        steps,
-        inherit_rules: raw
-            .inherit
-            .into_iter()
-            .map(convert_inherit)
-            .collect::<Result<Vec<_>, _>>()?,
-        presets,
-        notes: raw
-            .notes
-            .into_iter()
-            .map(convert_note)
-            .collect::<Result<Vec<_>, _>>()?,
-    })
+    Ok((
+        SetupManifest {
+            plugin: raw.plugin,
+            script: raw.script,
+            default_id: raw.default_id,
+            interval_seconds: raw.interval_seconds,
+            timeout_seconds: raw.timeout_seconds,
+            steps,
+            inherit_rules: raw
+                .inherit
+                .into_iter()
+                .map(convert_inherit)
+                .collect::<Result<Vec<_>, _>>()?,
+            presets,
+            notes: raw
+                .notes
+                .into_iter()
+                .map(convert_note)
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        metadata,
+    ))
 }
 
 fn convert_condition(raw: RawCondition) -> Result<Condition, String> {
@@ -432,6 +462,49 @@ description = "poucos dias"
 id = "demo-curto"
 arguments = { "--days" = "3" }
 "#;
+
+    #[test]
+    fn package_versions_are_required_only_for_remote_installation() {
+        assert!(parse_manifest(MINIMAL).is_ok());
+        assert!(parse_package_manifest(MINIMAL).is_err());
+        let text = format!("version = \"0.0.4\"\nmin_mosaic_version = \"0.0.10\"\n{MINIMAL}");
+        let package = parse_package_manifest(&text).unwrap();
+        assert_eq!(package.metadata.version.to_string(), "0.0.4");
+        assert_eq!(package.metadata.min_mosaic_version.to_string(), "0.0.10");
+        assert_eq!(package.setup, parse_manifest(&text).unwrap());
+    }
+
+    #[test]
+    fn one_version_field_is_invalid() {
+        for field in ["version", "min_mosaic_version"] {
+            let text = format!("{field} = \"0.0.4\"\n{MINIMAL}");
+            assert!(parse_manifest(&text).is_err());
+            assert!(parse_package_manifest(&text).is_err());
+        }
+    }
+
+    #[test]
+    fn malformed_versions_are_invalid_in_both_readers() {
+        for bad in ["1.2", "01.2.3", "0.0.4-alpha"] {
+            let text = format!("version = \"{bad}\"\nmin_mosaic_version = \"0.0.10\"\n{MINIMAL}");
+            assert!(parse_manifest(&text).is_err());
+            assert!(parse_package_manifest(&text).is_err());
+        }
+    }
+
+    #[test]
+    fn package_reader_preserves_setup_validation() {
+        let text = format!("version = \"0.0.4\"\nmin_mosaic_version = \"0.0.10\"\n{MINIMAL}");
+        assert!(
+            parse_package_manifest(&text.replace("kind = \"variable\"", "kind = \"unknown\""))
+                .is_err()
+        );
+        assert!(parse_package_manifest(
+            &text.replace("variable = \"DEMO_METHOD\"", "variable = \"UNKNOWN\"")
+        )
+        .is_err());
+        assert!(parse_package_manifest(&format!("unknown = 1\n{text}")).is_err());
+    }
 
     #[test]
     fn a_complete_manifest_is_converted_to_the_domain() {
