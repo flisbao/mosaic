@@ -7,8 +7,6 @@ use thiserror::Error;
 const RUNTIME_EXTENSIONS: [&str; 2] = ["py", "js"];
 const SHIPPED_DOCUMENT_NAMES: [&str; 3] = ["README.md", "SKILL.md", "setup.toml"];
 const EXCLUDED_FOLDER_NAMES: [&str; 1] = ["tests"];
-const TEMPORARY_FOLDER_MARKER: &str = ".tmp-";
-const BACKUP_FOLDER_MARKER: &str = ".old-";
 
 #[derive(Debug, Error, PartialEq)]
 pub enum PluginsError {
@@ -18,6 +16,12 @@ pub enum PluginsError {
     UnknownPlugin(String),
     #[error("nome de plugin inválido: {0}")]
     InvalidName(String),
+    #[error("não foi possível restaurar {destination}: {reason}; backup preservado em {backup}")]
+    Restore {
+        destination: String,
+        backup: String,
+        reason: String,
+    },
     #[error("{path}: {reason}")]
     Io { path: String, reason: String },
 }
@@ -96,7 +100,7 @@ fn select_plugins(source: &Path, names: &[String]) -> Result<Vec<String>, Plugin
     Ok(selected)
 }
 
-fn is_plain_name(name: &str) -> bool {
+pub(super) fn is_plain_name(name: &str) -> bool {
     !name.is_empty()
         && name.chars().all(|character| {
             character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
@@ -120,6 +124,15 @@ fn has_runtime_extension(path: &Path) -> bool {
         .is_some_and(|extension| RUNTIME_EXTENSIONS.contains(&extension))
 }
 
+pub(super) fn is_copyable_file(path: &Path) -> bool {
+    has_runtime_extension(path)
+        || path.file_name().is_some_and(|name| {
+            SHIPPED_DOCUMENT_NAMES
+                .iter()
+                .any(|document| name == *document)
+        })
+}
+
 fn copyable_files(folder: &Path) -> Result<Vec<PathBuf>, PluginsError> {
     let mut files = Vec::new();
     for entry in fs::read_dir(folder).map_err(PluginsError::io(folder))? {
@@ -128,15 +141,25 @@ fn copyable_files(folder: &Path) -> Result<Vec<PathBuf>, PluginsError> {
         let is_regular_file = fs::symlink_metadata(&path)
             .map_err(PluginsError::io(&path))?
             .is_file();
-        let is_documentation = SHIPPED_DOCUMENT_NAMES
-            .iter()
-            .any(|name| entry.file_name() == *name);
-        if is_regular_file && (has_runtime_extension(&path) || is_documentation) {
+        if is_regular_file && is_copyable_file(&path) {
             files.push(path);
         }
     }
     files.sort();
     Ok(files)
+}
+
+pub fn install_plugin_directory(
+    source: &Path,
+    target: &Path,
+    name: &str,
+    overwrite: Overwrite,
+) -> Result<PluginOutcome, PluginsError> {
+    if !is_plain_name(name) {
+        return Err(PluginsError::InvalidName(name.to_string()));
+    }
+    fs::create_dir_all(target).map_err(PluginsError::io(target))?;
+    install_one(source, target, name.to_string(), overwrite)
 }
 
 fn install_one(
@@ -146,35 +169,35 @@ fn install_one(
     overwrite: Overwrite,
 ) -> Result<PluginOutcome, PluginsError> {
     let destination = target.join(&name);
-    let already_exists = fs::symlink_metadata(&destination).is_ok();
+    let already_exists = match fs::symlink_metadata(&destination) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(PluginsError::io(&destination)(error)),
+    };
     if already_exists && overwrite == Overwrite::Keep {
         return Ok(PluginOutcome::AlreadyInstalled(name));
     }
-    let staging = target.join(format!(
-        ".{name}{TEMPORARY_FOLDER_MARKER}{}",
-        std::process::id()
-    ));
-    copy_into_staging(plugin_folder, &staging)?;
-    let backup = target.join(format!(
-        ".{name}{BACKUP_FOLDER_MARKER}{}",
-        std::process::id()
-    ));
-    if already_exists {
-        discard(&backup);
-        fs::rename(&destination, &backup)
-            .map_err(PluginsError::io(&destination))
-            .inspect_err(|_| discard(&staging))?;
+    let staging = tempfile::Builder::new()
+        .prefix(&format!(".{name}.tmp-"))
+        .tempdir_in(target)
+        .map_err(PluginsError::io(target))?;
+    copy_files(plugin_folder, staging.path())?;
+    let backup = tempfile::Builder::new()
+        .prefix(&format!(".{name}.old-"))
+        .tempdir_in(target)
+        .map_err(PluginsError::io(target))?;
+    let previous = backup.path().join("previous");
+    let result = swap_directories(
+        staging.path(),
+        &destination,
+        &previous,
+        already_exists,
+        |from, to| fs::rename(from, to),
+    );
+    if matches!(&result, Err(PluginsError::Restore { .. })) {
+        let _ = backup.keep();
     }
-    if let Err(error) = fs::rename(&staging, &destination) {
-        discard(&staging);
-        if already_exists {
-            let _ = fs::rename(&backup, &destination);
-        }
-        return Err(PluginsError::io(&destination)(error));
-    }
-    if already_exists {
-        discard(&backup);
-    }
+    result?;
     Ok(if already_exists {
         PluginOutcome::Replaced(name)
     } else {
@@ -182,10 +205,29 @@ fn install_one(
     })
 }
 
-fn copy_into_staging(plugin_folder: &Path, staging: &Path) -> Result<(), PluginsError> {
-    discard(staging);
-    fs::create_dir_all(staging).map_err(PluginsError::io(staging))?;
-    copy_files(plugin_folder, staging).inspect_err(|_| discard(staging))
+fn swap_directories(
+    staging: &Path,
+    destination: &Path,
+    backup: &Path,
+    already_exists: bool,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), PluginsError> {
+    if already_exists {
+        rename(destination, backup).map_err(PluginsError::io(destination))?;
+    }
+    if let Err(error) = rename(staging, destination) {
+        if already_exists {
+            if let Err(restore_error) = rename(backup, destination) {
+                return Err(PluginsError::Restore {
+                    destination: destination.display().to_string(),
+                    backup: backup.display().to_string(),
+                    reason: format!("{error}; restauração: {restore_error}"),
+                });
+            }
+        }
+        return Err(PluginsError::io(destination)(error));
+    }
+    Ok(())
 }
 
 fn copy_files(plugin_folder: &Path, staging: &Path) -> Result<(), PluginsError> {
@@ -194,10 +236,6 @@ fn copy_files(plugin_folder: &Path, staging: &Path) -> Result<(), PluginsError> 
         fs::copy(&file, destination).map_err(PluginsError::io(&file))?;
     }
     Ok(())
-}
-
-fn discard(folder: &Path) {
-    let _ = fs::remove_dir_all(folder);
 }
 
 #[cfg(all(test, unix))]
@@ -248,6 +286,58 @@ mod tests {
             outcomes.push(outcome)
         });
         (outcomes, result)
+    }
+
+    #[test]
+    fn rollback_failure_preserves_backup_and_reports_its_path() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("demo");
+        let staging = root.path().join("staging");
+        let backup = root.path().join("backup");
+        write(&destination.join("demo.py"), "old");
+        write(&staging.join("demo.py"), "new");
+        let mut calls = 0;
+        let result = swap_directories(&staging, &destination, &backup, true, |from, to| {
+            calls += 1;
+            if calls > 1 {
+                Err(io::Error::other("injected"))
+            } else {
+                fs::rename(from, to)
+            }
+        });
+        assert!(matches!(result, Err(PluginsError::Restore { .. })));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains(backup.to_str().unwrap()));
+        assert_eq!(fs::read_to_string(backup.join("demo.py")).unwrap(), "old");
+    }
+
+    #[test]
+    fn a_failed_swap_restores_the_old_plugin() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("demo");
+        let staging = root.path().join("staging");
+        let backup = root.path().join("backup");
+        write(&destination.join("demo.py"), "old");
+        write(&staging.join("demo.py"), "new");
+        let mut calls = 0;
+        assert!(
+            swap_directories(&staging, &destination, &backup, true, |from, to| {
+                calls += 1;
+                if calls == 2 {
+                    Err(io::Error::other("injected"))
+                } else {
+                    fs::rename(from, to)
+                }
+            })
+            .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("demo.py")).unwrap(),
+            "old"
+        );
+        assert!(!backup.exists());
     }
 
     #[test]

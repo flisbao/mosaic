@@ -119,3 +119,19 @@ pub trait Prompter {
     fn ask(&mut self, question: &str) -> Result<String, PromptError>;
     fn tell(&mut self, message: &str);
 }
+
+#[derive(Debug, Error)]
+pub enum PluginFetchError {
+    #[error("{0}")]
+    Unavailable(String),
+    #[error("{0}")]
+    Failed(String),
+}
+
+pub trait PluginFetcher {
+    fn fetch(
+        &self,
+        source: &crate::domain::plugin_package::GitHubSource,
+        destination: &std::path::Path,
+    ) -> Result<(), PluginFetchError>;
+}
