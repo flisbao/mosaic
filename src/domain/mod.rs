@@ -2,6 +2,7 @@ pub mod action;
 pub mod blocks;
 pub mod color_depth;
 pub mod error;
+pub mod plugin_package;
 pub mod plugin_setup;
 pub mod pomodoro;
 pub mod snapshot_report;
