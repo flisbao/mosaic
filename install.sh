@@ -1,11 +1,11 @@
 #!/bin/sh
-# Instala o Mosaic em ~/.local/bin (sem sudo).
+# Installs Mosaic into ~/.local/bin (no sudo).
 #   curl -fsSL https://raw.githubusercontent.com/flisbao/mosaic/main/install.sh | sh
 #
-# Variáveis:
-#   MOSAIC_VERSION        versão a instalar, por exemplo v0.0.11 (padrão: a mais recente)
-#   MOSAIC_INSTALL_DIR    pasta de destino (padrão: $HOME/.local/bin)
-#   MOSAIC_DOWNLOAD_BASE  URL base das releases (padrão: https://github.com/flisbao/mosaic/releases)
+# Variables:
+#   MOSAIC_VERSION        version to install, for example v0.0.11 (default: the latest)
+#   MOSAIC_INSTALL_DIR    destination folder (default: $HOME/.local/bin)
+#   MOSAIC_DOWNLOAD_BASE  base URL of the releases (default: https://github.com/flisbao/mosaic/releases)
 set -eu
 
 DEFAULT_DOWNLOAD_BASE="https://github.com/flisbao/mosaic/releases"
@@ -33,17 +33,17 @@ detect_target() {
       case "$machine" in
         x86_64 | amd64) target="x86_64-unknown-linux-musl" ;;
         aarch64 | arm64) target="aarch64-unknown-linux-musl" ;;
-        *) fail "arquitetura não suportada: $machine (Linux x86_64 e aarch64)" ;;
+        *) fail "unsupported architecture: $machine (Linux x86_64 and aarch64)" ;;
       esac
       ;;
     Darwin)
       case "$machine" in
         arm64 | aarch64) target="aarch64-apple-darwin" ;;
         x86_64) target="x86_64-apple-darwin" ;;
-        *) fail "arquitetura não suportada: $machine (macOS arm64 e x86_64)" ;;
+        *) fail "unsupported architecture: $machine (macOS arm64 and x86_64)" ;;
       esac
       ;;
-    *) fail "sistema não suportado: $system (Linux e macOS)" ;;
+    *) fail "unsupported system: $system (Linux and macOS)" ;;
   esac
 }
 
@@ -53,7 +53,7 @@ choose_downloader() {
   elif has_command wget; then
     downloader=wget
   else
-    fail "precisa de curl ou wget para baixar o Mosaic"
+    fail "curl or wget is required to download Mosaic"
   fi
 }
 
@@ -69,9 +69,9 @@ download_file() {
   url=$1
   destination=$2
   if [ "$downloader" = curl ]; then
-    curl_download -fsSL -o "$destination" "$url" || fail "não consegui baixar $url"
+    curl_download -fsSL -o "$destination" "$url" || fail "could not download $url"
   else
-    wget -q -O "$destination" "$url" || fail "não consegui baixar $url"
+    wget -q -O "$destination" "$url" || fail "could not download $url"
   fi
 }
 
@@ -79,7 +79,7 @@ latest_release_location() {
   url="$download_base/latest"
   if [ "$downloader" = curl ]; then
     curl_download -fsSL -o /dev/null -w '%{url_effective}' "$url" ||
-      fail "não consegui descobrir a versão mais recente em $url"
+      fail "could not find the latest version at $url"
   else
     wget -q -S -O /dev/null --max-redirect=0 "$url" 2>&1 |
       sed -n 's/^ *[Ll]ocation: *//p' | tr -d '\r' | tail -n 1 || true
@@ -98,7 +98,7 @@ resolve_version() {
     *) version="v$requested" ;;
   esac
   if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-    fail "versão inválida: $requested (use algo como v0.0.11)"
+    fail "invalid version: $requested (use something like v0.0.11)"
   fi
 }
 
@@ -108,7 +108,7 @@ sha256_of() {
   elif has_command shasum; then
     shasum -a 256 "$1" | cut -d ' ' -f 1
   else
-    fail "precisa de sha256sum ou shasum para conferir o download"
+    fail "sha256sum or shasum is required to verify the download"
   fi
 }
 
@@ -118,7 +118,7 @@ verify_checksum() {
   expected=$(cut -d ' ' -f 1 "$checksum_file" | tr 'A-F' 'a-f')
   actual=$(sha256_of "$archive" | tr 'A-F' 'a-f')
   if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
-    fail "checksum SHA-256 diferente do publicado; nada foi instalado"
+    fail "SHA-256 checksum does not match the published one; nothing was installed"
   fi
 }
 
@@ -133,12 +133,12 @@ cleanup() {
 
 install_executable() {
   source_executable=$1
-  mkdir -p "$install_directory" || fail "não consegui criar $install_directory"
+  mkdir -p "$install_directory" || fail "could not create $install_directory"
   staged_executable="$install_directory/.$EXECUTABLE_NAME.new.$$"
   install -m "$EXECUTABLE_MODE" "$source_executable" "$staged_executable" ||
-    fail "não consegui gravar em $install_directory"
+    fail "could not write to $install_directory"
   mv -f "$staged_executable" "$install_directory/$EXECUTABLE_NAME" ||
-    fail "não consegui instalar em $install_directory"
+    fail "could not install into $install_directory"
   staged_executable=""
 }
 
@@ -147,7 +147,7 @@ warn_if_outside_path() {
     *":$install_directory:"*) ;;
     *)
       say ""
-      say "$install_directory não está no seu PATH. Acrescente ao seu shell:"
+      say "$install_directory is not in your PATH. Add this to your shell:"
       say "  export PATH=\"$install_directory:\$PATH\""
       ;;
   esac
@@ -159,7 +159,7 @@ main() {
   home_directory=${HOME:-}
   install_directory=${MOSAIC_INSTALL_DIR:-}
   if [ -z "$install_directory" ]; then
-    [ -n "$home_directory" ] || fail "HOME não está definido; informe MOSAIC_INSTALL_DIR"
+    [ -n "$home_directory" ] || fail "HOME is not set; set MOSAIC_INSTALL_DIR"
     install_directory="$home_directory/.local/bin"
   fi
 
@@ -169,9 +169,9 @@ main() {
 
   package="$EXECUTABLE_NAME-$version-$target"
   archive_name="$package.tar.gz"
-  say "Instalando o Mosaic $version ($target) em $install_directory"
+  say "Installing Mosaic $version ($target) into $install_directory"
 
-  work_directory=$(mktemp -d) || fail "não consegui criar uma pasta temporária"
+  work_directory=$(mktemp -d) || fail "could not create a temporary folder"
   trap cleanup EXIT INT TERM HUP
 
   release_url="$download_base/download/$version"
@@ -180,16 +180,16 @@ main() {
   verify_checksum "$work_directory/$archive_name" "$work_directory/$archive_name.sha256"
 
   tar -xzf "$work_directory/$archive_name" -C "$work_directory" ||
-    fail "não consegui extrair $archive_name"
+    fail "could not extract $archive_name"
   extracted="$work_directory/$package/$EXECUTABLE_NAME"
-  [ -f "$extracted" ] || fail "$archive_name não contém $package/$EXECUTABLE_NAME"
+  [ -f "$extracted" ] || fail "$archive_name does not contain $package/$EXECUTABLE_NAME"
   install_executable "$extracted"
 
   installed_version=$("$install_directory/$EXECUTABLE_NAME" --version 2>/dev/null || true)
-  say "Instalado: ${installed_version:-$install_directory/$EXECUTABLE_NAME}"
+  say "Installed: ${installed_version:-$install_directory/$EXECUTABLE_NAME}"
   warn_if_outside_path
   say ""
-  say "Para começar, rode: $EXECUTABLE_NAME --help"
+  say "To get started, run: $EXECUTABLE_NAME --help"
 }
 
 main

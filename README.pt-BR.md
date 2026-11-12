@@ -47,6 +47,23 @@ Se preferir editar à mão, `mosaic --default-config` mostra todas as opções c
 
 O prompt é enviado ao `claude` e ao `opencode` pela entrada padrão, nunca como argumento, para não aparecer em `ps`.
 
+## Idioma
+
+A interface é em inglês por padrão; o português do Brasil (`pt-BR`) está disponível. O Mosaic escolhe o idioma nesta ordem:
+
+1. `language` em `[ui]` no `mosaic.toml`: `"en"` ou `"pt-BR"`.
+2. A variável de ambiente `MOSAIC_LANGUAGE` (mesmos valores).
+3. O locale: a primeira variável não vazia entre `LC_ALL`, `LC_MESSAGES` e `LANG`. Valor que começa com `pt` vale pt-BR; qualquer outro vale inglês.
+
+```toml
+[ui]
+language = "pt-BR"
+```
+
+Um valor inválido em `[ui] language` vira aviso e o Mosaic volta para a detecção acima. Aperte `R` para recarregar o `mosaic.toml` e aplicar um idioma novo. Os plugins oficiais seguem o mesmo idioma: o Mosaic passa `MOSAIC_LANGUAGE` (`en` ou `pt-BR`) a cada provider e ação (veja [`PROTOCOL.pt-BR.md`](PROTOCOL.pt-BR.md)), e um plugin sem a variável responde em inglês. Dados que vêm de um serviço, como o título de uma issue, nunca são traduzidos. O `install.sh` escreve só em inglês, porque roda antes de o Mosaic existir.
+
+<!-- demo: ponha aqui o GIF gravado com `vhs scripts/demo.tape` (passo manual) -->
+
 ## Escrevendo um widget
 
 Um widget responde ao argumento `snapshot` imprimindo um JSON:

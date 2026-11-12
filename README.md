@@ -15,19 +15,19 @@
 ```text
  10:42  Fri 23/10                                              🍅 18:31 focus
   1 PRs   2 Jira   3 Gallery
- ┌ GitHub ───────────────────────┐ ┌ Agenda ───────────────────────┐
+ ┌ GitHub ───────────────────────┐ ┌ Calendar ─────────────────────┐
  │ 3 to review · 2 mine          │ │ 10:30 Code review         now │
- │ 12d acme/api #10 …     [novo] │ │ 12:00 Lunch                   │
- │ 11d acme/api #11 … [push novo]│ │ 14:00 1:1 with the boss       │
+ │ 12d acme/api #10 …      [new] │ │ 12:00 Lunch                   │
+ │ 11d acme/api #11 … [new push] │ │ 14:00 1:1 with the boss       │
  └───────────────────────────────┘ └───────────────────────────────┘
  ┌ GitLab ───────────────────────┐ ┌ Jira ─────────────────────────┐
  │ 1 to review · 4 mine          │ │ PROJ-12 Fix the flaky test    │
- │ 9d  group/web !42 …    [novo] │ │ PROJ-15 Ship the thing        │
+ │ 9d  group/web !42 …     [new] │ │ PROJ-15 Ship the thing        │
  └───────────────────────────────┘ └───────────────────────────────┘
   ←↑↓→ move  Enter open  Tab next tab  1-9 go to tab  A-Z jump  ? help  q quit
 ```
 
-<p align="center"><i>(An artist's impression. Run <code>scripts/demo.sh</code> to see the real thing, with fake data. Heads-up: the interface text is in Portuguese for now.)</i></p>
+<p align="center"><i>(An artist's impression. Run <code>scripts/demo.sh</code> to see the real thing, with fake data.)</i></p>
 
 ## Why
 
@@ -70,12 +70,12 @@ cargo install --path .
 
 ```sh
 mosaic update --check    # says whether there is a newer version
-mosaic update            # updates, asking [s/N] first (--yes skips the question)
+mosaic update            # updates, asking [y/N] first (--yes skips the question)
 ```
 
-`mosaic update` looks at how the running binary was installed. For a binary from `install.sh` or a manual tarball it downloads the tarball for your system, checks the SHA-256, extracts it next to the current executable and swaps it atomically; it never uses `sudo`, so a read-only folder gets an explanation instead. A `.deb` install is left alone: it prints the URL of the new `.deb` and the `sudo apt install ./...` command. Homebrew gets `brew upgrade mosaic` and `cargo install` builds get the cargo command. Nothing is changed unless you answer `s` or `y` (or pass `--yes`).
+`mosaic update` looks at how the running binary was installed. For a binary from `install.sh` or a manual tarball it downloads the tarball for your system, checks the SHA-256, extracts it next to the current executable and swaps it atomically; it never uses `sudo`, so a read-only folder gets an explanation instead. A `.deb` install is left alone: it prints the URL of the new `.deb` and the `sudo apt install ./...` command. Homebrew gets `brew upgrade mosaic` and `cargo install` builds get the cargo command. Nothing is changed unless you answer `y` (or pass `--yes`).
 
-**Update notice.** When the panel opens, a background thread asks `github.com` (the redirect of `releases/latest`, a single request) for the newest version, at most once every 24 hours, and shows `versão X disponível; rode mosaic update` in the notice line. No data about you is sent, it never blocks the screen and a failure is silent. Turn it off with `check = false` under `[update]` in `mosaic.toml` or with `MOSAIC_NO_UPDATE_CHECK=1` in the environment. `MOSAIC_DOWNLOAD_BASE` points both the installer and `mosaic update` at a mirror of the releases page.
+**Update notice.** When the panel opens, a background thread asks `github.com` (the redirect of `releases/latest`, a single request) for the newest version, at most once every 24 hours, and shows `version X available; run mosaic update` in the notice line. No data about you is sent, it never blocks the screen and a failure is silent. Turn it off with `check = false` under `[update]` in `mosaic.toml` or with `MOSAIC_NO_UPDATE_CHECK=1` in the environment. `MOSAIC_DOWNLOAD_BASE` points both the installer and `mosaic update` at a mirror of the releases page.
 
 Then just run:
 
@@ -86,6 +86,8 @@ mosaic
 On the first run Mosaic creates `~/.config/mosaic/` with a short `mosaic.toml`: two example widgets that only need `python3`. Add service widgets with `mosaic plugins setup <name>`, or run `mosaic --default-config` to see every option, commented. A key Mosaic does not know is ignored with a warning, in the panel and in `mosaic check --config`. Edit, press `R`, done. To add a widget without leaving the panel, press `+`.
 
 > **Just want to look around?** `scripts/demo.sh` (from the repo) starts Mosaic with fake data and an isolated config. It never touches `~/.config/mosaic`.
+
+<!-- demo: put the GIF recorded with `vhs scripts/demo.tape` here (manual step) -->
 
 Run `mosaic --help` for the commands and the first steps, and `mosaic --version` to see which version you have installed. Any other unknown argument is an error instead of opening the panel.
 
@@ -113,6 +115,21 @@ Press `?` at any time: the help is always one key away, and the bottom line show
 
 `Alt` needs your terminal to send `Esc` before the letter (on macOS, enable "Option as Meta").
 
+## Language
+
+The interface is in English by default; Brazilian Portuguese (`pt-BR`) is available. Mosaic picks the language in this order:
+
+1. `language` under `[ui]` in `mosaic.toml`: `"en"` or `"pt-BR"`.
+2. The `MOSAIC_LANGUAGE` environment variable (same values).
+3. The locale: the first non-empty of `LC_ALL`, `LC_MESSAGES` and `LANG`. A value starting with `pt` means pt-BR; anything else means English.
+
+```toml
+[ui]
+language = "pt-BR"
+```
+
+An invalid value in `[ui] language` becomes a warning and Mosaic falls back to the detection above. Press `R` to reload `mosaic.toml` and apply a new language. The official plugins follow the same language: Mosaic passes `MOSAIC_LANGUAGE` (`en` or `pt-BR`) to every provider and action (see [`PROTOCOL.md`](PROTOCOL.md)), and a plugin without the variable answers in English. Data that comes from a service, such as an issue title, is never translated. `install.sh` prints English only, since it runs before Mosaic exists.
+
 ## Themes
 
 By default Mosaic uses your terminal's own colors. Pick a built-in theme in `mosaic.toml` (press `R` to reload it):
@@ -134,7 +151,7 @@ A colored theme paints the whole screen background and needs a terminal with tru
 | Widget | What it shows | Setup guide |
 | --- | --- | --- |
 | **Jira** | Any JQL you like: lines, tables or just counters, grouped by assignee, status or priority | [`plugins/jira`](plugins/jira/README.md) |
-| **GitHub** | PRs waiting for your review and your own PRs, tagged `novo`, `push novo`, `aprovado`, `conflito`… | [`plugins/github`](plugins/github/README.md) |
+| **GitHub** | PRs waiting for your review and your own PRs, tagged `new`, `new push`, `approved`, `conflict`… | [`plugins/github`](plugins/github/README.md) |
 | **GitLab** | Same idea for merge requests | [`plugins/gitlab`](plugins/gitlab/README.md) |
 | **Azure DevOps** | Same idea for Azure PRs | [`plugins/azure-devops`](plugins/azure-devops/README.md) |
 | **Azure Pipelines** | Your slowest build pipelines (average duration) and, on Enter, the steps that take the longest in each | [`plugins/azure-pipelines`](plugins/azure-pipelines/README.md) |
@@ -154,17 +171,17 @@ mosaic plugins install jira --yes                        # skip the confirmation
 mosaic plugins setup jira                                # write a widget through the terminal interview
 ```
 
-Remote installation shows source, plugin version, minimum Mosaic version and destination, then asks `[s/N]`; Enter or EOF cancels. `--force` permits replacement and still requires confirmation unless `--yes` is present. Each plugin declares `version` and `min_mosaic_version` in its `setup.toml`; incompatible versions are rejected even with `--force`. Git follows the repository's default branch; installations do not pin a revision. A third-party plugin uses `owner/repo[/subdir]`; only the six names listed by `plugins list` have shortcuts. A full reference must be installed on its own; multiple official shortcuts can be installed together.
+Remote installation shows source, plugin version, minimum Mosaic version and destination, then asks `[y/N]`; Enter or EOF cancels. `--force` permits replacement and still requires confirmation unless `--yes` is present. Each plugin declares `version` and `min_mosaic_version` in its `setup.toml`; incompatible versions are rejected even with `--force`. Git follows the repository's default branch; installations do not pin a revision. A third-party plugin uses `owner/repo[/subdir]`; only the six names listed by `plugins list` have shortcuts. A full reference must be installed on its own; multiple official shortcuts can be installed together.
 
 The old collective **mosaic-plugins** package is retired. Existing installations remain usable and are never removed automatically. To copy its files offline, run `mosaic plugins install --from /usr/share/mosaic/plugins jira`; `--from DIR` also accepts a local checkout's `plugins` directory. The panel and local installation do not need Git. `--to DIR` changes the plugins destination. Remote packages contain a regular script, `SKILL.md` and a versioned `setup.toml`. The installer copies only direct `.py`/`.js` files and `README.md`, `SKILL.md`, `setup.toml`; it does not install dependencies or run the plugin. Python scripts need `python3`; JavaScript scripts need `node`, which the setup selects from the script extension. The manifest's `script` describes the installed path (`plugins/<name>/<file>.py`), while the source file lives directly in the selected repository folder. The installer links the skill into `~/.claude/skills` when Claude Code is present; `--no-skill` skips linking and `--skills-dir DIR` selects another directory.
 
 `mosaic plugins setup <name>` asks one question at a time, shows the finished `[[widgets]]` block and only appends it to `mosaic.toml` after confirmation. It never asks for a token, only the environment variable name or file path. `--print` shows the block, `--advanced` asks optional settings and `--config-dir DIR` selects another configuration folder. Run it again with another id for a second widget, or copy an example from `mosaic --default-config`.
 
-Inside the panel, `+` opens the same interview as a modal: it lists the installed plugins that have a `setup.toml`, asks the same questions with the same validation (an invalid answer shows its message and keeps the question), shows the `[[widgets]]` block and, on `Enter`, appends it to `mosaic.toml` and reloads like `R`. `Esc` (or `Ctrl+C`) cancels at any step and writes nothing. Without installed plugins the modal shows `mosaic plugins install <name>` and the official names; installing from inside the panel is not supported. An empty panel says `nenhum widget ainda` and points to `+`.
+Inside the panel, `+` opens the same interview as a modal: it lists the installed plugins that have a `setup.toml`, asks the same questions with the same validation (an invalid answer shows its message and keeps the question), shows the `[[widgets]]` block and, on `Enter`, appends it to `mosaic.toml` and reloads like `R`. `Esc` (or `Ctrl+C`) cancels at any step and writes nothing. Without installed plugins the modal shows `mosaic plugins install <name>` and the official names; installing from inside the panel is not supported. An empty panel says `no widgets yet` and points to `+`.
 
 The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 
-The pull request widgets remember what you have already reviewed, so a fresh push to a PR you reviewed lights up as `push novo`. If the network drops, they show the last good data with an `(offline)` note instead of an empty box.
+The pull request widgets remember what you have already reviewed, so a fresh push to a PR you reviewed lights up as `new push`. If the network drops, they show the last good data with an `(offline)` note instead of an empty box.
 
 ## Write your own widget
 
@@ -193,7 +210,7 @@ Check your work without opening the TUI:
 mosaic check python3 hello.py
 ```
 
-It validates the output against the protocol and prints a 60-column preview. It exits `0`, `1` or `2`, so it works in CI too. The full contract is in [`PROTOCOL.md`](PROTOCOL.md) (in Portuguese for now) and the JSON Schema in [`schema/protocol.schema.json`](schema/protocol.schema.json).
+It validates the output against the protocol and prints a 60-column preview. It exits `0`, `1` or `2`, so it works in CI too. The full contract is in [`PROTOCOL.md`](PROTOCOL.md) (a Portuguese translation is in [`PROTOCOL.pt-BR.md`](PROTOCOL.pt-BR.md)) and the JSON Schema in [`schema/protocol.schema.json`](schema/protocol.schema.json).
 
 ## Tabs and layout
 

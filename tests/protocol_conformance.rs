@@ -188,3 +188,79 @@ fn schema_limits_match_the_code() {
     );
     assert!(definitions["text"].get("maxLength").is_none());
 }
+
+const PROTOCOL_DOCUMENTS: [&str; 2] = ["PROTOCOL.md", "PROTOCOL.pt-BR.md"];
+const LANGUAGE_VARIABLE: &str = "MOSAIC_LANGUAGE";
+const SECTION_HEADING_PREFIX: &str = "## ";
+const CODE_FENCE: &str = "```";
+
+fn protocol_documents() -> Vec<(&'static str, String)> {
+    PROTOCOL_DOCUMENTS
+        .iter()
+        .map(|name| {
+            let text =
+                fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
+            (*name, text)
+        })
+        .collect()
+}
+
+fn count_lines_starting_with(text: &str, prefix: &str) -> usize {
+    text.lines().filter(|line| line.starts_with(prefix)).count()
+}
+
+#[test]
+fn protocol_documents_name_every_block_type_tone_and_flag() {
+    for (name, text) in protocol_documents() {
+        let words = BLOCK_TYPE_NAMES
+            .iter()
+            .chain(TONE_NAMES.iter())
+            .chain(FLAG_NAMES.iter());
+        for word in words {
+            assert!(text.contains(&format!("`{word}`")), "{name}: sem `{word}`");
+        }
+    }
+}
+
+#[test]
+fn protocol_documents_list_the_numeric_limits_of_the_code() {
+    let limits = [
+        MAXIMUM_BLOCKS_PER_WIDGET,
+        MAXIMUM_LINES_PER_BLOCK,
+        MAXIMUM_TABLE_COLUMNS,
+        MAXIMUM_STAT_ITEMS,
+        MAXIMUM_TAGS_PER_ROW,
+        MAXIMUM_MINI_VALUE_CHARACTERS,
+        MAXIMUM_MINI_TEXT_CHARACTERS,
+    ];
+    for (name, text) in protocol_documents() {
+        for limit in limits {
+            assert!(
+                text.contains(&format!("| {limit} |")),
+                "{name}: sem o limite {limit}"
+            );
+        }
+    }
+}
+
+#[test]
+fn protocol_documents_share_structure_and_document_the_language_variable() {
+    let documents = protocol_documents();
+    let (reference_name, reference) = &documents[0];
+    for (name, text) in &documents {
+        assert!(
+            text.contains(LANGUAGE_VARIABLE),
+            "{name}: sem {LANGUAGE_VARIABLE}"
+        );
+        assert_eq!(
+            count_lines_starting_with(text, SECTION_HEADING_PREFIX),
+            count_lines_starting_with(reference, SECTION_HEADING_PREFIX),
+            "{name} e {reference_name} têm números de seções diferentes"
+        );
+        assert_eq!(
+            count_lines_starting_with(text, CODE_FENCE),
+            count_lines_starting_with(reference, CODE_FENCE),
+            "{name} e {reference_name} têm números de blocos de código diferentes"
+        );
+    }
+}

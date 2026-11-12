@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/flisbao/mosaic/schema/protocol.schema.json",
-  "title": "mosaic widget snapshot (protocolo v1)",
-  "description": "Saída JSON do comando `snapshot` de um widget. Campos desconhecidos são ignorados pelo painel (aviso no `mosaic check`). Texto acima de 500 caracteres é cortado pelo painel (com aviso no `mosaic check`), não rejeitado.",
+  "title": "mosaic widget snapshot (protocol v1)",
+  "description": "JSON output of a widget's `snapshot` command. Unknown fields are ignored by the panel (warning in `mosaic check`). Text above 500 characters is truncated by the panel (with a warning in `mosaic check`), not rejected.",
   "type": "object",
   "required": ["summary"],
   "properties": {

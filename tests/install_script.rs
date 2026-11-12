@@ -231,7 +231,7 @@ fn an_invalid_version_is_refused_before_any_download() {
     ]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        text(&output).contains("versão inválida"),
+        text(&output).contains("invalid version"),
         "{}",
         text(&output)
     );
@@ -266,9 +266,9 @@ fn a_wrong_checksum_aborts_without_touching_the_installed_binary() {
 #[test]
 fn unsupported_systems_and_architectures_fail_clearly() {
     for (system, machine, expected) in [
-        ("FreeBSD", "x86_64", "sistema não suportado: FreeBSD"),
-        ("Linux", "riscv64", "arquitetura não suportada: riscv64"),
-        ("Darwin", "ppc", "arquitetura não suportada: ppc"),
+        ("FreeBSD", "x86_64", "unsupported system: FreeBSD"),
+        ("Linux", "riscv64", "unsupported architecture: riscv64"),
+        ("Darwin", "ppc", "unsupported architecture: ppc"),
     ] {
         let mut environment = Environment::new();
         environment.system = system;
@@ -287,7 +287,7 @@ fn a_missing_release_file_fails_without_installing() {
     let output = environment.run_default();
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        text(&output).contains("não consegui baixar"),
+        text(&output).contains("could not download"),
         "{}",
         text(&output)
     );
@@ -318,7 +318,7 @@ fn without_a_downloader_or_a_checksum_tool_it_aborts_without_installing() {
     environment.downloader = "not-a-downloader";
     let output = environment.run_default();
     assert_eq!(output.status.code(), Some(1));
-    assert!(text(&output).contains("curl ou wget"), "{}", text(&output));
+    assert!(text(&output).contains("curl or wget"), "{}", text(&output));
 
     let mut environment = Environment::new();
     environment.checksum_tools = Vec::new();
@@ -331,7 +331,7 @@ fn without_a_downloader_or_a_checksum_tool_it_aborts_without_installing() {
     let output = environment.run_default();
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        text(&output).contains("sha256sum ou shasum"),
+        text(&output).contains("sha256sum or shasum"),
         "{}",
         text(&output)
     );
