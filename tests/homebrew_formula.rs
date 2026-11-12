@@ -85,7 +85,7 @@ fn expected_formula(version: &str) -> String {
 
   def install
     bin.install \"mosaic\"
-    doc.install \"README.md\", \"PROTOCOL.md\"
+    doc.install \"README.md\", \"PROTOCOL.md\", \"PROTOCOL.pt-BR.md\"
     pkgshare.install \"schema\"
   end
 

@@ -71,7 +71,7 @@ $(asset_block x86_64-unknown-linux-musl "$linux_intel")
 
   def install
     bin.install "mosaic"
-    doc.install "README.md", "PROTOCOL.md"
+    doc.install "README.md", "PROTOCOL.md", "PROTOCOL.pt-BR.md"
     pkgshare.install "schema"
   end
 

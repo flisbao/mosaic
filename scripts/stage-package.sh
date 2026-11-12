@@ -21,6 +21,7 @@ stage_core() {
   local documents="$DESTINATION/usr/share/doc/mosaic"
   install -Dm644 "$REPO/README.md" "$documents/README.md"
   install -Dm644 "$REPO/PROTOCOL.md" "$documents/PROTOCOL.md"
+  install -Dm644 "$REPO/PROTOCOL.pt-BR.md" "$documents/PROTOCOL.pt-BR.md"
   install -Dm644 "$REPO/schema/protocol.schema.json" "$documents/protocol.schema.json"
   install -Dm644 "$REPO/LICENSE" "$documents/copyright"
   mkdir -p "$SKILLS_DESTINATION"

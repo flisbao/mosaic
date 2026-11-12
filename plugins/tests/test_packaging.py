@@ -72,7 +72,8 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         documents = self.destination / "usr/share/doc/mosaic"
         self.assertEqual(
-            listing(documents), ["PROTOCOL.md", "README.md", "copyright", "protocol.schema.json"]
+            listing(documents),
+            ["PROTOCOL.md", "PROTOCOL.pt-BR.md", "README.md", "copyright", "protocol.schema.json"],
         )
         self.assertEqual(listing(self.destination / PACKAGED_SKILLS), [AUTHORING_SKILL])
         self.assertTrue((self.destination / PACKAGED_SKILLS / AUTHORING_SKILL / "SKILL.md").is_file())
@@ -105,6 +106,10 @@ class PackagingTests(unittest.TestCase):
         text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         self.assertIn('- "v*"', text)
         self.assertNotIn("plugins-v", text)
+
+    def test_release_tarball_ships_both_protocol_documents(self):
+        text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("PROTOCOL.md PROTOCOL.pt-BR.md", text)
 
     def test_ci_workflow_runs_every_check_on_push_and_pull_request(self):
         text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
