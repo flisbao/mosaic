@@ -45,6 +45,8 @@ fn every_help_spelling_explains_what_to_do_and_never_opens_the_panel() {
             "mosaic themes",
             "mosaic tabs",
             "mosaic check",
+            "mosaic update",
+            "MOSAIC_NO_UPDATE_CHECK=1",
             "mosaic.toml",
             "--version",
             "--default-config",

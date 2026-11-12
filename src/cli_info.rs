@@ -75,6 +75,7 @@ Uso:
   mosaic themes [NOME]              lista os temas de cor ou mostra um
   mosaic check COMANDO...           valida a saída de um widget; 'mosaic check --config' valida o mosaic.toml
   mosaic skills install             liga as skills do Claude Code
+  mosaic update [--check] [--yes]   confere se há versão nova; sem --check, atualiza o binário (pergunta [s/N])
 
 Primeiros passos:
   mosaic plugins list
@@ -87,6 +88,9 @@ Configuração: {configuration}
   mosaic.toml  widgets, abas, tema ([theme] name = \"tokyo-night\"), pomodoro e IA
   plugins/     os plugins instalados
   Criada na primeira execução; XDG_CONFIG_HOME muda a pasta.
+
+Aviso de versão nova: no máximo uma consulta por dia ao github.com ao abrir o painel.
+  Desligue com [update] check = false no mosaic.toml ou MOSAIC_NO_UPDATE_CHECK=1.
 
 No painel: ? mostra as teclas, R recarrega, r atualiza, q sai.
 Cada subcomando mostra o seu uso quando chamado sem argumentos ou com argumento errado.
@@ -115,12 +119,15 @@ mod tests {
             "themes",
             "check",
             "skills install",
+            "update",
         ] {
             assert!(
                 help.contains(&format!("mosaic {subcommand}")),
                 "{subcommand}"
             );
         }
+        assert!(help.contains("mosaic update [--check] [--yes]"));
+        assert!(help.contains("MOSAIC_NO_UPDATE_CHECK=1"));
         assert!(help.contains("Primeiros passos"));
         assert!(help.contains("mosaic --default-config"));
     }

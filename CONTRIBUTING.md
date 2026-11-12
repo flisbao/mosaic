@@ -22,6 +22,16 @@ A checagem das skills (`plugins/tests/test_skills.py`) falha se um plugin não t
 
 As skills são arquivos Markdown comuns. O Claude Code as carrega sozinho a partir de `.claude/skills/` (os links das skills de plugin apontam para `plugins/<pasta>/`); com outros agentes, aponte-os para essa pasta.
 
+## Publicar o tap do Homebrew (passo manual do dono)
+
+A release anexa `mosaic.rb`, a fórmula gerada por `scripts/render-homebrew-formula.sh <versão> SHA256SUMS`. O tap é o repositório público `flisbao/homebrew-mosaic`, que o fluxo de release não cria nem atualiza sozinho. Em cada versão:
+
+1. Baixe `mosaic.rb` da release (ou gere: `scripts/render-homebrew-formula.sh v0.0.11 SHA256SUMS > mosaic.rb`).
+2. No clone do `homebrew-mosaic`, copie-o para `Formula/mosaic.rb`, faça o commit e o push.
+3. Confira com `brew install flisbao/mosaic/mosaic` e `brew test mosaic` numa máquina com Homebrew.
+
+Até o tap existir, o README descreve o Homebrew como "disponível quando o tap for publicado".
+
 ## Segredos
 
 Nunca coloque token, link secreto ou senha em `mosaic.toml`, em argumento de comando, em issue ou em pedido de contribuição. O plugin lê o **nome** de uma variável de ambiente ou o caminho de um arquivo.

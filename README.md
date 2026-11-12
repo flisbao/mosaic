@@ -37,13 +37,27 @@ And because every widget is just a program that prints JSON, adding a new one ta
 
 ## Install
 
+**One line (Linux x86_64 and aarch64, macOS Apple Silicon and Intel)**: no `sudo`, no package manager. It downloads the binary for your system (a static build on Linux, so it runs on any distribution), checks its SHA-256 and installs it in `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/flisbao/mosaic/main/install.sh | sh
+```
+
+`MOSAIC_VERSION=v0.0.11` installs a specific version and `MOSAIC_INSTALL_DIR=/some/dir` changes the destination. If the destination is not in your `PATH`, the script prints the line to add. It needs `curl` or `wget`, `tar` and `sha256sum` or `shasum`. Prefer to read it first? It is [`install.sh`](install.sh), a short POSIX script.
+
+**Homebrew** (available once the tap `flisbao/homebrew-mosaic` is published; the formula is attached to every release as `mosaic.rb`):
+
+```sh
+brew install flisbao/mosaic/mosaic
+```
+
 **Ubuntu 24.04 or newer** (the `.deb` from the [latest release](https://github.com/flisbao/mosaic/releases/latest)):
 
 ```sh
 sudo dpkg -i mosaic_*_amd64.deb
 ```
 
-**Linux x86_64, macOS (Apple Silicon and Intel)**: grab the matching `.tar.gz` from the release, check it against the `.sha256`, and drop `mosaic` somewhere in your `PATH`.
+**Tarball**: grab the `.tar.gz` for your system from the release, check it against the `.sha256` (or against `SHA256SUMS`, which lists every file), and drop `mosaic` somewhere in your `PATH`. Targets: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin`.
 
 **From source** (Rust 1.88+):
 
@@ -51,6 +65,17 @@ sudo dpkg -i mosaic_*_amd64.deb
 git clone https://github.com/flisbao/mosaic && cd mosaic
 cargo install --path .
 ```
+
+## Update
+
+```sh
+mosaic update --check    # says whether there is a newer version
+mosaic update            # updates, asking [s/N] first (--yes skips the question)
+```
+
+`mosaic update` looks at how the running binary was installed. For a binary from `install.sh` or a manual tarball it downloads the tarball for your system, checks the SHA-256, extracts it next to the current executable and swaps it atomically; it never uses `sudo`, so a read-only folder gets an explanation instead. A `.deb` install is left alone: it prints the URL of the new `.deb` and the `sudo apt install ./...` command. Homebrew gets `brew upgrade mosaic` and `cargo install` builds get the cargo command. Nothing is changed unless you answer `s` or `y` (or pass `--yes`).
+
+**Update notice.** When the panel opens, a background thread asks `github.com` (the redirect of `releases/latest`, a single request) for the newest version, at most once every 24 hours, and shows `versão X disponível; rode mosaic update` in the notice line. No data about you is sent, it never blocks the screen and a failure is silent. Turn it off with `check = false` under `[update]` in `mosaic.toml` or with `MOSAIC_NO_UPDATE_CHECK=1` in the environment. `MOSAIC_DOWNLOAD_BASE` points both the installer and `mosaic update` at a mirror of the releases page.
 
 Then just run:
 

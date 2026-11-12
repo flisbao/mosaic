@@ -4,6 +4,29 @@ Mosaic é um painel de terminal (TUI) feito de peças independentes. Cada widget
 
 > A terminal dashboard built from pluggable widgets. Any program that prints JSON becomes a widget.
 
+## Instalação
+
+Uma linha, sem `sudo` (Linux x86_64 e aarch64, macOS Apple Silicon e Intel). O script baixa o binário do seu sistema (estático no Linux, então roda em qualquer distribuição), confere o SHA-256 e instala em `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/flisbao/mosaic/main/install.sh | sh
+```
+
+`MOSAIC_VERSION=v0.0.11` instala uma versão específica e `MOSAIC_INSTALL_DIR=/pasta` muda o destino. Se o destino não estiver no `PATH`, o script imprime a linha para acrescentar. Precisa de `curl` ou `wget`, `tar` e `sha256sum` ou `shasum`.
+
+Outras opções: Homebrew (`brew install flisbao/mosaic/mosaic`, disponível quando o tap `flisbao/homebrew-mosaic` for publicado; a fórmula `mosaic.rb` acompanha cada release), o `.deb` da [última release](https://github.com/flisbao/mosaic/releases/latest) (`sudo dpkg -i mosaic_*_amd64.deb`), o tarball conferido com o `.sha256` ou com o `SHA256SUMS`, ou `cargo install --path .` (Rust 1.88+).
+
+## Atualização
+
+```sh
+mosaic update --check    # informa se há versão nova
+mosaic update            # atualiza, perguntando [s/N] antes (--yes pula a pergunta)
+```
+
+O `mosaic update` descobre como o binário foi instalado. Binário do `install.sh` ou de tarball manual: baixa o tarball do seu sistema, confere o SHA-256, extrai ao lado do executável e troca de forma atômica, sem `sudo` (pasta sem permissão de escrita recebe uma explicação). Instalação por `.deb` não é alterada: ele imprime a URL do `.deb` novo e o `sudo apt install ./...`. Homebrew recebe `brew upgrade mosaic` e `cargo install` recebe o comando do cargo.
+
+**Aviso de versão nova.** Ao abrir o painel, uma thread em segundo plano consulta o `github.com` (o redirecionamento de `releases/latest`, uma única requisição), no máximo uma vez a cada 24 horas, e mostra `versão X disponível; rode mosaic update` na faixa de avisos. Nenhum dado seu é enviado, a tela nunca espera e a falha é silenciosa. Para desligar: `check = false` em `[update]` no `mosaic.toml` ou `MOSAIC_NO_UPDATE_CHECK=1` no ambiente. `MOSAIC_DOWNLOAD_BASE` aponta o instalador e o `mosaic update` para um espelho da página de releases.
+
 ## Uso
 
 ```sh
