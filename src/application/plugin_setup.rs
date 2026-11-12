@@ -1,21 +1,9 @@
-use std::collections::BTreeMap;
-
 use thiserror::Error;
 
 use crate::application::ports::{PromptError, Prompter};
-use crate::domain::plugin_setup::{
-    ensure_environment_name, normalize_list, split_list, AnswerKind, Condition, Preset, Question,
-    SecretQuestion, SetupManifest, Step, Target,
-};
-use crate::domain::widget_draft::{WidgetDraft, JAVASCRIPT_PLUGIN_COMMAND, PLUGIN_COMMAND};
-
-const MINIMUM_INTERVAL_SECONDS: u64 = 30;
-const MAXIMUM_INTERVAL_SECONDS: u64 = 86_400;
-const MINIMUM_TIMEOUT_SECONDS: u64 = 1;
-const MAXIMUM_TIMEOUT_SECONDS: u64 = 3_600;
-const SECRET_FROM_ENVIRONMENT: &str = "1";
-const SECRET_FROM_FILE: &str = "2";
-const SECRET_FROM_BOTH: &str = "3";
+use crate::application::setup_session::{Answered, SetupSession, SetupState};
+use crate::domain::plugin_setup::SetupManifest;
+use crate::domain::widget_draft::{tab_toml_block, WidgetDraft};
 
 #[derive(Debug, Error, PartialEq)]
 pub enum SetupError {
@@ -29,7 +17,7 @@ pub struct TabContext {
     pub existing_widgets: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SetupOptions {
     pub include_advanced: bool,
     pub existing_ids: Vec<String>,
@@ -43,11 +31,14 @@ pub struct SetupResult {
     pub new_tab: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum TabChoice {
-    Keep,
-    Existing(String),
-    New(String),
+impl SetupResult {
+    pub fn toml_blocks(&self) -> Vec<String> {
+        self.new_tab
+            .iter()
+            .map(|name| tab_toml_block(name))
+            .chain(std::iter::once(self.draft.to_toml_block()))
+            .collect()
+    }
 }
 
 pub fn run_setup(
@@ -55,545 +46,34 @@ pub fn run_setup(
     options: &SetupOptions,
     prompter: &mut dyn Prompter,
 ) -> Result<SetupResult, SetupError> {
-    let preset = choose_preset(manifest, prompter)?;
-    let preset_values = match &preset {
-        Some(preset) => resolve_preset(preset, prompter)?,
-        None => BTreeMap::new(),
-    };
-    let widget_id = ask_widget_id(manifest, preset.as_ref(), options, prompter)?;
-    let tab_choice = match &options.tab_context {
-        Some(context) => ask_tab(context, prompter)?,
-        None => TabChoice::Keep,
-    };
-    let mut interview = Interview::new(manifest, preset_values);
-    for step in &manifest.steps {
-        interview.run_step(step, options, prompter)?;
-    }
-    let interval_seconds = ask_seconds(
-        "Intervalo entre atualizações, em segundos",
-        manifest.interval_seconds,
-        MINIMUM_INTERVAL_SECONDS..=MAXIMUM_INTERVAL_SECONDS,
-        prompter,
-    )?;
-    let timeout_seconds = ask_seconds(
-        "Tempo máximo de cada execução, em segundos",
-        manifest.timeout_seconds,
-        MINIMUM_TIMEOUT_SECONDS..=MAXIMUM_TIMEOUT_SECONDS,
-        prompter,
-    )?;
-    let mut result = interview.finish(widget_id, interval_seconds, timeout_seconds);
-    apply_tab_choice(&mut result, tab_choice, options.tab_context.as_ref());
-    Ok(result)
-}
-
-fn apply_tab_choice(result: &mut SetupResult, choice: TabChoice, context: Option<&TabContext>) {
-    match choice {
-        TabChoice::Keep => {}
-        TabChoice::Existing(name) => result.draft.tab = Some(name),
-        TabChoice::New(name) => {
-            result.draft.tab = Some(name.clone());
-            result.new_tab = Some(name);
-            if let Some(context) = context
-                .filter(|context| context.declared.is_empty() && context.existing_widgets > 0)
-            {
-                result.notes.push(format!(
-                    "ao declarar a primeira aba, os {} widgets que já existem sem 'tab' passam a ficar nela (a primeira aba declarada)",
-                    context.existing_widgets
-                ));
+    let mut session = SetupSession::new(manifest.clone(), options.clone());
+    let mut introduce = true;
+    loop {
+        let prompt = match session.state() {
+            SetupState::Finished(result) => return Ok(result.clone()),
+            SetupState::Asking(prompt) => prompt.clone(),
+        };
+        if let Some(introduction) = prompt.introduction.as_deref().filter(|_| introduce) {
+            prompter.tell(introduction);
+        }
+        let line = prompter.ask(&prompt.label)?;
+        introduce = match session.answer(&line) {
+            Answered::Advanced => true,
+            Answered::Rejected(message) => {
+                prompter.tell(&message);
+                false
             }
-        }
-    }
-}
-
-fn ask_tab(context: &TabContext, prompter: &mut dyn Prompter) -> Result<TabChoice, SetupError> {
-    match context.declared.first() {
-        Some(first) => ask_declared_tab(first, context, prompter),
-        None => ask_first_tab(context, prompter),
-    }
-}
-
-fn ask_first_tab(
-    context: &TabContext,
-    prompter: &mut dyn Prompter,
-) -> Result<TabChoice, SetupError> {
-    prompter.tell(&format!(
-        "O mosaic.toml ainda não declara abas: todos os widgets ficam numa aba única. Digitar um nome cria a primeira aba declarada{}.",
-        if context.existing_widgets > 0 {
-            " e move para ela os widgets que já existem"
-        } else {
-            ""
-        }
-    ));
-    let line = prompter.ask("Aba nova para este widget (Enter = manter a aba única): ")?;
-    match line.trim() {
-        "" => Ok(TabChoice::Keep),
-        name => Ok(TabChoice::New(name.to_string())),
-    }
-}
-
-fn ask_declared_tab(
-    first: &str,
-    context: &TabContext,
-    prompter: &mut dyn Prompter,
-) -> Result<TabChoice, SetupError> {
-    let mut listing: Vec<String> = context
-        .declared
-        .iter()
-        .enumerate()
-        .map(|(index, name)| format!("  {}) {name}", index + 1))
-        .collect();
-    let new_tab_number = context.declared.len() + 1;
-    listing.push(format!("  {new_tab_number}) criar uma aba nova"));
-    prompter.tell(&format!("Abas do painel:\n{}", listing.join("\n")));
-    loop {
-        let line = prompter.ask(&format!("Aba [Enter = {first}, a primeira]: "))?;
-        let line = line.trim();
-        if line.is_empty() {
-            return Ok(TabChoice::Keep);
-        }
-        let chosen = line
-            .parse::<usize>()
-            .ok()
-            .and_then(|number| number.checked_sub(1))
-            .and_then(|index| context.declared.get(index))
-            .or_else(|| context.declared.iter().find(|name| name.as_str() == line));
-        if let Some(name) = chosen {
-            return Ok(TabChoice::Existing(name.clone()));
-        }
-        if line == new_tab_number.to_string() {
-            return ask_new_tab_name(context, prompter).map(TabChoice::New);
-        }
-        prompter.tell("Responda com um dos números listados.");
-    }
-}
-
-fn ask_new_tab_name(
-    context: &TabContext,
-    prompter: &mut dyn Prompter,
-) -> Result<String, SetupError> {
-    loop {
-        let name = ask_required_text("Nome da aba nova", prompter)?;
-        if context.declared.contains(&name) {
-            prompter.tell(&format!("Já existe uma aba chamada \"{name}\"."));
-        } else {
-            return Ok(name);
-        }
-    }
-}
-
-struct Interview<'a> {
-    manifest: &'a SetupManifest,
-    preset_values: BTreeMap<String, String>,
-    values: BTreeMap<String, String>,
-    arguments: Vec<String>,
-    environment: Vec<(String, String)>,
-    inherit_env: Vec<String>,
-}
-
-impl<'a> Interview<'a> {
-    fn new(manifest: &'a SetupManifest, preset_values: BTreeMap<String, String>) -> Self {
-        let defaults = manifest.steps.iter().filter_map(|step| match step {
-            Step::Question(question) => question
-                .default
-                .clone()
-                .map(|default| (question.target.key().to_string(), default)),
-            Step::Secret(_) => None,
-        });
-        Self {
-            manifest,
-            values: defaults.collect(),
-            preset_values,
-            arguments: vec![manifest.script.clone()],
-            environment: Vec::new(),
-            inherit_env: Vec::new(),
-        }
-    }
-
-    fn run_step(
-        &mut self,
-        step: &Step,
-        options: &SetupOptions,
-        prompter: &mut dyn Prompter,
-    ) -> Result<(), SetupError> {
-        let holds = step
-            .condition()
-            .is_none_or(|condition| condition.holds(&self.values));
-        if !holds || (step.is_advanced() && !options.include_advanced) {
-            return Ok(());
-        }
-        match step {
-            Step::Question(question) => self.ask_question(question, prompter),
-            Step::Secret(secret) => self.ask_secret(secret, prompter),
-        }
-    }
-
-    fn ask_question(
-        &mut self,
-        question: &Question,
-        prompter: &mut dyn Prompter,
-    ) -> Result<(), SetupError> {
-        let key = question.target.key().to_string();
-        let preset_value = self.preset_values.get(&key).cloned();
-        let default = preset_value.clone().or_else(|| question.default.clone());
-        let required = question.requirement.applies(&self.values);
-        let Some(answer) = ask_value(question, default.as_deref(), required, prompter)? else {
-            return Ok(());
         };
-        let was_typed = answer.typed || preset_value.is_some();
-        self.values.insert(key.clone(), answer.value.clone());
-        if was_typed {
-            match &question.target {
-                Target::Argument(flag) => {
-                    self.arguments.push(flag.clone());
-                    self.arguments.push(answer.value);
-                }
-                Target::Variable(name) => self.environment.push((name.clone(), answer.value)),
-            }
-        }
-        Ok(())
     }
-
-    fn ask_secret(
-        &mut self,
-        secret: &SecretQuestion,
-        prompter: &mut dyn Prompter,
-    ) -> Result<(), SetupError> {
-        let required = secret.requirement.applies(&self.values);
-        let Some(source) = ask_secret_source(secret, required, prompter)? else {
-            return Ok(());
-        };
-        if source != SECRET_FROM_FILE {
-            let names = ask_secret_names(secret, prompter)?;
-            self.values
-                .insert(secret.environment_key.clone(), names.clone());
-            self.inherit_env.extend(split_list(&names));
-            self.environment
-                .push((secret.environment_key.clone(), names));
-        }
-        if source != SECRET_FROM_ENVIRONMENT {
-            let path =
-                ask_required_text(&format!("Caminho do arquivo ({})", secret.prompt), prompter)?;
-            self.values.insert(secret.file_key.clone(), path.clone());
-            self.environment.push((secret.file_key.clone(), path));
-        }
-        Ok(())
-    }
-
-    fn finish(
-        mut self,
-        widget_id: String,
-        interval_seconds: u64,
-        timeout_seconds: u64,
-    ) -> SetupResult {
-        for rule in &self.manifest.inherit_rules {
-            if holds(rule.condition.as_ref(), &self.values) {
-                self.inherit_env.push(rule.name.clone());
-            }
-        }
-        let mut seen = Vec::new();
-        self.inherit_env.retain(|name| {
-            let first_time = !seen.contains(name);
-            seen.push(name.clone());
-            first_time
-        });
-        let notes = self
-            .manifest
-            .notes
-            .iter()
-            .filter(|note| holds(note.condition.as_ref(), &self.values))
-            .map(|note| note.text.clone())
-            .collect();
-        SetupResult {
-            draft: WidgetDraft {
-                id: widget_id,
-                command: if self.manifest.script.ends_with(".js") {
-                    JAVASCRIPT_PLUGIN_COMMAND
-                } else {
-                    PLUGIN_COMMAND
-                }
-                .to_string(),
-                arguments: self.arguments,
-                interval_seconds,
-                timeout_seconds,
-                tab: None,
-                inherit_env: self.inherit_env,
-                environment: self.environment,
-            },
-            notes,
-            new_tab: None,
-        }
-    }
-}
-
-fn holds(condition: Option<&Condition>, values: &BTreeMap<String, String>) -> bool {
-    condition.is_none_or(|condition| condition.holds(values))
-}
-
-struct Answer {
-    value: String,
-    typed: bool,
-}
-
-fn ask_value(
-    question: &Question,
-    default: Option<&str>,
-    required: bool,
-    prompter: &mut dyn Prompter,
-) -> Result<Option<Answer>, SetupError> {
-    if let AnswerKind::Choice(choices) = &question.kind {
-        let listing: Vec<String> = choices
-            .iter()
-            .enumerate()
-            .map(|(index, choice)| {
-                format!("  {}) {}: {}", index + 1, choice.value, choice.description)
-            })
-            .collect();
-        prompter.tell(&format!("{}\n{}", question.prompt, listing.join("\n")));
-    }
-    let label = question_label(question, default, required);
-    loop {
-        let line = prompter.ask(&label)?;
-        let line = line.trim();
-        if line.is_empty() {
-            match default {
-                Some(default) => {
-                    return Ok(Some(Answer {
-                        value: default.to_string(),
-                        typed: false,
-                    }))
-                }
-                None if required => {
-                    prompter.tell("Esta resposta é obrigatória.");
-                    continue;
-                }
-                None => return Ok(None),
-            }
-        }
-        match question.kind.normalize(line) {
-            Ok(value) => return Ok(Some(Answer { value, typed: true })),
-            Err(error) => prompter.tell(&error.to_string()),
-        }
-    }
-}
-
-fn question_label(question: &Question, default: Option<&str>, required: bool) -> String {
-    let hint = match &question.kind {
-        AnswerKind::List => " (separados por vírgula)".to_string(),
-        AnswerKind::Integer { minimum, maximum } => format!(" ({minimum} a {maximum})"),
-        AnswerKind::Choice(_) | AnswerKind::Text => String::new(),
-    };
-    let prompt = match question.kind {
-        AnswerKind::Choice(_) => "Escolha",
-        _ => question.prompt.as_str(),
-    };
-    let suffix = match (default, required) {
-        (Some(default), _) => format!(" [{default}]"),
-        (None, true) => " (obrigatório)".to_string(),
-        (None, false) => " (Enter para pular)".to_string(),
-    };
-    format!("{prompt}{hint}{suffix}: ")
-}
-
-fn ask_secret_source(
-    secret: &SecretQuestion,
-    required: bool,
-    prompter: &mut dyn Prompter,
-) -> Result<Option<String>, SetupError> {
-    let mut listing = format!(
-        "{}\nO valor nunca é pedido aqui: o plugin lê de uma variável de ambiente ou de um arquivo.\n  {SECRET_FROM_ENVIRONMENT}) nome de variável de ambiente\n  {SECRET_FROM_FILE}) caminho de um arquivo",
-        secret.prompt
-    );
-    let mut valid = vec![SECRET_FROM_ENVIRONMENT, SECRET_FROM_FILE];
-    if secret.allow_both {
-        listing.push_str(&format!("\n  {SECRET_FROM_BOTH}) os dois"));
-        valid.push(SECRET_FROM_BOTH);
-    }
-    prompter.tell(&listing);
-    let suffix = if required {
-        " (obrigatório)"
-    } else {
-        " (Enter para pular)"
-    };
-    loop {
-        let line = prompter.ask(&format!("Escolha{suffix}: "))?;
-        let line = line.trim();
-        if line.is_empty() && !required {
-            return Ok(None);
-        }
-        if let Some(chosen) = valid.iter().find(|candidate| **candidate == line) {
-            return Ok(Some((*chosen).to_string()));
-        }
-        prompter.tell("Responda com um dos números listados.");
-    }
-}
-
-fn ask_secret_names(
-    secret: &SecretQuestion,
-    prompter: &mut dyn Prompter,
-) -> Result<String, SetupError> {
-    loop {
-        let label = if secret.names_are_list {
-            "Nomes das variáveis (separados por vírgula)"
-        } else {
-            "Nome da variável"
-        };
-        let line = ask_required_text(label, prompter)?;
-        let names = if secret.names_are_list {
-            normalize_list(&line)
-        } else {
-            Ok(line.trim().to_string())
-        };
-        let checked = names.and_then(|names| {
-            split_list(&names)
-                .iter()
-                .try_for_each(|name| ensure_environment_name(name))
-                .map(|()| names)
-        });
-        match checked {
-            Ok(names) => return Ok(names),
-            Err(error) => prompter.tell(&error.to_string()),
-        }
-    }
-}
-
-fn ask_required_text(label: &str, prompter: &mut dyn Prompter) -> Result<String, SetupError> {
-    loop {
-        let line = prompter.ask(&format!("{label}: "))?;
-        let line = line.trim();
-        if !line.is_empty() {
-            return Ok(line.to_string());
-        }
-        prompter.tell("Esta resposta é obrigatória.");
-    }
-}
-
-fn ask_seconds(
-    label: &str,
-    default: u64,
-    allowed: std::ops::RangeInclusive<u64>,
-    prompter: &mut dyn Prompter,
-) -> Result<u64, SetupError> {
-    let kind = AnswerKind::Integer {
-        minimum: *allowed.start(),
-        maximum: *allowed.end(),
-    };
-    loop {
-        let line = prompter.ask(&format!("{label} [{default}]: "))?;
-        if line.trim().is_empty() {
-            return Ok(default);
-        }
-        match kind.normalize(&line).map(|value| value.parse::<u64>()) {
-            Ok(Ok(value)) => return Ok(value),
-            Ok(Err(error)) => prompter.tell(&error.to_string()),
-            Err(error) => prompter.tell(&error.to_string()),
-        }
-    }
-}
-
-fn ask_widget_id(
-    manifest: &SetupManifest,
-    preset: Option<&Preset>,
-    options: &SetupOptions,
-    prompter: &mut dyn Prompter,
-) -> Result<String, SetupError> {
-    let default = preset
-        .and_then(|preset| preset.widget_id.clone())
-        .unwrap_or_else(|| manifest.default_id.clone());
-    loop {
-        let line = prompter.ask(&format!("Id do widget [{default}]: "))?;
-        let id = match line.trim() {
-            "" => default.clone(),
-            typed => typed.to_string(),
-        };
-        if !is_valid_widget_id(&id) {
-            prompter.tell("Use só letras minúsculas, números, '-' e '_'.");
-        } else if options.existing_ids.contains(&id) {
-            prompter.tell(&format!("Já existe um widget com o id \"{id}\"."));
-        } else {
-            return Ok(id);
-        }
-    }
-}
-
-fn is_valid_widget_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.chars().all(|character| {
-            character.is_ascii_lowercase()
-                || character.is_ascii_digit()
-                || character == '-'
-                || character == '_'
-        })
-}
-
-fn choose_preset(
-    manifest: &SetupManifest,
-    prompter: &mut dyn Prompter,
-) -> Result<Option<Preset>, SetupError> {
-    if manifest.presets.is_empty() {
-        return Ok(None);
-    }
-    let listing: Vec<String> = manifest
-        .presets
-        .iter()
-        .enumerate()
-        .map(|(index, preset)| format!("  {}) {}: {}", index + 1, preset.name, preset.description))
-        .collect();
-    prompter.tell(&format!("Modelos prontos:\n{}", listing.join("\n")));
-    loop {
-        let line = prompter.ask("Modelo (Enter para montar do zero): ")?;
-        let line = line.trim();
-        if line.is_empty() {
-            return Ok(None);
-        }
-        let chosen = line
-            .parse::<usize>()
-            .ok()
-            .and_then(|number| number.checked_sub(1))
-            .and_then(|index| manifest.presets.get(index))
-            .or_else(|| manifest.presets.iter().find(|preset| preset.name == line));
-        match chosen {
-            Some(preset) => return Ok(Some(preset.clone())),
-            None => prompter.tell("Modelo desconhecido; responda com um dos números listados."),
-        }
-    }
-}
-
-fn resolve_preset(
-    preset: &Preset,
-    prompter: &mut dyn Prompter,
-) -> Result<BTreeMap<String, String>, SetupError> {
-    let mut inputs = Vec::new();
-    for input in &preset.inputs {
-        let line = ask_required_text(&input.prompt, prompter)?;
-        let value = if input.quote_list {
-            split_list(&line)
-                .iter()
-                .map(|item| format!("\"{item}\""))
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            line
-        };
-        inputs.push((format!("{{{}}}", input.name), value));
-    }
-    Ok(preset
-        .arguments
-        .iter()
-        .map(|(flag, template)| {
-            let filled = inputs
-                .iter()
-                .fold(template.clone(), |text, (placeholder, value)| {
-                    text.replace(placeholder, value)
-                });
-            (flag.clone(), filled)
-        })
-        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::plugin_setup::{Choice, InheritRule, Note, PresetInput, Requirement};
+    use crate::domain::plugin_setup::{
+        AnswerKind, Choice, Condition, InheritRule, Note, Preset, PresetInput, Question,
+        Requirement, SecretQuestion, Step, Target,
+    };
 
     struct ScriptedPrompter {
         answers: std::vec::IntoIter<String>,
@@ -1063,6 +543,17 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.draft.tab, None);
         assert!(result.notes.is_empty());
+    }
+
+    #[test]
+    fn the_blocks_to_write_put_a_new_tab_before_the_widget() {
+        let (result, _) = run_with_tabs(declared(&[], 0), &["", "Trabalho", "", ""]);
+        let blocks = result.unwrap().toml_blocks();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0], "[[tabs]]\nname = \"Trabalho\"\n");
+        assert!(blocks[1].starts_with("[[widgets]]\nid = \"demo\""));
+        let (without_tab, _) = run(&manifest(Vec::new()), &["", "", ""]);
+        assert_eq!(without_tab.unwrap().toml_blocks().len(), 1);
     }
 
     #[test]

@@ -6,7 +6,6 @@ use mosaic::application::plugin_setup::{
     run_setup, SetupError, SetupOptions, SetupResult, TabContext,
 };
 use mosaic::application::ports::{PromptError, Prompter};
-use mosaic::domain::widget_draft::tab_toml_block;
 use mosaic::infrastructure::app_paths::config_directory;
 use mosaic::infrastructure::config::{config_file_path, PLUGINS_DIRECTORY_NAME};
 use mosaic::infrastructure::config_appender::{
@@ -141,7 +140,7 @@ fn execute(
         writeln_checked(output, "Nada foi gravado.")?;
         return Ok(());
     }
-    append_blocks(&invocation.config_directory, &blocks_to_append(&result))?;
+    append_blocks(&invocation.config_directory, &result.toml_blocks())?;
     writeln_checked(
         output,
         &format!(
@@ -166,15 +165,6 @@ fn setup_options(invocation: &SetupInvocation, overview: Option<ConfigOverview>)
     }
 }
 
-fn blocks_to_append(result: &SetupResult) -> Vec<String> {
-    result
-        .new_tab
-        .iter()
-        .map(|name| tab_toml_block(name))
-        .chain(std::iter::once(result.draft.to_toml_block()))
-        .collect()
-}
-
 fn load_manifest(
     config_directory: &Path,
     name: &str,
@@ -192,7 +182,7 @@ fn load_manifest(
 
 fn show_block(result: &SetupResult, output: &mut impl Write) -> Result<(), SetupFailure> {
     writeln_checked(output, &format!("\n{BLOCK_RULE}"))?;
-    for block in blocks_to_append(result) {
+    for block in result.toml_blocks() {
         writeln_checked(output, &block)?;
     }
     writeln_checked(output, BLOCK_RULE)?;
