@@ -1,10 +1,14 @@
 pub mod app_paths;
+pub mod archive_tools;
 pub mod child_environment;
 pub mod concurrency_gate;
 pub mod config;
 pub mod config_appender;
+pub mod curl_release_source;
 pub mod default_files;
+pub mod external_tool;
 pub mod git_plugin_fetcher;
+pub mod installation_probe;
 pub mod llm_cli;
 pub mod notifiers;
 pub mod plugin_protocol;
