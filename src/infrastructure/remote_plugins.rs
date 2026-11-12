@@ -2,6 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 use super::plugins_installer::{
     install_plugin_directory, is_copyable_file, is_plain_name, Overwrite, PluginOutcome,
     PluginsError,
@@ -12,17 +15,29 @@ use crate::domain::plugin_package::{GitHubSource, PluginPackageError, PluginVers
 
 #[derive(Debug, Error)]
 pub enum RemotePluginError {
-    #[error(transparent)]
     Fetch(#[from] PluginFetchError),
-    #[error(transparent)]
     Package(#[from] PluginPackageError),
-    #[error(transparent)]
     Install(#[from] PluginsError),
-    #[error("pacote de plugin inválido: {0}")]
     InvalidPackage(String),
-    #[error("{path}: {reason}")]
     Io { path: String, reason: String },
 }
+
+impl LocalizedMessage for RemotePluginError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::Fetch(error) => error.to_string(),
+            Self::Package(error) => error.message(language),
+            Self::Install(error) => error.message(language),
+            Self::InvalidPackage(detail) => language.pick(
+                format!("invalid plugin package: {detail}"),
+                format!("pacote de plugin inválido: {detail}"),
+            ),
+            Self::Io { path, reason } => format!("{path}: {reason}"),
+        }
+    }
+}
+
+display_in_portuguese!(RemotePluginError);
 
 impl RemotePluginError {
     fn io(path: &Path) -> impl FnOnce(std::io::Error) -> Self + '_ {

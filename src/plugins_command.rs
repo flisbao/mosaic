@@ -1,5 +1,7 @@
 use crate::remote_plugins_command::{execute_remote_install, RemoteInstallOptions};
 use mosaic::application::plugin_catalog::{resolve_plugin_source, OFFICIAL_PLUGINS};
+use mosaic::display_in_portuguese;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::domain::plugin_package::GitHubSource;
 use mosaic::infrastructure::git_plugin_fetcher::GitPluginFetcher;
 use mosaic::infrastructure::stream_prompter::StreamPrompter;
@@ -19,7 +21,6 @@ use crate::plugin_setup_command;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
-const PLUGINS_USAGE: &str = "uso: mosaic plugins install owner/repo[/subdir] | NOME... [--yes] [--to DIR] [--force] [--no-skill] [--skills-dir DIR] | mosaic plugins install --from DIR [NOME...] | mosaic plugins list [--from DIR] | mosaic plugins setup NOME [--config-dir DIR] [--advanced] [--print]\nexemplo: mosaic plugins install flisbao/mosaic/plugins/jira\npacote antigo: mosaic plugins install --from /usr/share/mosaic/plugins";
 const INSTALL_SUBCOMMAND: &str = "install";
 const LIST_SUBCOMMAND: &str = "list";
 const SETUP_SUBCOMMAND: &str = "setup";
@@ -36,19 +37,48 @@ const END_OF_FLAGS: &str = "--";
 const YES_FLAG: &str = "--yes";
 const INSTALLED_PLUGINS_FOLDER: &str = "plugins";
 
+fn plugins_usage(language: Language) -> &'static str {
+    language.pick(
+        "usage: mosaic plugins install owner/repo[/subdir] | NAME... [--yes] [--to DIR] [--force] [--no-skill] [--skills-dir DIR] | mosaic plugins install --from DIR [NAME...] | mosaic plugins list [--from DIR] | mosaic plugins setup NAME [--config-dir DIR] [--advanced] [--print]\nexample: mosaic plugins install flisbao/mosaic/plugins/jira\nold package: mosaic plugins install --from /usr/share/mosaic/plugins",
+        "uso: mosaic plugins install owner/repo[/subdir] | NOME... [--yes] [--to DIR] [--force] [--no-skill] [--skills-dir DIR] | mosaic plugins install --from DIR [NOME...] | mosaic plugins list [--from DIR] | mosaic plugins setup NOME [--config-dir DIR] [--advanced] [--print]\nexemplo: mosaic plugins install flisbao/mosaic/plugins/jira\npacote antigo: mosaic plugins install --from /usr/share/mosaic/plugins",
+    )
+}
+
 #[derive(Debug, Error, PartialEq)]
 enum PluginsUsageError {
-    #[error("{PLUGINS_USAGE}")]
     UnknownSubcommand,
-    #[error("{0} precisa de DIRETORIO\n{PLUGINS_USAGE}")]
     FlagWithoutValue(&'static str),
-    #[error("argumento desconhecido: {0}\n{PLUGINS_USAGE}")]
     UnknownFlag(String),
-    #[error("não foi possível descobrir a pasta de configuração; use {TO_FLAG}\n{PLUGINS_USAGE}")]
     NoConfigDirectory,
-    #[error("nome de plugin inválido ou fontes incompatíveis; use uma referência owner/repo[/subdir], atalhos oficiais, ou --from DIR\n{PLUGINS_USAGE}")]
     InvalidSources,
 }
+
+impl LocalizedMessage for PluginsUsageError {
+    fn message(&self, language: Language) -> String {
+        let usage = plugins_usage(language);
+        match self {
+            Self::UnknownSubcommand => usage.to_string(),
+            Self::FlagWithoutValue(flag) => language.pick(
+                format!("{flag} needs DIRECTORY\n{usage}"),
+                format!("{flag} precisa de DIRETORIO\n{usage}"),
+            ),
+            Self::UnknownFlag(flag) => language.pick(
+                format!("unknown argument: {flag}\n{usage}"),
+                format!("argumento desconhecido: {flag}\n{usage}"),
+            ),
+            Self::NoConfigDirectory => language.pick(
+                format!("could not find the configuration folder; use {TO_FLAG}\n{usage}"),
+                format!("não foi possível descobrir a pasta de configuração; use {TO_FLAG}\n{usage}"),
+            ),
+            Self::InvalidSources => language.pick(
+                format!("invalid plugin name or incompatible sources; use an owner/repo[/subdir] reference, official shortcuts, or --from DIR\n{usage}"),
+                format!("nome de plugin inválido ou fontes incompatíveis; use uma referência owner/repo[/subdir], atalhos oficiais, ou --from DIR\n{usage}"),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(PluginsUsageError);
 
 #[derive(Debug, PartialEq)]
 enum SkillLinking {
@@ -183,51 +213,53 @@ fn default_target() -> Result<PathBuf, PluginsUsageError> {
 }
 
 pub fn run(arguments: &[String]) -> ExitCode {
+    let language = Language::detect_from_environment();
     match arguments.split_first() {
-        Some((subcommand, rest)) if subcommand == INSTALL_SUBCOMMAND => run_install(rest),
-        Some((subcommand, rest)) if subcommand == LIST_SUBCOMMAND => run_list(rest),
+        Some((subcommand, rest)) if subcommand == INSTALL_SUBCOMMAND => run_install(rest, language),
+        Some((subcommand, rest)) if subcommand == LIST_SUBCOMMAND => run_list(rest, language),
         Some((subcommand, rest)) if subcommand == SETUP_SUBCOMMAND => {
             plugin_setup_command::run(rest)
         }
-        _ => usage_failure(&PluginsUsageError::UnknownSubcommand),
+        _ => usage_failure(&PluginsUsageError::UnknownSubcommand, language),
     }
 }
 
-fn usage_failure(error: &PluginsUsageError) -> ExitCode {
-    eprintln!("{error}");
+fn usage_failure(error: &PluginsUsageError, language: Language) -> ExitCode {
+    eprintln!("{}", error.message(language));
     ExitCode::from(EXIT_CODE_USAGE)
 }
 
-fn run_install(arguments: &[String]) -> ExitCode {
+fn run_install(arguments: &[String], language: Language) -> ExitCode {
     let invocation = match parse_install_arguments(arguments) {
         Ok(invocation) => invocation,
-        Err(error) => return usage_failure(&error),
+        Err(error) => return usage_failure(&error, language),
     };
     match &invocation.source {
         InstallSource::Local { directory, names } => {
-            run_local_install(&invocation, directory, names)
+            run_local_install(&invocation, directory, names, language)
         }
         InstallSource::Remote(sources) => {
             let options = RemoteInstallOptions {
                 target: invocation.target.clone(),
                 overwrite: invocation.overwrite,
                 assume_yes: invocation.assume_yes,
+                language,
             };
             let mut prompter = StreamPrompter::new(io::stdin().lock(), io::stdout());
             match execute_remote_install(
                 sources,
                 &options,
-                &GitPluginFetcher::new(),
+                &GitPluginFetcher::new().with_language(language),
                 &mut prompter,
                 &mut io::stdout(),
             ) {
                 Ok(outcomes) => {
-                    link_skills(&invocation, &outcomes);
+                    link_skills(&invocation, &outcomes, language);
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    link_skills(&invocation, error.completed());
-                    eprintln!("mosaic: {}", error.diagnostic());
+                    link_skills(&invocation, error.completed(), language);
+                    eprintln!("mosaic: {}", error.diagnostic(language));
                     ExitCode::from(EXIT_CODE_FAILURE)
                 }
             }
@@ -239,6 +271,7 @@ fn run_local_install(
     invocation: &InstallInvocation,
     directory: &Path,
     names: &[String],
+    language: Language,
 ) -> ExitCode {
     let mut outcomes = Vec::new();
     let result = install_plugins(
@@ -247,25 +280,32 @@ fn run_local_install(
         names,
         invocation.overwrite,
         |outcome| {
-            report_outcome(&outcome);
+            report_outcome(&outcome, language);
             outcomes.push(outcome);
         },
     );
-    link_skills(invocation, &outcomes);
+    link_skills(invocation, &outcomes, language);
     match result {
         Ok(()) => {
-            println!("{}", summary_line(&outcomes, &invocation.target));
+            println!("{}", summary_line(&outcomes, &invocation.target, language));
             ExitCode::SUCCESS
         }
         Err(PluginsError::InvalidName(name)) => {
-            eprintln!("mosaic: nome de plugin inválido: {name}\n{PLUGINS_USAGE}");
+            eprintln!(
+                "mosaic: {}\n{}",
+                language.pick(
+                    format!("invalid plugin name: {name}"),
+                    format!("nome de plugin inválido: {name}"),
+                ),
+                plugins_usage(language)
+            );
             ExitCode::from(EXIT_CODE_USAGE)
         }
-        Err(error) => failure(&error),
+        Err(error) => failure(&error, language),
     }
 }
 
-fn link_skills(invocation: &InstallInvocation, outcomes: &[PluginOutcome]) {
+fn link_skills(invocation: &InstallInvocation, outcomes: &[PluginOutcome], language: Language) {
     let skills_directory = match &invocation.skill_linking {
         SkillLinking::Disabled => return,
         SkillLinking::Into(directory) => directory.clone(),
@@ -285,19 +325,55 @@ fn link_skills(invocation: &InstallInvocation, outcomes: &[PluginOutcome]) {
         let plugin_directory = match fs::canonicalize(&plugin_directory) {
             Ok(directory) => directory,
             Err(error) => {
-                eprintln!("aviso: não consegui resolver a pasta da skill de {name}: {error}");
+                eprintln!(
+                    "{}",
+                    language.pick(
+                        format!("warning: could not resolve the skill folder of {name}: {error}"),
+                        format!("aviso: não consegui resolver a pasta da skill de {name}: {error}"),
+                    )
+                );
                 continue;
             }
         };
         let skill_name = format!("{SKILL_NAME_PREFIX}{name}");
         match link_skill_directory(&plugin_directory, &skills_directory, &skill_name) {
-            Ok(SkillOutcome::Linked(skill)) => println!("skill instalada: {skill}"),
-            Ok(SkillOutcome::AlreadyLinked(skill)) => println!("skill já instalada: {skill}"),
-            Ok(SkillOutcome::Conflict(skill)) => eprintln!(
-                "aviso: {} já existe e não é a skill deste plugin; remova-a para instalar",
-                skills_directory.join(skill).display()
+            Ok(SkillOutcome::Linked(skill)) => println!(
+                "{}",
+                language.pick(
+                    format!("skill installed: {skill}"),
+                    format!("skill instalada: {skill}")
+                )
             ),
-            Err(error) => eprintln!("aviso: não instalei a skill de {name}: {error}"),
+            Ok(SkillOutcome::AlreadyLinked(skill)) => println!(
+                "{}",
+                language.pick(
+                    format!("skill already installed: {skill}"),
+                    format!("skill já instalada: {skill}")
+                )
+            ),
+            Ok(SkillOutcome::Conflict(skill)) => {
+                let path = skills_directory.join(skill).display().to_string();
+                eprintln!(
+                    "{}",
+                    language.pick(
+                        format!("warning: {path} already exists and is not this plugin's skill; remove it to install"),
+                        format!("aviso: {path} já existe e não é a skill deste plugin; remova-a para instalar"),
+                    )
+                );
+            }
+            Err(error) => eprintln!(
+                "{}",
+                language.pick(
+                    format!(
+                        "warning: could not install the skill of {name}: {}",
+                        error.message(language)
+                    ),
+                    format!(
+                        "aviso: não instalei a skill de {name}: {}",
+                        error.message(language)
+                    ),
+                )
+            ),
         }
     }
 }
@@ -310,55 +386,79 @@ fn outcome_name(outcome: &PluginOutcome) -> &str {
     }
 }
 
-fn run_list(arguments: &[String]) -> ExitCode {
+fn run_list(arguments: &[String], language: Language) -> ExitCode {
     let source = match parse_list_arguments(arguments) {
         Ok(Some(source)) => source,
         Ok(None) => {
             OFFICIAL_PLUGINS.iter().for_each(|name| println!("{name}"));
             return ExitCode::SUCCESS;
         }
-        Err(error) => return usage_failure(&error),
+        Err(error) => return usage_failure(&error, language),
     };
     match available_plugins(&source) {
         Ok(names) => {
             names.iter().for_each(|name| println!("{name}"));
             ExitCode::SUCCESS
         }
-        Err(error) => failure(&error),
+        Err(error) => failure(&error, language),
     }
 }
 
-fn failure(error: &PluginsError) -> ExitCode {
-    eprintln!("mosaic: {error}");
+fn failure(error: &PluginsError, language: Language) -> ExitCode {
+    eprintln!("mosaic: {}", error.message(language));
     ExitCode::from(EXIT_CODE_FAILURE)
 }
 
-fn report_outcome(outcome: &PluginOutcome) {
+fn report_outcome(outcome: &PluginOutcome, language: Language) {
     match outcome {
-        PluginOutcome::Installed(name) => println!("instalado: {name}"),
-        PluginOutcome::Replaced(name) => println!("substituído: {name}"),
-        PluginOutcome::AlreadyInstalled(name) => {
-            println!("já instalado: {name} (use {FORCE_FLAG} para substituir)")
+        PluginOutcome::Installed(name) => {
+            println!(
+                "{}",
+                language.pick(format!("installed: {name}"), format!("instalado: {name}"))
+            )
         }
+        PluginOutcome::Replaced(name) => {
+            println!(
+                "{}",
+                language.pick(format!("replaced: {name}"), format!("substituído: {name}"))
+            )
+        }
+        PluginOutcome::AlreadyInstalled(name) => println!(
+            "{}",
+            language.pick(
+                format!("already installed: {name} (use {FORCE_FLAG} to replace)"),
+                format!("já instalado: {name} (use {FORCE_FLAG} para substituir)"),
+            )
+        ),
     }
 }
 
-fn summary_line(outcomes: &[PluginOutcome], target: &Path) -> String {
+fn summary_line(outcomes: &[PluginOutcome], target: &Path, language: Language) -> String {
     let written = outcomes
         .iter()
         .filter(|outcome| !matches!(outcome, PluginOutcome::AlreadyInstalled(_)))
         .count();
     let directory = target.display();
     match written {
-        0 => format!("nenhum plugin instalado em {directory}"),
-        1 => format!("1 plugin instalado em {directory}"),
-        count => format!("{count} plugins instalados em {directory}"),
+        0 => language.pick(
+            format!("no plugin installed in {directory}"),
+            format!("nenhum plugin instalado em {directory}"),
+        ),
+        1 => language.pick(
+            format!("1 plugin installed in {directory}"),
+            format!("1 plugin instalado em {directory}"),
+        ),
+        count => language.pick(
+            format!("{count} plugins installed in {directory}"),
+            format!("{count} plugins instalados em {directory}"),
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mosaic::domain::language::Language;
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
@@ -370,15 +470,23 @@ mod tests {
         let installed = |name: &str| PluginOutcome::Installed(name.to_string());
         let kept = PluginOutcome::AlreadyInstalled("jira".to_string());
         assert_eq!(
-            summary_line(&[], target),
+            summary_line(&[], target, Language::BrazilianPortuguese),
             "nenhum plugin instalado em /destino"
         );
         assert_eq!(
-            summary_line(&[kept, installed("github")], target),
+            summary_line(
+                &[kept, installed("github")],
+                target,
+                Language::BrazilianPortuguese
+            ),
             "1 plugin instalado em /destino"
         );
         assert_eq!(
-            summary_line(&[installed("a"), installed("b")], target),
+            summary_line(
+                &[installed("a"), installed("b")],
+                target,
+                Language::BrazilianPortuguese
+            ),
             "2 plugins instalados em /destino"
         );
     }
@@ -475,5 +583,41 @@ mod tests {
             parse_list_arguments(&arguments(&["--from"])).unwrap_err(),
             PluginsUsageError::FlagWithoutValue(FROM_FLAG)
         );
+    }
+}
+
+#[cfg(test)]
+mod english_tests {
+    use super::*;
+
+    #[test]
+    fn the_summary_and_usage_are_translated() {
+        let target = Path::new("/target");
+        let installed = || PluginOutcome::Installed("a".to_string());
+        assert_eq!(
+            summary_line(&[], target, Language::English),
+            "no plugin installed in /target"
+        );
+        assert_eq!(
+            summary_line(&[installed()], target, Language::English),
+            "1 plugin installed in /target"
+        );
+        assert_eq!(
+            summary_line(&[installed(), installed()], target, Language::English),
+            "2 plugins installed in /target"
+        );
+        assert!(plugins_usage(Language::English).starts_with("usage: mosaic plugins install"));
+        assert!(plugins_usage(Language::BrazilianPortuguese).starts_with("uso: mosaic plugins"));
+    }
+
+    #[test]
+    fn usage_errors_are_translated() {
+        let error = PluginsUsageError::UnknownFlag("--x".to_string());
+        assert!(error
+            .message(Language::English)
+            .starts_with("unknown argument: --x\nusage:"));
+        assert!(error
+            .to_string()
+            .starts_with("argumento desconhecido: --x\nuso:"));
     }
 }

@@ -5,46 +5,59 @@ use thiserror::Error;
 
 use crate::confirmation::confirm_default_no;
 use mosaic::application::ports::{PluginFetcher, PromptError, Prompter};
+use mosaic::display_in_portuguese;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::domain::plugin_package::{GitHubSource, PluginPackageError, PluginVersion};
 use mosaic::infrastructure::plugins_installer::{Overwrite, PluginOutcome, PluginsError};
 use mosaic::infrastructure::remote_plugins::{
     install_prepared_plugin, prepare_remote_plugin, RemotePluginError,
 };
 
-const INSTALL_QUESTION: &str = "Plugins são código de terceiros e terão acesso ao seu usuário quando executados. Instalar? [s/N]: ";
-const CANCELLED: &str = "Instalação cancelada; nenhum plugin foi alterado.";
 const MAXIMUM_PACKAGE_DIAGNOSTIC_CHARACTERS: usize = 500;
 
 pub struct RemoteInstallOptions {
     pub target: PathBuf,
     pub overwrite: Overwrite,
     pub assume_yes: bool,
+    pub language: Language,
 }
 
 #[derive(Debug, Error)]
 pub enum RemoteCommandError {
-    #[error(transparent)]
     Prepare(#[from] RemotePluginError),
-    #[error(transparent)]
     Prompt(#[from] PromptError),
-    #[error(transparent)]
     Version(#[from] PluginPackageError),
-    #[error("não consegui escrever na saída: {reason}")]
     Output {
         reason: String,
         completed: Vec<PluginOutcome>,
     },
-    #[error("{source}")]
     Installation {
         completed: Vec<PluginOutcome>,
         source: RemotePluginError,
     },
 }
 
+impl LocalizedMessage for RemoteCommandError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::Prepare(error) => error.message(language),
+            Self::Prompt(error) => error.to_string(),
+            Self::Version(error) => error.message(language),
+            Self::Output { reason, .. } => language.pick(
+                format!("could not write to the output: {reason}"),
+                format!("não consegui escrever na saída: {reason}"),
+            ),
+            Self::Installation { source, .. } => source.message(language),
+        }
+    }
+}
+
+display_in_portuguese!(RemoteCommandError);
+
 impl RemoteCommandError {
-    pub fn diagnostic(&self) -> String {
+    pub fn diagnostic(&self, language: Language) -> String {
         let message: String = self
-            .to_string()
+            .message(language)
             .chars()
             .map(|character| {
                 if character.is_control() {
@@ -79,6 +92,7 @@ pub fn execute_remote_install(
     prompter: &mut impl Prompter,
     output: &mut impl Write,
 ) -> Result<Vec<PluginOutcome>, RemoteCommandError> {
+    let language = options.language;
     let current = PluginVersion::parse(env!("CARGO_PKG_VERSION"))?;
     let candidates = sources
         .iter()
@@ -88,39 +102,52 @@ pub fn execute_remote_install(
     for candidate in &candidates {
         let name = &candidate.manifest.setup.plugin;
         if !names.insert(name) {
-            return Err(RemotePluginError::InvalidPackage(format!(
-                "mais de uma origem declara o plugin '{name}'"
+            return Err(RemotePluginError::InvalidPackage(language.pick(
+                format!("more than one source declares the plugin '{name}'"),
+                format!("mais de uma origem declara o plugin '{name}'"),
             ))
             .into());
         }
     }
     for candidate in &candidates {
         let name = &candidate.manifest.setup.plugin;
-        writeln!(
-            output,
-            "origem: {}; plugin: {name}; versão: {}; Mosaic mínimo: {}; destino: {}",
-            candidate.source.reference(),
-            candidate.manifest.metadata.version,
-            candidate.manifest.metadata.min_mosaic_version,
-            options.target.join(name).display()
-        )
-        .map_err(|error| RemoteCommandError::Output {
+        let summary = language.pick(
+            format!(
+                "source: {}; plugin: {name}; version: {}; minimum Mosaic: {}; destination: {}",
+                candidate.source.reference(),
+                candidate.manifest.metadata.version,
+                candidate.manifest.metadata.min_mosaic_version,
+                options.target.join(name).display()
+            ),
+            format!(
+                "origem: {}; plugin: {name}; versão: {}; Mosaic mínimo: {}; destino: {}",
+                candidate.source.reference(),
+                candidate.manifest.metadata.version,
+                candidate.manifest.metadata.min_mosaic_version,
+                options.target.join(name).display()
+            ),
+        );
+        writeln!(output, "{summary}").map_err(|error| RemoteCommandError::Output {
             reason: error.to_string(),
             completed: Vec::new(),
         })?;
     }
     if !options.assume_yes {
-        let approved = match confirm_default_no(
-            prompter,
-            INSTALL_QUESTION,
-            mosaic::domain::language::Language::detect_from_environment(),
-        ) {
+        let question = language.pick(
+            "Plugins are third-party code and will have access to your user when run. Install? [y/N]: ",
+            "Plugins são código de terceiros e terão acesso ao seu usuário quando executados. Instalar? [s/N]: ",
+        );
+        let approved = match confirm_default_no(prompter, question, language) {
             Ok(approved) => approved,
             Err(PromptError::EndOfInput) => false,
             Err(error) => return Err(error.into()),
         };
         if !approved {
-            writeln!(output, "{CANCELLED}").map_err(|error| RemoteCommandError::Output {
+            let cancelled = language.pick(
+                "Installation cancelled; no plugin was changed.",
+                "Instalação cancelada; nenhum plugin foi alterado.",
+            );
+            writeln!(output, "{cancelled}").map_err(|error| RemoteCommandError::Output {
                 reason: error.to_string(),
                 completed: Vec::new(),
             })?;
@@ -135,11 +162,16 @@ pub fn execute_remote_install(
         };
         let name = &candidate.manifest.setup.plugin;
         let message = match &outcome {
-            PluginOutcome::Installed(_) => format!("instalado: {name}"),
-            PluginOutcome::Replaced(_) => format!("substituído: {name}"),
-            PluginOutcome::AlreadyInstalled(_) => {
-                format!("já instalado: {name} (use --force para substituir)")
+            PluginOutcome::Installed(_) => {
+                language.pick(format!("installed: {name}"), format!("instalado: {name}"))
             }
+            PluginOutcome::Replaced(_) => {
+                language.pick(format!("replaced: {name}"), format!("substituído: {name}"))
+            }
+            PluginOutcome::AlreadyInstalled(_) => language.pick(
+                format!("already installed: {name} (use --force to replace)"),
+                format!("já instalado: {name} (use --force para substituir)"),
+            ),
         };
         let written = !matches!(outcome, PluginOutcome::AlreadyInstalled(_));
         completed.push(outcome);
@@ -148,11 +180,27 @@ pub fn execute_remote_install(
             if written {
                 writeln!(
                     output,
-                    "versão do plugin {name}: {}",
-                    candidate.manifest.metadata.version
+                    "{}",
+                    language.pick(
+                        format!(
+                            "version of plugin {name}: {}",
+                            candidate.manifest.metadata.version
+                        ),
+                        format!(
+                            "versão do plugin {name}: {}",
+                            candidate.manifest.metadata.version
+                        ),
+                    )
                 )?;
             }
-            writeln!(output, "Para configurar: mosaic plugins setup {name}")
+            writeln!(
+                output,
+                "{}",
+                language.pick(
+                    format!("To configure: mosaic plugins setup {name}"),
+                    format!("Para configurar: mosaic plugins setup {name}"),
+                )
+            )
         })();
         if let Err(error) = result {
             return Err(RemoteCommandError::Output {
@@ -172,6 +220,7 @@ mod fixtures;
 mod tests {
     use super::*;
     use mosaic::application::ports::PluginFetchError;
+    use mosaic::domain::language::Language;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
@@ -224,6 +273,7 @@ mod tests {
             target: target.path().into(),
             overwrite: Overwrite::Keep,
             assume_yes: true,
+            language: Language::BrazilianPortuguese,
         };
         let sources: Vec<_> = ["github", "gitlab"]
             .into_iter()
@@ -266,6 +316,7 @@ mod tests {
             target: target.path().into(),
             overwrite: Overwrite::Keep,
             assume_yes: true,
+            language: Language::BrazilianPortuguese,
         };
         let error = execute_remote_install(
             &[GitHubSource::parse("owner/repo").unwrap()],

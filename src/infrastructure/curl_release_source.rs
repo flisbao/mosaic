@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::application::ports::{ReleaseError, ReleaseSource};
+use crate::domain::language::Language;
 use crate::domain::release::{version_from_release_location, ReleaseVersion};
 use crate::infrastructure::external_tool::{external_command, release_error};
 use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
@@ -28,6 +29,7 @@ pub struct CurlReleaseSource {
     base: String,
     restrict_to_https: bool,
     cancel: CancelFlag,
+    language: Language,
 }
 
 impl CurlReleaseSource {
@@ -41,7 +43,13 @@ impl CurlReleaseSource {
                 .to_string(),
             restrict_to_https,
             cancel: CancelFlag::default(),
+            language: Language::default(),
         }
+    }
+
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
     }
 
     pub fn base(&self) -> &str {
@@ -101,7 +109,7 @@ impl CurlReleaseSource {
             maximum_output_bytes,
         };
         run_process(command, None, &limits, &self.cancel)
-            .map_err(|error| release_error(CURL_PROGRAM, error))
+            .map_err(|error| release_error(CURL_PROGRAM, error, self.language))
     }
 }
 
@@ -126,7 +134,14 @@ impl ReleaseSource for CurlReleaseSource {
             MAXIMUM_TEXT_BYTES,
         )?;
         version_from_release_location(location.trim()).map_err(|_| {
-            ReleaseError::Failed("não consegui descobrir a versão mais recente".to_string())
+            ReleaseError::Failed(
+                self.language
+                    .pick(
+                        "could not find the latest version",
+                        "não consegui descobrir a versão mais recente",
+                    )
+                    .to_string(),
+            )
         })
     }
 

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::application::ports::{ArchiveExtractor, ChecksumCalculator, ReleaseError};
+use crate::domain::language::Language;
 use crate::domain::release::expected_checksum;
 use crate::infrastructure::external_tool::{external_command, release_error};
 use crate::infrastructure::process::{run_process, CancelFlag, ProcessError, ProcessLimits};
@@ -16,9 +17,16 @@ const SHASUM_ALGORITHM_ARGUMENTS: [&str; 2] = ["-a", "256"];
 const TAR_PROGRAM: &str = "tar";
 
 #[derive(Default)]
-pub struct ShaSumChecksum;
+pub struct ShaSumChecksum {
+    language: Language,
+}
 
 impl ShaSumChecksum {
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
+    }
+
     fn run(program: &str, arguments: &[&str], file: &Path) -> Result<String, ProcessError> {
         let mut command = external_command(OsStr::new(program));
         command.args(arguments).arg("--").arg(file);
@@ -35,22 +43,44 @@ impl ChecksumCalculator for ShaSumChecksum {
         let output = match Self::run(SHA256SUM_PROGRAM, &[], file) {
             Err(error) if error.program_not_found() => {
                 Self::run(SHASUM_PROGRAM, &SHASUM_ALGORITHM_ARGUMENTS, file)
-                    .map_err(|error| release_error(SHASUM_PROGRAM, error))?
+                    .map_err(|error| release_error(SHASUM_PROGRAM, error, self.language))?
             }
-            other => other.map_err(|error| release_error(SHA256SUM_PROGRAM, error))?,
+            other => {
+                other.map_err(|error| release_error(SHA256SUM_PROGRAM, error, self.language))?
+            }
         };
-        expected_checksum(&output)
-            .ok_or_else(|| ReleaseError::Failed("não consegui calcular o SHA-256".to_string()))
+        expected_checksum(&output).ok_or_else(|| {
+            ReleaseError::Failed(
+                self.language
+                    .pick(
+                        "could not compute the SHA-256",
+                        "não consegui calcular o SHA-256",
+                    )
+                    .to_string(),
+            )
+        })
     }
 }
 
 #[derive(Default)]
-pub struct TarExtractor;
+pub struct TarExtractor {
+    language: Language,
+}
+
+impl TarExtractor {
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
+    }
+}
 
 impl ArchiveExtractor for TarExtractor {
     fn extract(&self, archive: &Path, destination: &Path) -> Result<(), ReleaseError> {
         std::fs::create_dir_all(destination).map_err(|error| {
-            ReleaseError::Failed(format!("não consegui criar a pasta: {error}"))
+            ReleaseError::Failed(self.language.pick(
+                format!("could not create the folder: {error}"),
+                format!("não consegui criar a pasta: {error}"),
+            ))
         })?;
         let mut command = external_command(OsStr::new(TAR_PROGRAM));
         command.arg("-xzf").arg(archive).arg("-C").arg(destination);
@@ -60,7 +90,7 @@ impl ArchiveExtractor for TarExtractor {
         };
         run_process(command, None, &limits, &CancelFlag::default())
             .map(|_| ())
-            .map_err(|error| release_error(TAR_PROGRAM, error))
+            .map_err(|error| release_error(TAR_PROGRAM, error, self.language))
     }
 }
 
@@ -76,14 +106,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("abc");
         fs::write(&file, "abc").unwrap();
-        assert_eq!(ShaSumChecksum.sha256(&file).as_deref(), Ok(ABC_SHA256));
+        assert_eq!(
+            ShaSumChecksum::default().sha256(&file).as_deref(),
+            Ok(ABC_SHA256)
+        );
     }
 
     #[test]
     fn a_missing_file_is_an_error_not_a_checksum() {
         let directory = tempfile::tempdir().unwrap();
         assert!(matches!(
-            ShaSumChecksum.sha256(&directory.path().join("missing")),
+            ShaSumChecksum::default().sha256(&directory.path().join("missing")),
             Err(ReleaseError::Failed(_))
         ));
     }
@@ -105,7 +138,9 @@ mod tests {
             .unwrap();
         assert!(status.success());
         let destination = directory.path().join("out");
-        TarExtractor.extract(&archive, &destination).unwrap();
+        TarExtractor::default()
+            .extract(&archive, &destination)
+            .unwrap();
         assert_eq!(
             fs::read_to_string(destination.join("pacote/mosaic")).unwrap(),
             "binario"
@@ -118,7 +153,7 @@ mod tests {
         let archive = directory.path().join("ruim.tar.gz");
         fs::write(&archive, "não é um tarball").unwrap();
         assert!(matches!(
-            TarExtractor.extract(&archive, &directory.path().join("out")),
+            TarExtractor::default().extract(&archive, &directory.path().join("out")),
             Err(ReleaseError::Failed(_))
         ));
     }

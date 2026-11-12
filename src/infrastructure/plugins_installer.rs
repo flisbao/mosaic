@@ -4,27 +4,58 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 const RUNTIME_EXTENSIONS: [&str; 2] = ["py", "js"];
 const SHIPPED_DOCUMENT_NAMES: [&str; 3] = ["README.md", "SKILL.md", "setup.toml"];
 const EXCLUDED_FOLDER_NAMES: [&str; 1] = ["tests"];
 
 #[derive(Debug, Error, PartialEq)]
 pub enum PluginsError {
-    #[error("pasta de plugins não encontrada: {0}")]
     SourceMissing(String),
-    #[error("plugin não encontrado na origem: {0}")]
     UnknownPlugin(String),
-    #[error("nome de plugin inválido: {0}")]
     InvalidName(String),
-    #[error("não foi possível restaurar {destination}: {reason}; backup preservado em {backup}")]
     Restore {
         destination: String,
         backup: String,
         reason: String,
     },
-    #[error("{path}: {reason}")]
-    Io { path: String, reason: String },
+    Io {
+        path: String,
+        reason: String,
+    },
 }
+
+impl LocalizedMessage for PluginsError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::SourceMissing(path) => language.pick(
+                format!("plugins folder not found: {path}"),
+                format!("pasta de plugins não encontrada: {path}"),
+            ),
+            Self::UnknownPlugin(name) => language.pick(
+                format!("plugin not found at the source: {name}"),
+                format!("plugin não encontrado na origem: {name}"),
+            ),
+            Self::InvalidName(name) => language.pick(
+                format!("invalid plugin name: {name}"),
+                format!("nome de plugin inválido: {name}"),
+            ),
+            Self::Restore {
+                destination,
+                backup,
+                reason,
+            } => language.pick(
+                format!("could not restore {destination}: {reason}; backup kept at {backup}"),
+                format!("não foi possível restaurar {destination}: {reason}; backup preservado em {backup}"),
+            ),
+            Self::Io { path, reason } => format!("{path}: {reason}"),
+        }
+    }
+}
+
+display_in_portuguese!(PluginsError);
 
 impl PluginsError {
     fn io(path: &Path) -> impl FnOnce(io::Error) -> PluginsError + '_ {

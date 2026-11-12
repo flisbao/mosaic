@@ -10,9 +10,11 @@ use mosaic::application::ports::{
     Prompter, ReleaseError, ReleaseSource,
 };
 use mosaic::application::update::{
-    check_latest, install_update, plan_update, PlatformIdentity, UpdateError, UpdatePlan,
-    UpdateTools,
+    check_latest, install_update, plan_update, release_error_text, PlatformIdentity, UpdateError,
+    UpdatePlan, UpdateTools,
 };
+use mosaic::display_in_portuguese;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::domain::plugin_package::PluginPackageError;
 use mosaic::domain::release::{
     debian_package_name, InstallMethod, ReleaseAssets, ReleaseTarget, ReleaseVersion, UpdateStatus,
@@ -30,10 +32,7 @@ const EXIT_CODE_FAILURE: u8 = 1;
 const EXIT_CODE_USAGE: u8 = 2;
 const CHECK_FLAG: &str = "--check";
 const YES_FLAG: &str = "--yes";
-const UPDATE_USAGE: &str = "uso: mosaic update [--check] [--yes]\n  --check  só informa se há versão nova\n  --yes    não pergunta antes de trocar o executável";
 const STAGING_PREFIX: &str = ".mosaic-update-";
-const CONFIRMATION_QUESTION: &str = "Atualizar agora? [s/N]: ";
-const CANCELLED_MESSAGE: &str = "Atualização cancelada; nada foi alterado.";
 const CARGO_GIT_URL: &str = "https://github.com/flisbao/mosaic";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -42,11 +41,33 @@ pub struct UpdateOptions {
     pub assume_yes: bool,
 }
 
+pub fn update_usage(language: Language) -> &'static str {
+    language.pick(
+        "usage: mosaic update [--check] [--yes]\n  --check  only reports whether there is a new version\n  --yes    does not ask before replacing the executable",
+        "uso: mosaic update [--check] [--yes]\n  --check  só informa se há versão nova\n  --yes    não pergunta antes de trocar o executável",
+    )
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum UpdateUsageError {
-    #[error("argumento desconhecido: {0}\n{UPDATE_USAGE}")]
     UnknownArgument(String),
 }
+
+impl LocalizedMessage for UpdateUsageError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::UnknownArgument(argument) => language.pick(
+                format!("unknown argument: {argument}\n{}", update_usage(language)),
+                format!(
+                    "argumento desconhecido: {argument}\n{}",
+                    update_usage(language)
+                ),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(UpdateUsageError);
 
 pub fn parse_arguments(arguments: &[String]) -> Result<UpdateOptions, UpdateUsageError> {
     let mut options = UpdateOptions::default();
@@ -62,34 +83,54 @@ pub fn parse_arguments(arguments: &[String]) -> Result<UpdateOptions, UpdateUsag
 
 #[derive(Debug, Error)]
 pub enum UpdateCommandError {
-    #[error(transparent)]
     Version(#[from] PluginPackageError),
-    #[error(transparent)]
     Update(#[from] UpdateError),
-    #[error(transparent)]
     Release(#[from] ReleaseError),
-    #[error(transparent)]
     Prompt(#[from] PromptError),
-    #[error("não consegui escrever na saída: {0}")]
     Output(String),
-    #[error("não consegui preparar uma pasta temporária ao lado do executável: {0}")]
     Staging(String),
 }
 
-impl UpdateCommandError {
-    pub fn diagnostic(&self) -> String {
+impl LocalizedMessage for UpdateCommandError {
+    fn message(&self, language: Language) -> String {
         match self {
-            Self::Update(UpdateError::Release(ReleaseError::NotWritable(reason)))
-            | Self::Release(ReleaseError::NotWritable(reason)) => not_writable_text(reason),
-            Self::Staging(reason) => not_writable_text(reason),
-            other => other.to_string(),
+            Self::Version(error) => error.message(language),
+            Self::Update(error) => error.message(language),
+            Self::Release(error) => release_error_text(error, language),
+            Self::Prompt(error) => error.to_string(),
+            Self::Output(reason) => language.pick(
+                format!("could not write to the output: {reason}"),
+                format!("não consegui escrever na saída: {reason}"),
+            ),
+            Self::Staging(reason) => language.pick(
+                format!("could not prepare a temporary folder next to the executable: {reason}"),
+                format!(
+                    "não consegui preparar uma pasta temporária ao lado do executável: {reason}"
+                ),
+            ),
         }
     }
 }
 
-fn not_writable_text(reason: &str) -> String {
-    format!(
-        "{reason}. O mosaic não usa sudo: instale de novo numa pasta sua com MOSAIC_INSTALL_DIR (veja install.sh) ou ajuste as permissões da pasta do executável"
+display_in_portuguese!(UpdateCommandError);
+
+impl UpdateCommandError {
+    pub fn diagnostic(&self, language: Language) -> String {
+        match self {
+            Self::Update(UpdateError::Release(ReleaseError::NotWritable(reason)))
+            | Self::Release(ReleaseError::NotWritable(reason)) => {
+                not_writable_text(reason, language)
+            }
+            Self::Staging(reason) => not_writable_text(reason, language),
+            other => other.message(language),
+        }
+    }
+}
+
+fn not_writable_text(reason: &str, language: Language) -> String {
+    language.pick(
+        format!("{reason}. mosaic does not use sudo: install again in a folder of yours with MOSAIC_INSTALL_DIR (see install.sh) or adjust the permissions of the executable's folder"),
+        format!("{reason}. O mosaic não usa sudo: instale de novo numa pasta sua com MOSAIC_INSTALL_DIR (veja install.sh) ou ajuste as permissões da pasta do executável"),
     )
 }
 
@@ -101,6 +142,7 @@ pub struct UpdateServices<'a> {
     pub replacer: &'a dyn ExecutableReplacer,
     pub platform: PlatformIdentity<'a>,
     pub download_base: &'a str,
+    pub language: Language,
 }
 
 fn write_line(output: &mut impl Write, text: &str) -> Result<(), UpdateCommandError> {
@@ -111,20 +153,27 @@ pub fn execute_check(
     source: &dyn ReleaseSource,
     current: &ReleaseVersion,
     output: &mut impl Write,
+    language: Language,
 ) -> Result<(), UpdateCommandError> {
     let text = match check_latest(source, current)? {
-        UpdateStatus::Available { latest } => available_text(&latest, current),
-        UpdateStatus::UpToDate => up_to_date_text(current),
+        UpdateStatus::Available { latest } => available_text(&latest, current, language),
+        UpdateStatus::UpToDate => up_to_date_text(current, language),
     };
     write_line(output, &text)
 }
 
-fn available_text(latest: &ReleaseVersion, current: &ReleaseVersion) -> String {
-    format!("mosaic {latest} disponível (instalada: {current})")
+fn available_text(latest: &ReleaseVersion, current: &ReleaseVersion, language: Language) -> String {
+    language.pick(
+        format!("mosaic {latest} available (installed: {current})"),
+        format!("mosaic {latest} disponível (instalada: {current})"),
+    )
 }
 
-fn up_to_date_text(current: &ReleaseVersion) -> String {
-    format!("mosaic {current} é a versão mais recente")
+fn up_to_date_text(current: &ReleaseVersion, language: Language) -> String {
+    language.pick(
+        format!("mosaic {current} is the latest version"),
+        format!("mosaic {current} é a versão mais recente"),
+    )
 }
 
 pub fn execute_update(
@@ -134,9 +183,10 @@ pub fn execute_update(
     prompter: &mut impl Prompter,
     output: &mut impl Write,
 ) -> Result<(), UpdateCommandError> {
+    let language = services.language;
     let plan = plan_update(services.source, services.probe, current, &services.platform)?;
     match plan {
-        UpdatePlan::UpToDate => write_line(output, &up_to_date_text(current)),
+        UpdatePlan::UpToDate => write_line(output, &up_to_date_text(current, language)),
         UpdatePlan::Guidance { method, latest } => {
             let text = guidance_text(method, &latest, current, services);
             write_line(output, &text)
@@ -146,29 +196,42 @@ pub fn execute_update(
             executable,
             target,
         } => {
-            write_line(output, &available_text(&latest, current))?;
-            write_line(output, &format!("caminho: {}", executable.display()))?;
-            if !options.assume_yes && !confirmed(prompter)? {
-                return write_line(output, CANCELLED_MESSAGE);
+            write_line(output, &available_text(&latest, current, language))?;
+            write_line(
+                output,
+                &format!(
+                    "{}: {}",
+                    language.pick("path", "caminho"),
+                    executable.display()
+                ),
+            )?;
+            if !options.assume_yes && !confirmed(prompter, language)? {
+                return write_line(
+                    output,
+                    language.pick(
+                        "Update cancelled; nothing was changed.",
+                        "Atualização cancelada; nada foi alterado.",
+                    ),
+                );
             }
             replace_executable(services, &latest, target, &executable)?;
             write_line(
                 output,
-                &format!(
-                    "mosaic atualizado para {latest} em {}",
-                    executable.display()
+                &language.pick(
+                    format!("mosaic updated to {latest} at {}", executable.display()),
+                    format!(
+                        "mosaic atualizado para {latest} em {}",
+                        executable.display()
+                    ),
                 ),
             )
         }
     }
 }
 
-fn confirmed(prompter: &mut impl Prompter) -> Result<bool, UpdateCommandError> {
-    match confirm_default_no(
-        prompter,
-        CONFIRMATION_QUESTION,
-        mosaic::domain::language::Language::detect_from_environment(),
-    ) {
+fn confirmed(prompter: &mut impl Prompter, language: Language) -> Result<bool, UpdateCommandError> {
+    let question = language.pick("Update now? [y/N]: ", "Atualizar agora? [s/N]: ");
+    match confirm_default_no(prompter, question, language) {
         Ok(answer) => Ok(answer),
         Err(PromptError::EndOfInput) => Ok(false),
         Err(error) => Err(error.into()),
@@ -206,7 +269,8 @@ fn guidance_text(
     current: &ReleaseVersion,
     services: &UpdateServices<'_>,
 ) -> String {
-    let headline = available_text(latest, current);
+    let language = services.language;
+    let headline = available_text(latest, current, language);
     match method {
         InstallMethod::DebianPackage => {
             let has_package =
@@ -215,62 +279,81 @@ fn guidance_text(
             let release_page = format!("{}/tag/v{latest}", services.download_base);
             if has_package {
                 let package = debian_package_name(latest);
-                format!(
-                    "{headline}\nInstalado pelo pacote .deb; o mosaic não troca arquivos do sistema.\nBaixe: {}/download/v{latest}/{package}\nInstale: sudo apt install ./{package}",
-                    services.download_base
+                language.pick(
+                    format!(
+                        "{headline}\nInstalled from the .deb package; mosaic does not replace system files.\nDownload: {}/download/v{latest}/{package}\nInstall: sudo apt install ./{package}",
+                        services.download_base
+                    ),
+                    format!(
+                        "{headline}\nInstalado pelo pacote .deb; o mosaic não troca arquivos do sistema.\nBaixe: {}/download/v{latest}/{package}\nInstale: sudo apt install ./{package}",
+                        services.download_base
+                    ),
                 )
             } else {
-                format!(
-                    "{headline}\nInstalado por um pacote do sistema; o mosaic não troca arquivos do sistema.\nBaixe a versão nova em: {release_page}"
+                language.pick(
+                    format!("{headline}\nInstalled from a system package; mosaic does not replace system files.\nDownload the new version at: {release_page}"),
+                    format!("{headline}\nInstalado por um pacote do sistema; o mosaic não troca arquivos do sistema.\nBaixe a versão nova em: {release_page}"),
                 )
             }
         }
         InstallMethod::Homebrew => {
-            format!("{headline}\nInstalado pelo Homebrew. Rode: brew upgrade mosaic")
+            language.pick(
+                format!("{headline}\nInstalled with Homebrew. Run: brew upgrade mosaic"),
+                format!("{headline}\nInstalado pelo Homebrew. Rode: brew upgrade mosaic"),
+            )
         }
-        InstallMethod::Cargo => format!(
-            "{headline}\nInstalado com cargo ou compilado do repositório. Atualize com: cargo install --path . (dentro do checkout) ou cargo install --git {CARGO_GIT_URL}"
+        InstallMethod::Cargo => language.pick(
+            format!("{headline}\nInstalled with cargo or built from the repository. Update with: cargo install --path . (inside the checkout) or cargo install --git {CARGO_GIT_URL}"),
+            format!("{headline}\nInstalado com cargo ou compilado do repositório. Atualize com: cargo install --path . (dentro do checkout) ou cargo install --git {CARGO_GIT_URL}"),
         ),
         InstallMethod::SelfManaged => headline,
     }
 }
 
 pub fn run(arguments: &[String]) -> ExitCode {
+    let language = Language::detect_from_environment();
     let options = match parse_arguments(arguments) {
         Ok(options) => options,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(language));
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
-    match run_with_system_services(options) {
+    match run_with_system_services(options, language) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("mosaic: {}", error.diagnostic());
+            eprintln!("mosaic: {}", error.diagnostic(language));
             ExitCode::from(EXIT_CODE_FAILURE)
         }
     }
 }
 
-fn run_with_system_services(options: UpdateOptions) -> Result<(), UpdateCommandError> {
+fn run_with_system_services(
+    options: UpdateOptions,
+    language: Language,
+) -> Result<(), UpdateCommandError> {
     let current = ReleaseVersion::parse(env!("CARGO_PKG_VERSION"))?;
-    let source = CurlReleaseSource::new(download_base_from_environment());
+    let source = CurlReleaseSource::new(download_base_from_environment()).with_language(language);
     let mut output = io::stdout();
     if options.check_only {
-        return execute_check(&source, &current, &mut output);
+        return execute_check(&source, &current, &mut output, language);
     }
-    let probe = SystemInstallationProbe;
+    let probe = SystemInstallationProbe::default().with_language(language);
+    let checksums = ShaSumChecksum::default().with_language(language);
+    let extractor = TarExtractor::default().with_language(language);
+    let replacer = AtomicExecutableReplacer::default().with_language(language);
     let services = UpdateServices {
         source: &source,
         probe: &probe,
-        checksums: &ShaSumChecksum,
-        extractor: &TarExtractor,
-        replacer: &AtomicExecutableReplacer,
+        checksums: &checksums,
+        extractor: &extractor,
+        replacer: &replacer,
         platform: PlatformIdentity {
             operating_system: std::env::consts::OS,
             architecture: std::env::consts::ARCH,
         },
         download_base: source.base(),
+        language,
     };
     let mut prompter = StreamPrompter::new(io::stdin().lock(), io::stdout());
     execute_update(&services, &current, options, &mut prompter, &mut output)
@@ -279,6 +362,7 @@ fn run_with_system_services(options: UpdateOptions) -> Result<(), UpdateCommandE
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use mosaic::domain::language::Language;
     use std::cell::RefCell;
     use std::fs;
     use std::path::PathBuf;
@@ -422,6 +506,7 @@ mod tests {
                     architecture: "x86_64",
                 },
                 download_base: "https://example.test/releases",
+                language: Language::BrazilianPortuguese,
             };
             let mut output = Vec::new();
             let result = execute_update(
@@ -464,6 +549,7 @@ mod tests {
             &FakeSource(Ok(version("0.0.11"))),
             &version("0.0.10"),
             &mut output,
+            Language::BrazilianPortuguese,
         )
         .unwrap();
         assert_eq!(
@@ -475,6 +561,7 @@ mod tests {
             &FakeSource(Ok(version("0.0.10"))),
             &version("0.0.10"),
             &mut output,
+            Language::BrazilianPortuguese,
         )
         .unwrap();
         assert_eq!(
@@ -489,9 +576,12 @@ mod tests {
             &FakeSource(Err(ReleaseError::Failed("sem rede".into()))),
             &version("0.0.10"),
             &mut Vec::new(),
+            Language::BrazilianPortuguese,
         )
         .unwrap_err();
-        assert!(error.diagnostic().contains("sem rede"));
+        assert!(error
+            .diagnostic(Language::BrazilianPortuguese)
+            .contains("sem rede"));
     }
 
     #[test]
@@ -568,7 +658,10 @@ mod tests {
         let mut scenario = Scenario::new();
         scenario.checksum = "b".repeat(64);
         let (result, _, replaced) = scenario.run(options(false, true), &mut answers(vec![]));
-        assert!(result.unwrap_err().diagnostic().contains("SHA-256"));
+        assert!(result
+            .unwrap_err()
+            .diagnostic(Language::BrazilianPortuguese)
+            .contains("SHA-256"));
         assert!(replaced.is_empty());
         let leftovers: Vec<_> = fs::read_dir(scenario.directory.path().join("bin"))
             .unwrap()
@@ -582,7 +675,9 @@ mod tests {
         let mut scenario = Scenario::new();
         scenario.denied = true;
         let (result, _, _) = scenario.run(options(false, true), &mut answers(vec![]));
-        let diagnostic = result.unwrap_err().diagnostic();
+        let diagnostic = result
+            .unwrap_err()
+            .diagnostic(Language::BrazilianPortuguese);
         assert!(diagnostic.contains("sem permissão"), "{diagnostic}");
         assert!(diagnostic.contains("MOSAIC_INSTALL_DIR"), "{diagnostic}");
         assert!(diagnostic.contains("não usa sudo"), "{diagnostic}");
@@ -610,6 +705,7 @@ mod tests {
                 architecture: "x86_64",
             },
             download_base: "x",
+            language: Language::BrazilianPortuguese,
         };
         let error = execute_update(
             &services,
@@ -619,6 +715,44 @@ mod tests {
             &mut Vec::new(),
         )
         .unwrap_err();
-        assert!(error.diagnostic().contains("freebsd/x86_64"));
+        assert!(error
+            .diagnostic(Language::BrazilianPortuguese)
+            .contains("freebsd/x86_64"));
+    }
+}
+
+#[cfg(test)]
+mod english_tests {
+    use super::*;
+
+    fn version(text: &str) -> ReleaseVersion {
+        ReleaseVersion::parse(text).unwrap()
+    }
+
+    #[test]
+    fn version_lines_are_translated() {
+        assert_eq!(
+            available_text(&version("0.2.0"), &version("0.1.0"), Language::English),
+            "mosaic 0.2.0 available (installed: 0.1.0)"
+        );
+        assert_eq!(
+            up_to_date_text(&version("0.1.0"), Language::English),
+            "mosaic 0.1.0 is the latest version"
+        );
+    }
+
+    #[test]
+    fn usage_and_errors_are_translated() {
+        assert!(update_usage(Language::English).starts_with("usage: mosaic update"));
+        let error = UpdateUsageError::UnknownArgument("--x".to_string());
+        assert!(error
+            .message(Language::English)
+            .starts_with("unknown argument: --x"));
+        let error = UpdateCommandError::Staging("denied".to_string());
+        let english = error.diagnostic(Language::English);
+        assert!(english.contains("mosaic does not use sudo"), "{english}");
+        assert!(error
+            .diagnostic(Language::BrazilianPortuguese)
+            .contains("O mosaic não usa sudo"));
     }
 }

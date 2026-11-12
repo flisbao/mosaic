@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use chrono::Duration;
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 use crate::application::ports::{
     ArchiveExtractor, ChecksumCalculator, Clock, ExecutableReplacer, InstallationProbe,
     ReleaseError, ReleaseSource, UpdateCheckRecord, UpdateCheckStore,
@@ -19,17 +22,52 @@ const EXTRACTION_DIRECTORY: &str = "extracted";
 
 #[derive(Debug, Clone, Error, PartialEq)]
 pub enum UpdateError {
-    #[error(transparent)]
     Release(#[from] ReleaseError),
-    #[error("não há binário publicado para este sistema ({operating_system}/{architecture})")]
     UnsupportedPlatform {
         operating_system: String,
         architecture: String,
     },
-    #[error("o arquivo de checksum publicado não tem um SHA-256 válido")]
     MissingChecksum,
-    #[error("o SHA-256 do download não confere (esperado {expected}, obtido {actual}); nada foi alterado")]
-    ChecksumMismatch { expected: String, actual: String },
+    ChecksumMismatch {
+        expected: String,
+        actual: String,
+    },
+}
+
+impl LocalizedMessage for UpdateError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::Release(error) => release_error_text(error, language),
+            Self::UnsupportedPlatform {
+                operating_system,
+                architecture,
+            } => language.pick(
+                format!("there is no published binary for this system ({operating_system}/{architecture})"),
+                format!("não há binário publicado para este sistema ({operating_system}/{architecture})"),
+            ),
+            Self::MissingChecksum => language
+                .pick(
+                    "the published checksum file does not have a valid SHA-256",
+                    "o arquivo de checksum publicado não tem um SHA-256 válido",
+                )
+                .to_string(),
+            Self::ChecksumMismatch { expected, actual } => language.pick(
+                format!("the SHA-256 of the download does not match (expected {expected}, got {actual}); nothing was changed"),
+                format!("o SHA-256 do download não confere (esperado {expected}, obtido {actual}); nada foi alterado"),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(UpdateError);
+
+pub fn release_error_text(error: &ReleaseError, language: Language) -> String {
+    match error {
+        ReleaseError::Cancelled => language
+            .pick("operation cancelled", "operação cancelada")
+            .to_string(),
+        other => other.to_string(),
+    }
 }
 
 pub fn check_latest(
@@ -675,6 +713,31 @@ mod tests {
                 &version("0.0.10"),
             );
             assert_eq!(notice, None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_update_error_is_translated() {
+        let errors = [
+            UpdateError::UnsupportedPlatform {
+                operating_system: "linux".to_string(),
+                architecture: "riscv".to_string(),
+            },
+            UpdateError::MissingChecksum,
+            UpdateError::ChecksumMismatch {
+                expected: "a".to_string(),
+                actual: "b".to_string(),
+            },
+            UpdateError::Release(ReleaseError::Cancelled),
+        ];
+        for error in errors {
+            assert_translated("update error", |language| error.message(language));
         }
     }
 }

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::application::ports::{ExecutableReplacer, InstallationProbe, ReleaseError};
+use crate::domain::language::Language;
 use crate::infrastructure::external_tool::external_command;
 use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
 
@@ -15,15 +16,25 @@ const DEFAULT_CARGO_DIRECTORY: &str = ".cargo";
 const EXECUTABLE_MODE: u32 = 0o755;
 
 #[derive(Default)]
-pub struct SystemInstallationProbe;
+pub struct SystemInstallationProbe {
+    language: Language,
+}
+
+impl SystemInstallationProbe {
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
+    }
+}
 
 impl InstallationProbe for SystemInstallationProbe {
     fn executable_path(&self) -> Result<PathBuf, ReleaseError> {
         std::env::current_exe()
             .and_then(std::fs::canonicalize)
             .map_err(|error| {
-                ReleaseError::Failed(format!(
-                    "não descobri onde o mosaic está instalado: {error}"
+                ReleaseError::Failed(self.language.pick(
+                    format!("could not find where mosaic is installed: {error}"),
+                    format!("não descobri onde o mosaic está instalado: {error}"),
                 ))
             })
     }
@@ -56,7 +67,16 @@ fn cargo_home_from(variable: Option<OsString>, home: Option<PathBuf>) -> Option<
 }
 
 #[derive(Default)]
-pub struct AtomicExecutableReplacer;
+pub struct AtomicExecutableReplacer {
+    language: Language,
+}
+
+impl AtomicExecutableReplacer {
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
+    }
+}
 
 impl ExecutableReplacer for AtomicExecutableReplacer {
     fn replace(
@@ -65,22 +85,31 @@ impl ExecutableReplacer for AtomicExecutableReplacer {
         current_executable: &Path,
     ) -> Result<(), ReleaseError> {
         if !new_executable.is_file() {
-            return Err(ReleaseError::Failed(format!(
-                "o pacote não contém {}",
-                new_executable.display()
+            return Err(ReleaseError::Failed(self.language.pick(
+                format!("the package does not contain {}", new_executable.display()),
+                format!("o pacote não contém {}", new_executable.display()),
             )));
         }
-        make_executable(new_executable)?;
+        make_executable(new_executable, self.language)?;
         std::fs::rename(new_executable, current_executable).map_err(|error| {
             if error.kind() == std::io::ErrorKind::PermissionDenied {
-                ReleaseError::NotWritable(format!(
-                    "sem permissão para escrever em {}",
-                    current_executable.display()
+                ReleaseError::NotWritable(self.language.pick(
+                    format!("no permission to write to {}", current_executable.display()),
+                    format!(
+                        "sem permissão para escrever em {}",
+                        current_executable.display()
+                    ),
                 ))
             } else {
-                ReleaseError::Failed(format!(
-                    "não consegui trocar {}: {error}",
-                    current_executable.display()
+                ReleaseError::Failed(self.language.pick(
+                    format!(
+                        "could not replace {}: {error}",
+                        current_executable.display()
+                    ),
+                    format!(
+                        "não consegui trocar {}: {error}",
+                        current_executable.display()
+                    ),
                 ))
             }
         })
@@ -88,15 +117,20 @@ impl ExecutableReplacer for AtomicExecutableReplacer {
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<(), ReleaseError> {
+fn make_executable(path: &Path, language: Language) -> Result<(), ReleaseError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(EXECUTABLE_MODE)).map_err(
-        |error| ReleaseError::Failed(format!("não consegui marcar como executável: {error}")),
+        |error| {
+            ReleaseError::Failed(language.pick(
+                format!("could not mark as executable: {error}"),
+                format!("não consegui marcar como executável: {error}"),
+            ))
+        },
     )
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<(), ReleaseError> {
+fn make_executable(_path: &Path, _language: Language) -> Result<(), ReleaseError> {
     Ok(())
 }
 
@@ -108,7 +142,9 @@ mod tests {
 
     #[test]
     fn the_executable_path_is_canonical_and_absolute() {
-        let path = SystemInstallationProbe.executable_path().unwrap();
+        let path = SystemInstallationProbe::default()
+            .executable_path()
+            .unwrap();
         assert!(path.is_absolute());
         assert_eq!(path, fs::canonicalize(&path).unwrap());
     }
@@ -116,7 +152,7 @@ mod tests {
     #[test]
     fn a_temporary_file_is_not_owned_by_a_debian_package() {
         let file = tempfile::NamedTempFile::new().unwrap();
-        assert!(!SystemInstallationProbe.owned_by_debian_package(file.path()));
+        assert!(!SystemInstallationProbe::default().owned_by_debian_package(file.path()));
     }
 
     #[test]
@@ -139,7 +175,9 @@ mod tests {
         fs::write(&current, "antigo").unwrap();
         let staged = directory.path().join(".stage-mosaic");
         fs::write(&staged, "novo").unwrap();
-        AtomicExecutableReplacer.replace(&staged, &current).unwrap();
+        AtomicExecutableReplacer::default()
+            .replace(&staged, &current)
+            .unwrap();
         assert_eq!(fs::read_to_string(&current).unwrap(), "novo");
         assert_eq!(
             fs::metadata(&current).unwrap().permissions().mode() & 0o777,
@@ -153,7 +191,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let current = directory.path().join("mosaic");
         fs::write(&current, "antigo").unwrap();
-        let error = AtomicExecutableReplacer
+        let error = AtomicExecutableReplacer::default()
             .replace(&directory.path().join("nao-existe"), &current)
             .unwrap_err();
         assert!(matches!(error, ReleaseError::Failed(_)));
@@ -172,7 +210,7 @@ mod tests {
         let current = locked.path().join("mosaic");
         fs::write(&current, "antigo").unwrap();
         fs::set_permissions(locked.path(), fs::Permissions::from_mode(0o555)).unwrap();
-        let result = AtomicExecutableReplacer.replace(&staged, &current);
+        let result = AtomicExecutableReplacer::default().replace(&staged, &current);
         fs::set_permissions(locked.path(), fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(result, Err(ReleaseError::NotWritable(_))));
         assert_eq!(fs::read_to_string(&current).unwrap(), "antigo");

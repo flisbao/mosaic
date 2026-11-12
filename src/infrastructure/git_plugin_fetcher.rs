@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::process::{run_process, CancelFlag, ProcessLimits};
 use crate::application::ports::{PluginFetchError, PluginFetcher};
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::plugin_package::GitHubSource;
 
 const CLONE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -45,17 +46,24 @@ const GIT_CONFIGURATION: [&str; 7] = [
 ];
 
 #[derive(Default)]
-pub struct GitPluginFetcher;
+pub struct GitPluginFetcher {
+    language: Language,
+}
 
 impl GitPluginFetcher {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
     }
 }
 
 impl PluginFetcher for GitPluginFetcher {
     fn fetch(&self, source: &GitHubSource, destination: &Path) -> Result<(), PluginFetchError> {
-        fetch_with_program(OsStr::new("git"), source, destination)
+        fetch_with_program(OsStr::new("git"), source, destination, self.language)
     }
 }
 
@@ -102,6 +110,7 @@ fn fetch_with_program(
     program: &OsStr,
     source: &GitHubSource,
     destination: &Path,
+    language: Language,
 ) -> Result<(), PluginFetchError> {
     let template =
         tempfile::tempdir().map_err(|error| PluginFetchError::Failed(error.to_string()))?;
@@ -121,11 +130,16 @@ fn fetch_with_program(
         .map_err(|error| {
             if error.program_not_found() {
                 PluginFetchError::Unavailable(
-                    "Git não encontrado; instale git para baixar plugins, ou use --from DIR".into(),
+                    language
+                        .pick(
+                            "Git not found; install git to download plugins, or use --from DIR",
+                            "Git não encontrado; instale git para baixar plugins, ou use --from DIR",
+                        )
+                        .into(),
                 )
             } else {
                 let diagnostic: String = error
-                    .to_string()
+                    .message(language)
                     .chars()
                     .take(MAXIMUM_DIAGNOSTIC_CHARACTERS)
                     .map(|character| {
@@ -213,8 +227,13 @@ mod tests {
         .unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
         let source = GitHubSource::parse("owner/repo").unwrap();
-        let error = fetch_with_program(program.as_os_str(), &source, &root.path().join("repo"))
-            .unwrap_err();
+        let error = fetch_with_program(
+            program.as_os_str(),
+            &source,
+            &root.path().join("repo"),
+            Language::BrazilianPortuguese,
+        )
+        .unwrap_err();
         match error {
             PluginFetchError::Failed(message) => {
                 assert!(message.chars().count() <= 500);
@@ -226,7 +245,8 @@ mod tests {
             fetch_with_program(
                 root.path().join("missing").as_os_str(),
                 &source,
-                &root.path().join("repo")
+                &root.path().join("repo"),
+                Language::BrazilianPortuguese
             ),
             Err(PluginFetchError::Unavailable(_))
         ));

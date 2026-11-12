@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::process::Command;
 
 use crate::application::ports::ReleaseError;
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::infrastructure::process::ProcessError;
 
 const MAXIMUM_DIAGNOSTIC_CHARACTERS: usize = 500;
@@ -34,16 +35,20 @@ pub fn external_command(program: &OsStr) -> Command {
     command
 }
 
-pub fn release_error(tool: &str, error: ProcessError) -> ReleaseError {
+pub fn release_error(tool: &str, error: ProcessError, language: Language) -> ReleaseError {
     if error.program_not_found() {
-        return ReleaseError::ToolMissing(format!(
-            "'{tool}' não foi encontrado; instale-o para usar este comando"
+        return ReleaseError::ToolMissing(language.pick(
+            format!("'{tool}' was not found; install it to use this command"),
+            format!("'{tool}' não foi encontrado; instale-o para usar este comando"),
         ));
     }
     if matches!(error, ProcessError::Cancelled) {
         return ReleaseError::Cancelled;
     }
-    ReleaseError::Failed(sanitized_diagnostic(&format!("{tool}: {error}")))
+    ReleaseError::Failed(sanitized_diagnostic(&format!(
+        "{tool}: {}",
+        error.message(language)
+    )))
 }
 
 fn sanitized_diagnostic(text: &str) -> String {
@@ -62,6 +67,7 @@ fn sanitized_diagnostic(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::language::Language;
 
     #[test]
     fn only_the_documented_environment_is_inherited() {
@@ -87,15 +93,23 @@ mod tests {
             source: std::io::Error::from(std::io::ErrorKind::NotFound),
         };
         assert!(matches!(
-            release_error("curl", missing),
+            release_error("curl", missing, Language::BrazilianPortuguese),
             ReleaseError::ToolMissing(_)
         ));
         assert_eq!(
-            release_error("curl", ProcessError::Cancelled),
+            release_error(
+                "curl",
+                ProcessError::Cancelled,
+                Language::BrazilianPortuguese
+            ),
             ReleaseError::Cancelled
         );
         assert!(matches!(
-            release_error("curl", ProcessError::OutputUnreadable),
+            release_error(
+                "curl",
+                ProcessError::OutputUnreadable,
+                Language::BrazilianPortuguese
+            ),
             ReleaseError::Failed(_)
         ));
     }
