@@ -12,10 +12,60 @@ HEADING_PREFIX = "# "
 FRONT_MATTER_FENCE = "---"
 DEFAULT_ROOT = "~/kanban"
 META_KEYS = ("jira", "responsavel", "prioridade")
+LANGUAGE_VARIABLE = "MOSAIC_LANGUAGE"
+LANGUAGE_ENGLISH = "en"
+LANGUAGE_PORTUGUESE = "pt-BR"
+PORTUGUESE_PREFIX = "pt"
+
+MESSAGES = {
+    LANGUAGE_PORTUGUESE: {
+        "move_label": "Mover para {column}",
+        "move_description": "Mover o cartão selecionado para {column}",
+        "invalid_card_id": "identificador de cartão inválido: {item_id!r}",
+        "unknown_column": "coluna desconhecida: {column!r}",
+        "invalid_card_name_detailed": "nome de cartão inválido: {name!r}",
+        "invalid_card_name": "nome de cartão inválido",
+        "unknown_destination": "coluna de destino desconhecida: {destination!r}",
+        "card_not_found": "cartão não encontrado: {item_id}",
+        "already_in_column": "o cartão já está em {destination}",
+        "outside_kanban_folder": "cartão fora da pasta do kanban",
+        "name_already_taken": "já existe um cartão com esse nome em {destination}",
+        "card_moved": "Cartão movido para {destination}",
+        "error_prefix": "erro",
+        "usage": "uso: kanban.py snapshot | action move (recebido: {arguments})",
+    },
+    LANGUAGE_ENGLISH: {
+        "move_label": "Move to {column}",
+        "move_description": "Move the selected card to {column}",
+        "invalid_card_id": "invalid card identifier: {item_id!r}",
+        "unknown_column": "unknown column: {column!r}",
+        "invalid_card_name_detailed": "invalid card name: {name!r}",
+        "invalid_card_name": "invalid card name",
+        "unknown_destination": "unknown destination column: {destination!r}",
+        "card_not_found": "card not found: {item_id}",
+        "already_in_column": "the card is already in {destination}",
+        "outside_kanban_folder": "card outside the kanban folder",
+        "name_already_taken": "a card with that name already exists in {destination}",
+        "card_moved": "Card moved to {destination}",
+        "error_prefix": "error",
+        "usage": "usage: kanban.py snapshot | action move (received: {arguments})",
+    },
+}
 
 
-def kanban_root():
-    return Path(os.environ.get("KANBAN_DIR", DEFAULT_ROOT)).expanduser()
+def resolve_language(environ):
+    requested = environ.get(LANGUAGE_VARIABLE, "").strip().lower()
+    if requested.startswith(PORTUGUESE_PREFIX):
+        return LANGUAGE_PORTUGUESE
+    return LANGUAGE_ENGLISH
+
+
+def messages_for(language):
+    return MESSAGES[language]
+
+
+def kanban_root(environ):
+    return Path(environ.get("KANBAN_DIR", DEFAULT_ROOT)).expanduser()
 
 
 def list_cards(root, column):
@@ -75,7 +125,7 @@ def card_item(column, card):
     return item
 
 
-def build_snapshot(root):
+def build_snapshot(root, messages):
     cards_by_column = {column: list_cards(root, column) for column in COLUMNS}
     return {
         "summary": {
@@ -100,8 +150,8 @@ def build_snapshot(root):
         "actions": [
             {
                 "id": "move",
-                "label": f"Mover para {column}",
-                "description": f"Mover o cartão selecionado para {column}",
+                "label": messages["move_label"].format(column=column),
+                "description": messages["move_description"].format(column=column),
                 "applies_to": "item",
                 "params": {"to": column},
             }
@@ -110,55 +160,57 @@ def build_snapshot(root):
     }
 
 
-def parse_item_id(item_id):
+def parse_item_id(item_id, messages):
     parts = item_id.split("/")
     if len(parts) != 2:
-        raise ValueError(f"identificador de cartão inválido: {item_id!r}")
+        raise ValueError(messages["invalid_card_id"].format(item_id=item_id))
     column, name = parts
     if column not in COLUMNS:
-        raise ValueError(f"coluna desconhecida: {column!r}")
+        raise ValueError(messages["unknown_column"].format(column=column))
     if not name.endswith(CARD_SUFFIX) or name in (CARD_SUFFIX, ".", "..") or "\\" in name:
-        raise ValueError(f"nome de cartão inválido: {name!r}")
+        raise ValueError(messages["invalid_card_name_detailed"].format(name=name))
     if "\x00" in name:
-        raise ValueError("nome de cartão inválido")
+        raise ValueError(messages["invalid_card_name"])
     return column, name
 
 
-def move_card(root, item_id, destination):
+def move_card(root, item_id, destination, messages):
     if destination not in COLUMNS:
-        raise ValueError(f"coluna de destino desconhecida: {destination!r}")
-    column, name = parse_item_id(item_id)
+        raise ValueError(messages["unknown_destination"].format(destination=destination))
+    column, name = parse_item_id(item_id, messages)
     source = root / column / name
     if not source.is_file():
-        raise ValueError(f"cartão não encontrado: {item_id}")
+        raise ValueError(messages["card_not_found"].format(item_id=item_id))
     if column == destination:
-        raise ValueError(f"o cartão já está em {destination}")
+        raise ValueError(messages["already_in_column"].format(destination=destination))
     root_resolved = root.resolve()
     if source.resolve().parent != (root_resolved / column):
-        raise ValueError("cartão fora da pasta do kanban")
+        raise ValueError(messages["outside_kanban_folder"])
     target_folder = root / destination
     target_folder.mkdir(exist_ok=True)
     target = target_folder / name
     if target.exists():
-        raise ValueError(f"já existe um cartão com esse nome em {destination}")
+        raise ValueError(messages["name_already_taken"].format(destination=destination))
     os.rename(source, target)
 
 
-def main(arguments):
-    root = kanban_root()
+def main(arguments, environ=None):
+    environ = os.environ if environ is None else environ
+    messages = messages_for(resolve_language(environ))
+    root = kanban_root(environ)
     if arguments == ["snapshot"]:
-        print(json.dumps(build_snapshot(root), ensure_ascii=False))
+        print(json.dumps(build_snapshot(root, messages), ensure_ascii=False))
         return 0
     if arguments == ["action", "move"]:
         try:
             params = json.loads(sys.stdin.read() or "{}")
-            move_card(root, str(params.get("item_id", "")), str(params.get("to", "")))
+            move_card(root, str(params.get("item_id", "")), str(params.get("to", "")), messages)
         except (ValueError, OSError) as error:
-            print(f"erro: {error}", file=sys.stderr)
+            print(f"{messages['error_prefix']}: {error}", file=sys.stderr)
             return 1
-        print(f"Cartão movido para {params['to']}")
+        print(messages["card_moved"].format(destination=params["to"]))
         return 0
-    print(f"uso: kanban.py snapshot | action move (recebido: {arguments})", file=sys.stderr)
+    print(messages["usage"].format(arguments=arguments), file=sys.stderr)
     return 2
 
 

@@ -1,27 +1,56 @@
 #!/usr/bin/env node
 // Plugin de exemplo em Node: imprime um snapshot JSON no stdout.
 
-function main(argumentsList) {
-  if (argumentsList.length !== 1 || argumentsList[0] !== "snapshot") {
-    console.error("este exemplo só implementa 'snapshot'");
-    return 2;
-  }
-  const snapshot = {
+const LANGUAGE_VARIABLE = "MOSAIC_LANGUAGE";
+const LANGUAGE_ENGLISH = "en";
+const LANGUAGE_PORTUGUESE = "pt-BR";
+const PORTUGUESE_PREFIX = "pt";
+
+const MESSAGES = {
+  [LANGUAGE_PORTUGUESE]: {
+    title: "Exemplo Node",
+    greeting: "olá do plugin em Node",
+    replaceHint: "troque este script pelo seu",
+    snapshotOnly: "este exemplo só implementa 'snapshot'",
+  },
+  [LANGUAGE_ENGLISH]: {
+    title: "Node example",
+    greeting: "hello from the Node plugin",
+    replaceHint: "replace this script with yours",
+    snapshotOnly: "this example only implements 'snapshot'",
+  },
+};
+
+function resolveLanguage(environment) {
+  const requested = (environment[LANGUAGE_VARIABLE] || "").trim().toLowerCase();
+  return requested.startsWith(PORTUGUESE_PREFIX) ? LANGUAGE_PORTUGUESE : LANGUAGE_ENGLISH;
+}
+
+function buildSnapshot(messages) {
+  return {
     summary: {
-      title: "Exemplo Node",
+      title: messages.title,
       blocks: [
         {
           type: "lines",
           lines: [
-            { text: "olá do plugin em Node", flag: "updated" },
-            { text: "troque este script pelo seu" },
+            { text: messages.greeting, flag: "updated" },
+            { text: messages.replaceHint },
           ],
         },
       ],
     },
   };
-  console.log(JSON.stringify(snapshot));
+}
+
+function main(argumentsList, environment) {
+  const messages = MESSAGES[resolveLanguage(environment)];
+  if (argumentsList.length !== 1 || argumentsList[0] !== "snapshot") {
+    console.error(messages.snapshotOnly);
+    return 2;
+  }
+  console.log(JSON.stringify(buildSnapshot(messages)));
   return 0;
 }
 
-process.exit(main(process.argv.slice(2)));
+process.exit(main(process.argv.slice(2), process.env));
