@@ -11,6 +11,7 @@ const SKILL_NAME: &str = "mosaic-plugin-jira";
 
 fn run_skills(home: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .arg("skills")
         .args(arguments)
         .env("HOME", home)

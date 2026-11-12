@@ -4,17 +4,35 @@ use std::path::Path;
 
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 const SKILL_FILE_NAME: &str = "SKILL.md";
 
 #[derive(Debug, Error, PartialEq)]
 pub enum SkillsError {
-    #[error("pasta de skills não encontrada: {0}")]
     SourceMissing(String),
-    #[error("{path}: {reason}")]
     Io { path: String, reason: String },
-    #[error("instalar skills só é suportado em sistemas Unix")]
     Unsupported,
 }
+
+impl LocalizedMessage for SkillsError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::SourceMissing(path) => language.pick(
+                format!("skills folder not found: {path}"),
+                format!("pasta de skills não encontrada: {path}"),
+            ),
+            Self::Io { path, reason } => format!("{path}: {reason}"),
+            Self::Unsupported => language.pick(
+                "installing skills is only supported on Unix systems".to_string(),
+                "instalar skills só é suportado em sistemas Unix".to_string(),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(SkillsError);
 
 #[derive(Debug, PartialEq)]
 pub enum SkillOutcome {
@@ -219,5 +237,21 @@ mod tests {
             error,
             SkillsError::SourceMissing(source.display().to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_skills_error_is_translated() {
+        for error in [
+            SkillsError::SourceMissing("/x".to_string()),
+            SkillsError::Unsupported,
+        ] {
+            assert_translated("skills error", |language| error.message(language));
+        }
     }
 }

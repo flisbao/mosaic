@@ -7,11 +7,13 @@ use crate::application::ports::SetupCatalogSnapshot;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::pomodoro::PomodoroTimer;
 use crate::domain::widget::{
     ActionScope, ActionSpec, DetailItem, DetailSection, WidgetId, WidgetRecord, WidgetSnapshot,
 };
 use crate::presentation::key_input::KeyInput;
+use crate::presentation::messages;
 use crate::presentation::shortcuts::assign_shortcuts;
 use crate::presentation::theme_styles::ThemeStyles;
 
@@ -31,11 +33,7 @@ pub use text_field::TextField;
 
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
 pub const PAGE_JUMP_ITEMS: usize = 10;
-const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
-const RECOMMENDATION_BUSY_NOTICE: &str = "A IA já está processando um pedido";
-const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
 const ADD_WIDGET_KEY: char = '+';
-const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConfirmationAnswer {
@@ -46,7 +44,7 @@ enum ConfirmationAnswer {
 
 fn confirmation_answer(key: KeyInput) -> ConfirmationAnswer {
     match key {
-        KeyInput::Character('s') => ConfirmationAnswer::Accept,
+        KeyInput::Character('s' | 'y') => ConfirmationAnswer::Accept,
         KeyInput::Escape | KeyInput::Character('n') => ConfirmationAnswer::Reject,
         _ => ConfirmationAnswer::Ignore,
     }
@@ -156,7 +154,20 @@ impl AppState {
     }
 
     pub fn set_theme_styles(&mut self, styles: ThemeStyles) {
-        self.theme_styles = styles;
+        self.theme_styles = styles.with_language(self.language());
+    }
+
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.set_language(language);
+        self
+    }
+
+    pub fn set_language(&mut self, language: Language) {
+        self.theme_styles = self.theme_styles.clone().with_language(language);
+    }
+
+    pub fn language(&self) -> Language {
+        self.theme_styles.language()
     }
 
     pub fn replace_tabs(&mut self, entries: Vec<WidgetEntry>, tabs: Vec<TabView>) {
@@ -197,7 +208,7 @@ impl AppState {
     }
 
     pub fn advance_pomodoro(&mut self, elapsed: Duration) -> Option<AlertMessage> {
-        let alert = self.pomodoro.advance(elapsed)?;
+        let alert = self.pomodoro.advance(elapsed, self.language())?;
         self.show_alert(alert.clone());
         Some(alert)
     }
@@ -448,7 +459,7 @@ impl AppState {
 
     fn request_recommendation(&mut self) -> Transition {
         if self.recommendation_is_loading() {
-            self.notice = Some(RECOMMENDATION_BUSY_NOTICE.to_string());
+            self.notice = Some(messages::recommendation_busy_notice(self.language()).to_string());
             Transition::idle()
         } else {
             Transition::emit(Command::RequestRecommendation)
@@ -482,7 +493,7 @@ impl AppState {
             ConfirmationAnswer::Accept => {
                 let confirmed = proposed.confirm();
                 if !self.pending_actions.try_begin(confirmed.widget()) {
-                    self.show_notice(ACTION_PENDING_NOTICE.to_string());
+                    self.show_notice(messages::action_pending_notice(self.language()).to_string());
                     return Transition::idle();
                 }
                 Transition::emit(Command::Execute(confirmed))
@@ -519,13 +530,13 @@ impl AppState {
 
     fn toggle_pomodoro(&mut self) {
         if let Err(error) = self.pomodoro.toggle() {
-            self.notice = Some(error.to_string());
+            self.notice = Some(error.message(self.language()));
         }
     }
 
     fn reset_pomodoro(&mut self) {
         if let Err(error) = self.pomodoro.reset() {
-            self.notice = Some(error.to_string());
+            self.notice = Some(error.message(self.language()));
         }
     }
 
@@ -540,7 +551,7 @@ impl AppState {
         match ProposedAction::new(widget_id, spec, item_id) {
             Ok(proposed) => Some(proposed),
             Err(error) => {
-                self.notice = Some(error.to_string());
+                self.notice = Some(error.message(self.language()));
                 None
             }
         }
@@ -548,7 +559,7 @@ impl AppState {
 
     fn open_action_menu(&mut self) -> Mode {
         if self.available_actions().is_empty() {
-            self.notice = Some(NO_ACTIONS_NOTICE.to_string());
+            self.notice = Some(messages::no_actions_notice(self.language()).to_string());
             Mode::Browsing
         } else {
             Mode::ChoosingAction { selected: 0 }
@@ -586,6 +597,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::language::Language;
     use crate::test_support::fixed_now as now;
 
     #[test]
@@ -709,11 +721,13 @@ mod tests {
             ],
             vec![tab("Principal", &[0, 1]), tab("Notas", &[2])],
         )
+        .with_language(Language::BrazilianPortuguese)
     }
 
     fn app_with_one_tab(entries: Vec<WidgetEntry>) -> AppState {
         let entry_indexes: Vec<usize> = (0..entries.len()).collect();
         AppState::new(entries, vec![tab("Principal", &entry_indexes)])
+            .with_language(Language::BrazilianPortuguese)
     }
 
     fn press(app: &mut AppState, keys: &[KeyInput]) -> Option<Command> {
@@ -782,6 +796,14 @@ mod tests {
         }))
     }
 
+    #[test]
+    fn the_english_confirmation_key_y_also_accepts() {
+        assert_eq!(
+            confirmation_answer(KeyInput::Character('y')),
+            ConfirmationAnswer::Accept
+        );
+    }
+
     fn plan() -> RecommendationPlan {
         RecommendationPlan {
             prompt: "pedido".to_string(),
@@ -826,7 +848,8 @@ mod tests {
         let mut app = AppState::new(
             plain_entries(3),
             vec![tab("Um", &[0]), tab("Dois", &[1]), tab("Três", &[2])],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         press(&mut app, &[character('2')]);
         assert_eq!(app.active_tab(), 1);
         press(&mut app, &[character('9')]);
@@ -842,7 +865,8 @@ mod tests {
         let mut app = AppState::new(
             plain_entries(3),
             vec![tab("Um", &[0]), tab("Dois", &[1]), tab("Três", &[2])],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         press(&mut app, &[KeyInput::Tab; 3]);
         assert_eq!(app.active_tab(), 0);
         press(&mut app, &[KeyInput::BackTab]);
@@ -871,7 +895,8 @@ mod tests {
         let mut app = AppState::new(
             plain_entries(4),
             vec![tab("Um", &[0, 1]), tab("Dois", &[2, 3])],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         press(&mut app, &[character('B')]);
         assert_eq!(app.focused_entry(), Some(1));
         press(&mut app, &[character('C')]);
@@ -887,7 +912,8 @@ mod tests {
         let app = AppState::new(
             plain_entries(4),
             vec![tab("Um", &[0, 1]), tab("Dois", &[2, 3])],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         assert_eq!(app.shortcut_of(0), Some('A'));
         assert_eq!(app.shortcut_of(1), Some('B'));
         assert_eq!(app.shortcut_of(2), Some('A'));
@@ -987,7 +1013,8 @@ mod tests {
     #[test]
     fn empty_tab_does_not_panic_on_any_key() {
         for key in every_key() {
-            let mut grid = AppState::new(plain_entries(2), vec![tab("Vazia", &[])]);
+            let mut grid = AppState::new(plain_entries(2), vec![tab("Vazia", &[])])
+                .with_language(Language::BrazilianPortuguese);
             grid.handle_key(key);
             assert_nothing_focused(&grid, 0);
         }
@@ -1001,7 +1028,8 @@ mod tests {
             focused.handle_key(key);
             assert_nothing_focused(&focused, 0);
         }
-        let mut without_tabs = AppState::new(vec![], vec![]);
+        let mut without_tabs =
+            AppState::new(vec![], vec![]).with_language(Language::BrazilianPortuguese);
         for key in every_key() {
             without_tabs.handle_key(key);
             assert_eq!(without_tabs.focused_entry(), None);
@@ -1012,11 +1040,13 @@ mod tests {
     #[test]
     fn entry_index_outside_entries_never_gets_focus_or_expansion() {
         for key in every_key() {
-            let mut app = AppState::new(plain_entries(1), vec![tab("X", &[99])]);
+            let mut app = AppState::new(plain_entries(1), vec![tab("X", &[99])])
+                .with_language(Language::BrazilianPortuguese);
             app.handle_key(key);
             assert_nothing_focused(&app, 0);
         }
-        let mut app = AppState::new(plain_entries(1), vec![tab("X", &[99])]);
+        let mut app = AppState::new(plain_entries(1), vec![tab("X", &[99])])
+            .with_language(Language::BrazilianPortuguese);
         for key in every_key() {
             app.handle_key(key);
             assert_nothing_focused(&app, 0);
@@ -1026,7 +1056,8 @@ mod tests {
     #[test]
     fn replace_tabs_clamps_active_tab_and_focus_and_collapses_when_tab_is_empty() {
         let mut switched =
-            AppState::new(plain_entries(4), vec![tab("A", &[0, 1, 2]), tab("B", &[3])]);
+            AppState::new(plain_entries(4), vec![tab("A", &[0, 1, 2]), tab("B", &[3])])
+                .with_language(Language::BrazilianPortuguese);
         press(&mut switched, &[KeyInput::Tab]);
         assert_eq!(switched.active_tab(), 1);
         switched.replace_tabs(plain_entries(2), vec![tab("Só", &[0, 1])]);
@@ -1058,7 +1089,8 @@ mod tests {
                 entry("outro", kanban_record()),
             ],
             vec![tab("A", &[0, 1])],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         press(&mut app, &[KeyInput::Enter, KeyInput::Down]);
         assert_eq!(app.selected_item(), 1);
         app.replace_tabs(
@@ -1074,7 +1106,8 @@ mod tests {
 
     #[test]
     fn replace_tabs_after_rename_keeps_focus_on_the_same_widget() {
-        let mut app = AppState::new(plain_entries(2), vec![tab("Antiga", &[0, 1])]);
+        let mut app = AppState::new(plain_entries(2), vec![tab("Antiga", &[0, 1])])
+            .with_language(Language::BrazilianPortuguese);
         press(&mut app, &[KeyInput::Down]);
         app.replace_tabs(plain_entries(2), vec![tab("Nova", &[0, 1])]);
         assert_eq!(app.tabs()[0].name, "Nova");
@@ -1091,7 +1124,8 @@ mod tests {
                 entry("de_b", WidgetRecord::loading()),
             ],
             vec![tab("A", &[0, 1, 2]), tab("B", &[3])],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         press(&mut app, &[KeyInput::Down, KeyInput::Down]);
         assert_eq!(app.focused_entry(), Some(2));
         press(&mut app, &[KeyInput::Tab]);
@@ -1525,7 +1559,8 @@ mod tests {
         let mut app = AppState::new(
             vec![entry("ia", WidgetRecord::loading())],
             vec![tab("IA", &[0])],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         app.begin_widget_refresh(&WidgetId::new("ia"));
         assert_eq!(app.handle_key(character('i')), None);
         assert!(app.notice().expect("aviso").contains("processando"));
@@ -1551,7 +1586,8 @@ mod tests {
                 name: "t".to_string(),
                 entry_indexes: vec![0, 1],
             }],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         assert!(app.recommendation_record().is_some());
 
         let without = AppState::new(
@@ -1560,7 +1596,8 @@ mod tests {
                 name: "t".to_string(),
                 entry_indexes: vec![0],
             }],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         assert!(without.recommendation_record().is_none());
     }
 
@@ -1572,7 +1609,8 @@ mod tests {
         press(&mut app, &[KeyInput::Down, KeyInput::Enter]);
         let focus = app.focused_entry();
         let expanded = app.is_expanded();
-        let styles = ThemeStyles::new(&Theme::preset("nord").unwrap(), ColorDepth::TrueColor);
+        let styles = ThemeStyles::new(&Theme::preset("nord").unwrap(), ColorDepth::TrueColor)
+            .with_language(Language::BrazilianPortuguese);
         app.set_theme_styles(styles.clone());
         assert_eq!(app.styles(), &styles);
         assert_eq!(app.focused_entry(), focus);

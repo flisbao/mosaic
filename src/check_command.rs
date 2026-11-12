@@ -4,18 +4,20 @@ use std::time::Duration;
 
 use mosaic::application::check_report::{build_check_report, SnapshotParseFailure};
 use mosaic::application::launch_spec::ProviderCommand;
+use mosaic::display_in_portuguese;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::domain::widget::WidgetSnapshot;
 use mosaic::infrastructure::config::{
-    config_directory, config_file_path, parse_config, read_config_file, ConfigError,
+    config_directory, config_file_path, parse_config_in, read_config_file, ConfigError,
     DEFAULT_TIMEOUT_SECONDS, MAXIMUM_TIMEOUT_SECONDS,
 };
 use mosaic::infrastructure::plugin_runner::PluginRunner;
-use mosaic::infrastructure::protocol_report::parse_snapshot_report;
+use mosaic::infrastructure::protocol_report::parse_snapshot_report_in;
+use mosaic::infrastructure::shared_language::SharedLanguage;
 use mosaic::presentation::theme_styles::ThemeStyles;
 use mosaic::presentation::widget_view::{lines_to_plain_text, render_blocks};
 use thiserror::Error;
 
-const CHECK_USAGE: &str = "uso: mosaic check <comando> [args...] [--env NOME=valor]... [--timeout SEGUNDOS] [--cwd DIRETORIO] [-- argumentos-do-provider...]";
 const CHECK_ENV_FLAG: &str = "--env";
 const CHECK_TIMEOUT_FLAG: &str = "--timeout";
 const CHECK_CWD_FLAG: &str = "--cwd";
@@ -23,39 +25,65 @@ const CHECK_PREVIEW_WIDTH: usize = 60;
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
 const CHECK_CONFIG_FLAG: &str = "--config";
-const CHECK_CONFIG_USAGE: &str = "uso: mosaic check --config [caminho]";
+
+fn check_usage(language: Language) -> &'static str {
+    language.pick(
+        "usage: mosaic check <command> [args...] [--env NAME=value]... [--timeout SECONDS] [--cwd DIRECTORY] [-- provider-arguments...]",
+        "uso: mosaic check <comando> [args...] [--env NOME=valor]... [--timeout SEGUNDOS] [--cwd DIRETORIO] [-- argumentos-do-provider...]",
+    )
+}
+
+fn check_config_usage(language: Language) -> &'static str {
+    language.pick(
+        "usage: mosaic check --config [path]",
+        "uso: mosaic check --config [caminho]",
+    )
+}
 
 #[derive(Debug, Error, PartialEq)]
 enum CheckUsageError {
-    #[error("{CHECK_USAGE}")]
     MissingCommand,
-    #[error("{}", env_without_value_message())]
     EnvWithoutValue,
-    #[error("{}", invalid_variable_message(.0))]
     InvalidVariable(String),
-    #[error("{CHECK_TIMEOUT_FLAG} precisa de SEGUNDOS\n{CHECK_USAGE}")]
     TimeoutWithoutValue,
-    #[error("{CHECK_CWD_FLAG} precisa de DIRETORIO\n{CHECK_USAGE}")]
     CwdWithoutValue,
-    #[error("{}", invalid_timeout_message(.0))]
     InvalidTimeout(String),
-    #[error("{CHECK_CONFIG_USAGE}")]
     TooManyPaths,
-    #[error(transparent)]
     ConfigDirectory(#[from] ConfigError),
 }
 
-fn env_without_value_message() -> String {
-    format!("{CHECK_ENV_FLAG} precisa de NOME=valor\n{CHECK_USAGE}")
+impl LocalizedMessage for CheckUsageError {
+    fn message(&self, language: Language) -> String {
+        let usage = check_usage(language);
+        match self {
+            Self::MissingCommand => usage.to_string(),
+            Self::EnvWithoutValue => language.pick(
+                format!("{CHECK_ENV_FLAG} needs NAME=value\n{usage}"),
+                format!("{CHECK_ENV_FLAG} precisa de NOME=valor\n{usage}"),
+            ),
+            Self::InvalidVariable(assignment) => language.pick(
+                format!("invalid variable: {assignment}\n{usage}"),
+                format!("variável inválida: {assignment}\n{usage}"),
+            ),
+            Self::TimeoutWithoutValue => language.pick(
+                format!("{CHECK_TIMEOUT_FLAG} needs SECONDS\n{usage}"),
+                format!("{CHECK_TIMEOUT_FLAG} precisa de SEGUNDOS\n{usage}"),
+            ),
+            Self::CwdWithoutValue => language.pick(
+                format!("{CHECK_CWD_FLAG} needs DIRECTORY\n{usage}"),
+                format!("{CHECK_CWD_FLAG} precisa de DIRETORIO\n{usage}"),
+            ),
+            Self::InvalidTimeout(text) => language.pick(
+                format!("invalid timeout: {text} (use 1 to {MAXIMUM_TIMEOUT_SECONDS})\n{usage}"),
+                format!("timeout inválido: {text} (use de 1 a {MAXIMUM_TIMEOUT_SECONDS})\n{usage}"),
+            ),
+            Self::TooManyPaths => check_config_usage(language).to_string(),
+            Self::ConfigDirectory(error) => error.message(language),
+        }
+    }
 }
 
-fn invalid_variable_message(assignment: &str) -> String {
-    format!("variável inválida: {assignment}\n{CHECK_USAGE}")
-}
-
-fn invalid_timeout_message(text: &str) -> String {
-    format!("timeout inválido: {text} (use de 1 a {MAXIMUM_TIMEOUT_SECONDS})\n{CHECK_USAGE}")
-}
+display_in_portuguese!(CheckUsageError);
 
 #[derive(Debug)]
 struct CheckInvocation {
@@ -125,22 +153,23 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckInvocation, CheckU
     })
 }
 
-fn check_preview(snapshot: &WidgetSnapshot) -> Vec<String> {
+fn check_preview(snapshot: &WidgetSnapshot, language: Language) -> Vec<String> {
     lines_to_plain_text(&render_blocks(
         &snapshot.summary.blocks,
         CHECK_PREVIEW_WIDTH,
-        &ThemeStyles::ansi(),
+        &ThemeStyles::ansi().with_language(language),
     ))
 }
 
 pub fn run(arguments: &[String]) -> ExitCode {
+    let language = Language::detect_from_environment();
     if arguments.first().map(String::as_str) == Some(CHECK_CONFIG_FLAG) {
-        return run_check_config(&arguments[1..]);
+        return run_check_config(&arguments[1..], language);
     }
     let invocation = match parse_check_arguments(arguments) {
         Ok(invocation) => invocation,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(language));
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
@@ -154,33 +183,40 @@ pub fn run(arguments: &[String]) -> ExitCode {
     let working_directory = invocation
         .working_directory
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let runner = PluginRunner::new(command, working_directory);
+    let runner =
+        PluginRunner::new(command, working_directory).with_language(SharedLanguage::new(language));
     let parse = |json: &str| {
-        parse_snapshot_report(json).map_err(|error| SnapshotParseFailure(error.to_string()))
+        parse_snapshot_report_in(json, language)
+            .map_err(|error| SnapshotParseFailure(error.message(language)))
     };
-    let outcome = build_check_report(runner.raw_snapshot_output(), &parse, &check_preview);
+    let preview = |snapshot: &WidgetSnapshot| check_preview(snapshot, language);
+    let outcome = build_check_report(runner.raw_snapshot_output(), &parse, &preview, language);
     println!("{}", outcome.text);
     ExitCode::from(u8::try_from(outcome.exit_code).unwrap_or(EXIT_CODE_FAILURE))
 }
 
-fn run_check_config(arguments: &[String]) -> ExitCode {
+fn run_check_config(arguments: &[String], language: Language) -> ExitCode {
     let path = match config_path_argument(arguments) {
         Ok(path) => path,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(language));
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
-    match read_config_file(&path).and_then(|text| parse_config(&text)) {
+    match read_config_file(&path).and_then(|text| parse_config_in(&text, language)) {
         Ok(config) => {
             for warning in &config.warnings {
-                println!("aviso: {warning}");
+                println!("{}: {warning}", language.pick("warning", "aviso"));
             }
-            println!("configuração válida: {}", path.display());
+            println!(
+                "{}: {}",
+                language.pick("valid configuration", "configuração válida"),
+                path.display()
+            );
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("mosaic: {error}");
+            eprintln!("mosaic: {}", error.message(language));
             ExitCode::from(EXIT_CODE_FAILURE)
         }
     }
@@ -237,7 +273,10 @@ mod tests {
     fn missing_command_is_a_usage_error() {
         let error = parse_check_arguments(&[]).unwrap_err();
         assert_eq!(error, CheckUsageError::MissingCommand);
-        assert_eq!(error.to_string(), CHECK_USAGE);
+        assert_eq!(
+            error.to_string(),
+            check_usage(Language::BrazilianPortuguese)
+        );
         assert_eq!(
             parse_check_arguments(&arguments(&["--env", "A=b"])).unwrap_err(),
             CheckUsageError::MissingCommand
@@ -252,7 +291,10 @@ mod tests {
         );
         let error = config_path_argument(&arguments(&["a", "b"])).unwrap_err();
         assert_eq!(error, CheckUsageError::TooManyPaths);
-        assert_eq!(error.to_string(), CHECK_CONFIG_USAGE);
+        assert_eq!(
+            error.to_string(),
+            check_config_usage(Language::BrazilianPortuguese)
+        );
     }
 
     #[test]

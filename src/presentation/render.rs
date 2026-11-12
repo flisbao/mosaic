@@ -8,6 +8,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::application::pomodoro_notifications::phase_label;
 use crate::application::ports::AlertMessage;
+use crate::domain::language::Language;
 use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer, SECONDS_PER_MINUTE};
 use crate::domain::widget::{DetailItem, DetailSection};
 use crate::presentation::add_widget_view::{self, modal_content};
@@ -20,6 +21,7 @@ use crate::presentation::grid_layout::{
 use crate::presentation::key_hints::{
     context_hints, footer_hints, global_hints, HintContext, KeyHint,
 };
+use crate::presentation::messages;
 use crate::presentation::text_fit::{flagged, truncate_to_width, wrap_to_width};
 use crate::presentation::theme_styles::ThemeStyles;
 use crate::presentation::widget_box::{
@@ -33,13 +35,7 @@ const MINIMUM_HEIGHT_FOR_FOOTER: u16 = MINIMUM_FULL_HEIGHT + FOOTER_HEIGHT;
 const FOOTER_LEADING_PADDING: &str = " ";
 const FOOTER_SEPARATOR: &str = "  ";
 const HELP_KEY_COLUMN_WIDTH: usize = 18;
-const HELP_GLOBAL_HEADING: &str = "Em qualquer tela";
-const HELP_DISMISS_HINT: &str = "Esc ou ? fecha esta ajuda";
 const MAXIMUM_NUMBERED_TABS: usize = 9;
-const CONFIRMATION_HINT: &str = "[s] confirma  [n] cancela";
-const EMPTY_PANEL_TITLE: &str = "nenhum widget ainda";
-const EMPTY_PANEL_ACTION: &str = "pressione + para adicionar um widget";
-const EMPTY_PANEL_LIST_HINT: &str = "ou veja os plugins disponíveis: mosaic plugins list";
 const NOTICE_ROW_HEIGHT: u16 = 1;
 const MINIMUM_HEIGHT_FOR_NOTICE: u16 = 2;
 const FOCUS_COLUMN_WIDTH: u16 = 22;
@@ -47,7 +43,6 @@ const FOCUS_MINIMUM_WIDTH: u16 = FOCUS_COLUMN_WIDTH.saturating_add(MINIMUM_DRAWA
 const MODAL_MAXIMUM_WIDTH: u16 = 60;
 const MODAL_FRAME_THICKNESS: u16 = 2;
 const MINIMUM_DRAWABLE_SIDE: u16 = 3;
-const ALERT_DISMISS_HINT: &str = "Qualquer tecla fecha";
 const WRAP_CONTINUATION_INDENT: &str = "  ";
 const SELECTION_MARKER: &str = "> ";
 const NO_SELECTION_MARKER: &str = "  ";
@@ -90,7 +85,11 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
     let styles = state.styles();
     let bar = Rect::new(area.x, area.y, area.width, TOP_BAR_HEIGHT.min(area.height));
     let mut spans = vec![Span::styled(
-        format!(" {}  {} ", now.format("%H:%M"), now.format("%d/%m/%Y")),
+        format!(
+            " {}  {} ",
+            now.format("%H:%M"),
+            now.format(messages::clock_date_format(styles.language()))
+        ),
         styles.accent(),
     )];
     for (position, tab) in state.tabs().iter().enumerate() {
@@ -104,8 +103,11 @@ fn render_top_bar(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area:
     frame.render_widget(Paragraph::new(Line::from(spans)), bar);
     if let Some(timer) = state.pomodoro() {
         frame.render_widget(
-            Paragraph::new(Line::styled(pomodoro_text(timer), styles.ok()))
-                .alignment(Alignment::Right),
+            Paragraph::new(Line::styled(
+                pomodoro_text(timer, styles.language()),
+                styles.ok(),
+            ))
+            .alignment(Alignment::Right),
             bar,
         );
     }
@@ -138,10 +140,11 @@ fn render_footer(frame: &mut Frame, state: &AppState, area: Rect) {
     let key_style = state.styles().key_hint();
     let description_style = state.styles().muted();
     let mut spans = vec![Span::raw(FOOTER_LEADING_PADDING)];
-    for hint in footer_hints(context, usize::from(area.width)) {
+    let language = state.language();
+    for hint in footer_hints(context, usize::from(area.width), language) {
         spans.push(Span::styled(hint.keys, key_style));
         spans.push(Span::styled(
-            format!(" {}{FOOTER_SEPARATOR}", hint.description),
+            format!(" {}{FOOTER_SEPARATOR}", hint.description(language)),
             description_style,
         ));
     }
@@ -156,13 +159,13 @@ fn tab_label(position: usize, name: &str) -> String {
     }
 }
 
-fn pomodoro_text(timer: &PomodoroTimer) -> String {
+fn pomodoro_text(timer: &PomodoroTimer, language: Language) -> String {
     let seconds = timer.remaining().as_secs();
-    let phase = phase_label(timer.phase());
+    let phase = phase_label(timer.phase(), language);
     let suffix = match timer.status() {
         PomodoroStatus::Running => "",
-        PomodoroStatus::Paused => " (pausado)",
-        PomodoroStatus::Stopped => " (parado)",
+        PomodoroStatus::Paused => messages::pomodoro_paused_suffix(language),
+        PomodoroStatus::Stopped => messages::pomodoro_stopped_suffix(language),
     };
     format!(
         "🍅 {:02}:{:02} {phase}{suffix} ",
@@ -206,7 +209,7 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
         GridLayout::Compact(placement) => {
             let first = entry_indexes.first().copied();
             if let Some(entry) = first.and_then(|index| state.entries().get(index)) {
-                let warning = enlarge_warning();
+                let warning = enlarge_warning(state.language());
                 let context = BoxContext {
                     shortcut: first.and_then(|index| state.shortcut_of(index)),
                     emphasis: Emphasis::Focused,
@@ -225,13 +228,14 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
 }
 
 fn render_empty_panel(frame: &mut Frame, area: Rect, styles: &ThemeStyles) {
+    let language = styles.language();
     let lines = vec![
         Line::styled(
-            EMPTY_PANEL_TITLE,
+            messages::empty_panel_title(language),
             styles.accent().add_modifier(Modifier::BOLD),
         ),
-        Line::from(EMPTY_PANEL_ACTION),
-        Line::styled(EMPTY_PANEL_LIST_HINT, styles.muted()),
+        Line::from(messages::empty_panel_action(language)),
+        Line::styled(messages::empty_panel_list_hint(language), styles.muted()),
     ];
     let height = (lines.len() as u16).min(area.height);
     let top = area.y + (area.height - height) / 2;
@@ -239,8 +243,8 @@ fn render_empty_panel(frame: &mut Frame, area: Rect, styles: &ThemeStyles) {
     frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), centered);
 }
 
-fn enlarge_warning() -> String {
-    format!("Amplie o terminal (mínimo {MINIMUM_FULL_WIDTH}x{MINIMUM_FULL_HEIGHT})")
+fn enlarge_warning(language: Language) -> String {
+    messages::enlarge_terminal_warning(language, MINIMUM_FULL_WIDTH, MINIMUM_FULL_HEIGHT)
 }
 
 fn render_focus_mode(frame: &mut Frame, state: &AppState, now: NaiveDateTime, area: Rect) {
@@ -567,6 +571,7 @@ fn notice_row(area: Rect) -> Option<Rect> {
 }
 
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
+    let language = state.language();
     let (title, lines) = match state.mode() {
         Mode::Browsing => return,
         Mode::AddingWidget(flow) => {
@@ -575,21 +580,28 @@ fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
         }
         Mode::Helping => {
             let context = HintContext::from_expanded(state.is_expanded());
-            (context.title(), help_lines(context))
+            (context.title(language), help_lines(context, language))
         }
         Mode::ConfirmingSend { text, .. } => (
-            "Enviar à IA",
-            vec![text.clone(), String::new(), CONFIRMATION_HINT.to_string()],
+            messages::send_to_assistant_title(language),
+            vec![
+                text.clone(),
+                String::new(),
+                messages::confirmation_hint(language).to_string(),
+            ],
         ),
-        Mode::ChoosingAction { selected } => ("Ações", action_menu_lines(state, *selected)),
+        Mode::ChoosingAction { selected } => (
+            messages::actions_title(language),
+            action_menu_lines(state, *selected),
+        ),
         Mode::Confirming(proposed) => {
             let mut lines = vec![proposed.describe()];
             if let Some(item_id) = proposed.item_id() {
-                lines.push(format!("Item: {item_id}"));
+                lines.push(messages::item_line(language, item_id));
             }
             lines.push(String::new());
-            lines.push(CONFIRMATION_HINT.to_string());
-            ("Confirmar ação", lines)
+            lines.push(messages::confirmation_hint(language).to_string());
+            (messages::confirm_action_title(language), lines)
         }
     };
     draw_popup(frame, area, title, &lines, state.styles());
@@ -601,7 +613,7 @@ fn render_alert(frame: &mut Frame, state: &AppState, area: Rect) {
     };
     let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
     lines.push(String::new());
-    lines.push(ALERT_DISMISS_HINT.to_string());
+    lines.push(messages::alert_dismiss_hint(state.language()).to_string());
     draw_popup(frame, area, title, &lines, state.styles());
 }
 
@@ -661,21 +673,22 @@ fn draw_styled_popup(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn help_lines(context: HintContext) -> Vec<String> {
-    let mut lines: Vec<String> = context_hints(context).iter().map(help_line).collect();
+fn help_lines(context: HintContext, language: Language) -> Vec<String> {
+    let line = |hint: &KeyHint| help_line(hint, language);
+    let mut lines: Vec<String> = context_hints(context).iter().map(line).collect();
     lines.push(String::new());
-    lines.push(HELP_GLOBAL_HEADING.to_string());
-    lines.extend(global_hints().iter().map(help_line));
+    lines.push(messages::help_global_heading(language).to_string());
+    lines.extend(global_hints().iter().map(line));
     lines.push(String::new());
-    lines.push(HELP_DISMISS_HINT.to_string());
+    lines.push(messages::help_dismiss_hint(language).to_string());
     lines
 }
 
-fn help_line(hint: &KeyHint) -> String {
+fn help_line(hint: &KeyHint, language: Language) -> String {
     format!(
         "{:<width$}{}",
         hint.keys,
-        hint.description,
+        hint.description(language),
         width = HELP_KEY_COLUMN_WIDTH
     )
 }
@@ -774,7 +787,10 @@ mod tests {
 
     #[test]
     fn enlarge_warning_is_built_from_the_layout_minimums() {
-        assert_eq!(enlarge_warning(), "Amplie o terminal (mínimo 60x20)");
+        assert_eq!(
+            enlarge_warning(Language::BrazilianPortuguese),
+            "Amplie o terminal (mínimo 60x20)"
+        );
     }
 
     #[test]
@@ -839,6 +855,7 @@ mod tests {
                 entry_indexes,
             }],
         )
+        .with_language(Language::BrazilianPortuguese)
     }
 
     fn kanban_snapshot() -> WidgetSnapshot {
@@ -975,6 +992,7 @@ mod tests {
                 },
             ],
         )
+        .with_language(Language::BrazilianPortuguese)
     }
 
     #[test]
@@ -2040,5 +2058,107 @@ mod tests {
         } else {
             themed_state(name)
         }
+    }
+}
+
+#[cfg(test)]
+mod english_tests {
+    use super::*;
+    use crate::domain::widget::WidgetId;
+    use crate::presentation::app_state::{TabView, WidgetEntry};
+    use crate::presentation::key_input::KeyInput;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn moment() -> NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 12)
+            .unwrap()
+            .and_hms_opt(9, 30, 0)
+            .unwrap()
+    }
+
+    fn screen(state: &AppState) -> String {
+        let spans = vec![1; state.entries().len()];
+        let mut terminal = Terminal::new(TestBackend::new(200, 24)).unwrap();
+        terminal
+            .draw(|frame| render(frame, state, &spans, moment()))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..24)
+            .map(|row| {
+                (0..200)
+                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn state_with_one_loading_widget() -> AppState {
+        let entry = WidgetEntry {
+            id: WidgetId::new("jira"),
+            record: crate::domain::widget::WidgetRecord::loading(),
+            interval: std::time::Duration::from_secs(30),
+            max_items: None,
+        };
+        AppState::new(
+            vec![entry],
+            vec![TabView {
+                name: "Main".to_string(),
+                entry_indexes: vec![0],
+            }],
+        )
+    }
+
+    #[test]
+    fn english_is_the_default_language_of_the_panel() {
+        let text = screen(&state_with_one_loading_widget());
+        assert!(text.contains("loading…"), "{text}");
+        assert!(text.contains("2026-11-12"), "{text}");
+        assert!(text.contains("quit"), "{text}");
+        assert!(text.contains("help"), "{text}");
+        assert!(!text.contains("carregando"), "{text}");
+    }
+
+    #[test]
+    fn the_english_help_lists_translated_descriptions() {
+        let mut state = state_with_one_loading_widget();
+        state.handle_key(KeyInput::Character('?'));
+        let text = screen(&state);
+        assert!(text.contains("Help · widget grid"), "{text}");
+        assert!(text.contains("On any screen"), "{text}");
+        assert!(text.contains("Esc or ? closes this help"), "{text}");
+        assert!(text.contains("add widget"), "{text}");
+    }
+
+    #[test]
+    fn the_english_empty_panel_points_to_the_add_key() {
+        let state = AppState::new(
+            Vec::new(),
+            vec![TabView {
+                name: "Main".to_string(),
+                entry_indexes: Vec::new(),
+            }],
+        );
+        let text = screen(&state);
+        assert!(text.contains("no widgets yet"), "{text}");
+        assert!(text.contains("press + to add a widget"), "{text}");
+        assert!(text.contains("mosaic plugins list"), "{text}");
+    }
+
+    #[test]
+    fn the_english_confirmation_hint_uses_the_y_key() {
+        let mut state = state_with_one_loading_widget();
+        state.ask_send_confirmation(
+            "Send these 3 widgets?".to_string(),
+            crate::application::recommendation::RecommendationPlan {
+                prompt: String::new(),
+                item_count: 1,
+                estimated_tokens: 1,
+            },
+        );
+        let text = screen(&state);
+        assert!(text.contains("[y] confirm  [n] cancel"), "{text}");
+        assert!(text.contains("Send to AI"), "{text}");
     }
 }

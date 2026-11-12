@@ -5,6 +5,7 @@ use crate::domain::blocks::{
     rows::{Row, Tag, MAXIMUM_TAGS_PER_ROW},
     Block, BlockKind,
 };
+use crate::infrastructure::protocol_messages as messages;
 use crate::infrastructure::protocol_report::{child_path, Reader};
 
 use super::BlockParser;
@@ -45,7 +46,8 @@ fn parse_tags(reader: &mut Reader, row: &Map<String, Value>, path: &str) -> Vec<
         Some(Value::Array(entries)) => entries,
         Some(Value::Null) | None => return vec![],
         Some(_) => {
-            reader.warning(&tags_path, "precisa ser uma lista; ignorado");
+            let message = messages::tags_not_a_list(reader.language());
+            reader.warning(&tags_path, &message);
             return vec![];
         }
     };
@@ -54,11 +56,13 @@ fn parse_tags(reader: &mut Reader, row: &Map<String, Value>, path: &str) -> Vec<
 
 fn parse_tag(reader: &mut Reader, entry: &Value, path: &str) -> Option<Tag> {
     let Some(tag) = entry.as_object() else {
-        reader.warning(path, "precisa ser um objeto; ignorado");
+        let message = messages::not_an_object_ignored(reader.language());
+        reader.warning(path, &message);
         return None;
     };
     let Some(text) = reader.optional_text(tag, "text", path) else {
-        reader.warning(path, "etiqueta sem texto; ignorada");
+        let message = messages::tag_without_text(reader.language());
+        reader.warning(path, &message);
         return None;
     };
     let tone = reader.tone(tag, path);

@@ -2,20 +2,18 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use mosaic::domain::color_depth::ColorDepth;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::domain::theme::{
     preset_names, Palette, Rgb, Theme, ThemeError, ThemeRole, DEFAULT_THEME_NAME,
 };
 
 const EXIT_CODE_USAGE: u8 = 2;
-const THEMES_USAGE: &str = "uso: mosaic themes [NOME]";
 const THEME_NAME_SEPARATOR: &str = ", ";
-const USAGE_HINT: &str = "use em mosaic.toml:";
 const SWATCH_WIDTH: usize = 2;
 const BACKGROUND_ESCAPE_PREFIX: &str = "\x1b[48;2;";
 const RESET_ESCAPE: &str = "\x1b[0m";
 const NAME_COLUMN_WIDTH: usize = 20;
 const ROLE_COLUMN_WIDTH: usize = 12;
-const DEFAULT_THEME_DESCRIPTION: &str = "usa as cores do terminal, sem pintar o fundo";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SwatchStyle {
@@ -63,7 +61,11 @@ fn palette_of(name: &str) -> Option<Palette> {
     }
 }
 
-fn listing(style: SwatchStyle) -> String {
+fn themes_usage(language: Language) -> &'static str {
+    language.pick("usage: mosaic themes [NAME]", "uso: mosaic themes [NOME]")
+}
+
+fn listing(style: SwatchStyle, language: Language) -> String {
     let mut lines = Vec::new();
     for name in preset_names() {
         let swatches = palette_of(name)
@@ -81,7 +83,10 @@ fn listing(style: SwatchStyle) -> String {
         );
     }
     lines.push(String::new());
-    lines.push(format!("{USAGE_HINT} [theme] name = \"<nome>\""));
+    lines.push(language.pick(
+        "use in mosaic.toml: [theme] name = \"<name>\"".to_string(),
+        "use em mosaic.toml: [theme] name = \"<nome>\"".to_string(),
+    ));
     lines.join("\n")
 }
 
@@ -93,10 +98,14 @@ fn contrast_against(role: ThemeRole, palette: &Palette) -> Option<f64> {
     }
 }
 
-fn details(name: &str, style: SwatchStyle) -> Result<String, ThemeError> {
+fn details(name: &str, style: SwatchStyle, language: Language) -> Result<String, ThemeError> {
     Theme::preset(name)?;
     let Some(palette) = palette_of(name) else {
-        return Ok(format!("{DEFAULT_THEME_NAME}: {DEFAULT_THEME_DESCRIPTION}"));
+        let description = language.pick(
+            "uses the terminal colors, without painting the background",
+            "usa as cores do terminal, sem pintar o fundo",
+        );
+        return Ok(format!("{DEFAULT_THEME_NAME}: {description}"));
     };
     let mut lines = vec![name.to_string()];
     for role in ThemeRole::ALL {
@@ -118,17 +127,20 @@ fn details(name: &str, style: SwatchStyle) -> Result<String, ThemeError> {
     Ok(lines.join("\n"))
 }
 
-fn execute(arguments: &[String], style: SwatchStyle) -> Outcome {
+fn execute(arguments: &[String], style: SwatchStyle, language: Language) -> Outcome {
+    let usage = themes_usage(language);
     match arguments {
-        [] => Outcome::Output(listing(style)),
-        [name] => match details(name, style) {
+        [] => Outcome::Output(listing(style, language)),
+        [name] => match details(name, style, language) {
             Ok(text) => Outcome::Output(text),
             Err(error) => Outcome::Usage(format!(
-                "{error}; temas disponíveis: {}\n{THEMES_USAGE}",
+                "{}{}{}\n{usage}",
+                error.message(language),
+                language.pick("; available themes: ", "; temas disponíveis: "),
                 preset_names().join(THEME_NAME_SEPARATOR)
             )),
         },
-        _ => Outcome::Usage(THEMES_USAGE.to_string()),
+        _ => Outcome::Usage(usage.to_string()),
     }
 }
 
@@ -137,7 +149,7 @@ pub fn run(arguments: &[String]) -> ExitCode {
         std::io::stdout().is_terminal(),
         ColorDepth::detect(|name| std::env::var(name).ok()),
     );
-    match execute(arguments, style) {
+    match execute(arguments, style, Language::detect_from_environment()) {
         Outcome::Output(text) => {
             println!("{text}");
             ExitCode::SUCCESS
@@ -152,6 +164,7 @@ pub fn run(arguments: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mosaic::domain::language::Language;
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
@@ -166,7 +179,11 @@ mod tests {
 
     #[test]
     fn listing_has_every_preset_name_and_the_config_hint() {
-        let text = output(execute(&[], SwatchStyle::Plain));
+        let text = output(execute(
+            &[],
+            SwatchStyle::Plain,
+            Language::BrazilianPortuguese,
+        ));
         for name in preset_names() {
             assert!(text.lines().any(|line| line.starts_with(name)), "{name}");
         }
@@ -175,13 +192,27 @@ mod tests {
 
     #[test]
     fn plain_listing_has_no_escape_codes_without_truecolor() {
-        assert!(!output(execute(&[], SwatchStyle::Plain)).contains('\x1b'));
-        assert!(!output(execute(&arguments(&["nord"]), SwatchStyle::Plain)).contains('\x1b'));
+        assert!(!output(execute(
+            &[],
+            SwatchStyle::Plain,
+            Language::BrazilianPortuguese
+        ))
+        .contains('\x1b'));
+        assert!(!output(execute(
+            &arguments(&["nord"]),
+            SwatchStyle::Plain,
+            Language::BrazilianPortuguese
+        ))
+        .contains('\x1b'));
     }
 
     #[test]
     fn truecolor_listing_has_one_swatch_per_role_on_each_colored_line() {
-        let text = output(execute(&[], SwatchStyle::TrueColor));
+        let text = output(execute(
+            &[],
+            SwatchStyle::TrueColor,
+            Language::BrazilianPortuguese,
+        ));
         let tokyo = text
             .lines()
             .find(|line| line.starts_with("tokyo-night "))
@@ -207,7 +238,11 @@ mod tests {
 
     #[test]
     fn details_show_each_role_with_hex_and_contrast() {
-        let text = output(execute(&arguments(&["tokyo-night"]), SwatchStyle::Plain));
+        let text = output(execute(
+            &arguments(&["tokyo-night"]),
+            SwatchStyle::Plain,
+            Language::BrazilianPortuguese,
+        ));
         assert_eq!(text.lines().count(), 1 + ThemeRole::ALL.len());
         assert!(text.contains("foreground") && text.contains("#c0caf5"));
         assert!(text.contains("10.6:1"), "{text}");
@@ -220,19 +255,27 @@ mod tests {
 
     #[test]
     fn details_for_the_default_theme_explain_it_uses_the_terminal_colors() {
-        let text = output(execute(&arguments(&["default"]), SwatchStyle::Plain));
+        let text = output(execute(
+            &arguments(&["default"]),
+            SwatchStyle::Plain,
+            Language::BrazilianPortuguese,
+        ));
         assert!(text.contains("cores do terminal"));
     }
 
     #[test]
     fn unknown_theme_is_a_usage_error_that_lists_the_names() {
-        match execute(&arguments(&["neon"]), SwatchStyle::Plain) {
+        match execute(
+            &arguments(&["neon"]),
+            SwatchStyle::Plain,
+            Language::BrazilianPortuguese,
+        ) {
             Outcome::Usage(message) => {
                 assert!(
                     message.contains("neon") && message.contains("tokyo-night"),
                     "{message}"
                 );
-                assert!(message.contains(THEMES_USAGE));
+                assert!(message.contains(themes_usage(Language::BrazilianPortuguese)));
             }
             Outcome::Output(text) => panic!("deveria ser erro de uso: {text}"),
         }
@@ -241,8 +284,12 @@ mod tests {
     #[test]
     fn extra_arguments_are_a_usage_error() {
         assert_eq!(
-            execute(&arguments(&["a", "b"]), SwatchStyle::Plain),
-            Outcome::Usage(THEMES_USAGE.to_string())
+            execute(
+                &arguments(&["a", "b"]),
+                SwatchStyle::Plain,
+                Language::BrazilianPortuguese
+            ),
+            Outcome::Usage(themes_usage(Language::BrazilianPortuguese).to_string())
         );
     }
 }

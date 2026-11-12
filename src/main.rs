@@ -39,8 +39,10 @@ use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
 use mosaic::application::update::{
     newer_version_for_notice, update_check_enabled, NO_UPDATE_CHECK_VARIABLE,
 };
+use mosaic::display_in_portuguese;
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::color_depth::ColorDepth;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::domain::pomodoro::PomodoroTimer;
 use mosaic::domain::release::ReleaseVersion;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
@@ -64,6 +66,7 @@ use mosaic::infrastructure::recommendation_file::{
     FileRecommendationStore, NullRecommendationStore,
 };
 use mosaic::infrastructure::setup_catalog::{FileSetupCatalog, FileWidgetConfigWriter};
+use mosaic::infrastructure::shared_language::SharedLanguage;
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::update_check_file::FileUpdateCheckStore;
@@ -73,6 +76,7 @@ use mosaic::presentation::app_events::{
 };
 use mosaic::presentation::app_state::{AppState, Command, NewWidget};
 use mosaic::presentation::key_input::{from_crossterm, KeyInput};
+use mosaic::presentation::messages;
 use mosaic::presentation::redraw_policy::{clock_changes_what_is_drawn, needs_time_redraw};
 use mosaic::presentation::reload_notice::{added_widget_notice, reload_notice};
 use mosaic::presentation::render::render;
@@ -85,10 +89,6 @@ use thiserror::Error;
 
 const EVENT_WAIT_LIMIT: Duration = Duration::from_millis(250);
 const EVENT_QUEUE_CAPACITY: usize = 16;
-const LLM_DISABLED_NOTICE: &str = "IA desligada na configuração";
-const NO_STATE_DIRECTORY_LLM_WARNING: &str = "IA desligada: não há diretório de estado do usuário";
-const NO_STATE_DIRECTORY_STORE_WARNING: &str =
-    "recomendações não serão salvas: não há diretório de estado do usuário";
 const CHECK_SUBCOMMAND: &str = "check";
 const SKILLS_SUBCOMMAND: &str = "skills";
 const PLUGINS_SUBCOMMAND: &str = "plugins";
@@ -101,11 +101,20 @@ const UPDATE_CHECK_SHUTDOWN_KEY: &str = "update-check";
 
 #[derive(Debug, Error)]
 enum AppError {
-    #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error("falha de terminal: {0}")]
     Terminal(#[from] std::io::Error),
 }
+
+impl LocalizedMessage for AppError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            AppError::Config(error) => error.message(language),
+            AppError::Terminal(error) => messages::terminal_failure(language, &error.to_string()),
+        }
+    }
+}
+
+display_in_portuguese!(AppError);
 
 struct LlmServices {
     runner: Arc<dyn LlmRunner>,
@@ -125,6 +134,7 @@ struct Services {
     notifier: CompositeNotifier,
     config_directory: PathBuf,
     config: AppConfig,
+    language: SharedLanguage,
     color_depth: ColorDepth,
     setup_catalog: Box<dyn SetupCatalog>,
     config_writer: Box<dyn WidgetConfigWriter>,
@@ -169,25 +179,31 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("mosaic: {error}");
+            eprintln!(
+                "mosaic: {}",
+                error.message(Language::detect_from_environment())
+            );
             ExitCode::FAILURE
         }
     }
 }
 
 fn run() -> Result<(), AppError> {
+    let fallback_language = Language::detect_from_environment();
     let directory = config_directory()?;
-    install_defaults_if_missing(&directory)?;
-    let config = load_config(&directory)?;
+    install_defaults_if_missing(&directory, fallback_language)?;
+    let config = load_config(&directory, fallback_language)?;
     let termination = termination_requested()?;
     let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
     let color_depth = ColorDepth::detect(|name| std::env::var(name).ok());
+    let language = SharedLanguage::new(config.language);
     let services = build_services(
         &config,
         &directory,
         &sender,
         Arc::clone(&termination),
         color_depth,
+        &language,
     );
     start_update_check(&config, &services.shutdown, &sender);
     let (state, spans) = initial_state(&config, &services, &SystemClock);
@@ -245,7 +261,7 @@ fn initial_state(
     let recommendation_record = services
         .llm
         .as_ref()
-        .map(|llm| stored_recommendation_record(llm.store.as_ref(), clock.now()));
+        .map(|llm| stored_recommendation_record(llm.store.as_ref(), clock.now(), config.language));
     let TabLayout {
         entries,
         tabs,
@@ -255,7 +271,7 @@ fn initial_state(
         &tab_placements(config),
         recommendation_record,
     );
-    let mut state = AppState::new(entries, tabs);
+    let mut state = AppState::new(entries, tabs).with_language(config.language);
     let warnings = apply_theme(
         &mut state,
         &config.theme,
@@ -310,14 +326,17 @@ fn build_services(
     sender: &SyncSender<AppEvent>,
     termination: Arc<AtomicBool>,
     color_depth: ColorDepth,
+    language: &SharedLanguage,
 ) -> Services {
     let shutdown = Arc::new(ShutdownCoordinator::new());
     let working_directory = directory.to_path_buf();
     let parse_gate = Arc::new(ConcurrencyGate::new(MAXIMUM_CONCURRENT_PARSES));
+    let runner_language = language.clone();
     let factory: RunnerFactory = Box::new(move |spec| {
         Arc::new(
             PluginRunner::new(spec.command.clone(), working_directory.clone())
-                .with_parse_gate(Arc::clone(&parse_gate)),
+                .with_parse_gate(Arc::clone(&parse_gate))
+                .with_language(runner_language.clone()),
         ) as Arc<dyn WidgetRunner>
     });
     let mut runtime = WidgetRuntime::new(
@@ -340,7 +359,7 @@ fn build_services(
     );
     let mut startup_warnings = Vec::new();
     let llm = if config.llm.enabled {
-        build_llm_services(config, &mut startup_warnings)
+        build_llm_services(config, &mut startup_warnings, language)
     } else {
         None
     };
@@ -358,9 +377,14 @@ fn build_services(
         notifier,
         config_directory: directory.to_path_buf(),
         config: config.clone(),
+        language: language.clone(),
         color_depth,
-        setup_catalog: Box::new(FileSetupCatalog::new(directory.to_path_buf())),
-        config_writer: Box::new(FileWidgetConfigWriter::new(directory.to_path_buf())),
+        setup_catalog: Box::new(
+            FileSetupCatalog::new(directory.to_path_buf()).with_language(language.clone()),
+        ),
+        config_writer: Box::new(
+            FileWidgetConfigWriter::new(directory.to_path_buf()).with_language(language.clone()),
+        ),
     }
 }
 
@@ -373,18 +397,22 @@ fn startup_plan(widgets: &[WidgetSettings]) -> ReloadPlan {
     }
 }
 
-fn build_llm_services(config: &AppConfig, warnings: &mut Vec<String>) -> Option<LlmServices> {
+fn build_llm_services(
+    config: &AppConfig,
+    warnings: &mut Vec<String>,
+    language: &SharedLanguage,
+) -> Option<LlmServices> {
     let Some(working_directory) = llm_working_directory() else {
-        warnings.push(NO_STATE_DIRECTORY_LLM_WARNING.to_string());
+        warnings.push(messages::no_state_directory_llm_warning(config.language).to_string());
         return None;
     };
-    let shared = build_llm_runner(&config.llm, working_directory);
+    let shared = build_llm_runner(&config.llm, working_directory, language.clone());
     let runner: Arc<dyn LlmRunner> = shared.clone();
     let cancellable: Arc<dyn Cancellable> = shared;
     let store: Arc<dyn RecommendationStore> = match recommendation_file() {
         Some(path) => Arc::new(FileRecommendationStore::new(path)),
         None => {
-            warnings.push(NO_STATE_DIRECTORY_STORE_WARNING.to_string());
+            warnings.push(messages::no_state_directory_store_warning(config.language).to_string());
             Arc::new(NullRecommendationStore)
         }
     };
@@ -554,29 +582,34 @@ fn read_input_events(
 fn stored_recommendation_record(
     store: &dyn RecommendationStore,
     now: NaiveDateTime,
+    language: Language,
 ) -> WidgetRecord {
     let mut record = WidgetRecord::loading();
-    record.apply(stored_recommendation_result(store), now);
+    record.apply(stored_recommendation_result(store, language), now);
     record
 }
 
 fn reload_config(state: &mut AppState, services: &mut Services, spans: &mut Vec<u16>) {
+    let fallback_language = Language::detect_from_environment();
     let outcome = reload_widgets(
-        read_installed_config(&services.config_directory),
-        |text| prepare_reload(&services.config.widgets, text),
+        read_installed_config(&services.config_directory, fallback_language),
+        |text| prepare_reload(&services.config.widgets, text, fallback_language),
         &mut services.runtime,
         &mut services.generations,
     );
     match outcome {
         Ok((next, plan)) => apply_reloaded_config(state, services, spans, next, &plan),
-        Err(error) => state.show_notice(error.to_string()),
+        Err(error) => state.show_notice(error.message(state.language())),
     }
 }
 
 fn open_add_widget(state: &mut AppState, services: &Services) {
     match services.setup_catalog.load() {
         Ok(snapshot) => state.open_add_widget(snapshot),
-        Err(error) => state.show_notice(format!("não foi possível adicionar um widget: {error}")),
+        Err(error) => state.show_notice(messages::cannot_add_widget(
+            state.language(),
+            &error.to_string(),
+        )),
     }
 }
 
@@ -594,6 +627,7 @@ fn append_widget(
             state.show_notice(added_widget_notice(
                 &widget.widget_id,
                 reload_result.as_deref(),
+                state.language(),
             ));
         }
         Err(error) => state.fail_adding_widget(error.to_string()),
@@ -607,13 +641,19 @@ fn apply_reloaded_config(
     next: AppConfig,
     plan: &ReloadPlan,
 ) {
+    state.set_language(next.language);
+    services.language.set(next.language);
     let warnings = apply_theme(
         state,
         &next.theme,
         services.color_depth,
         next.warnings.clone(),
     );
-    let notice = reload_notice(&restart_sections(&services.config, &next), &warnings);
+    let notice = reload_notice(
+        &restart_sections(&services.config, &next),
+        &warnings,
+        next.language,
+    );
     let TabLayout {
         entries,
         tabs,
@@ -700,7 +740,7 @@ fn request_recommendation(
     sender: &SyncSender<AppEvent>,
 ) {
     let Some(llm) = &services.llm else {
-        state.show_notice(LLM_DISABLED_NOTICE.to_string());
+        state.show_notice(messages::llm_disabled_notice(state.language()).to_string());
         return;
     };
     let criteria =
@@ -708,6 +748,7 @@ fn request_recommendation(
     let policy = SendPolicy {
         confirm_before_send: llm.config.confirm_before_send,
         target_label: describe_target(&llm.config),
+        language: state.language(),
     };
     let step = prepare_recommendation(
         &criteria,
@@ -739,6 +780,7 @@ fn start_recommendation(
     let store = Arc::clone(&llm.store);
     let model = llm.config.model.clone();
     let now = clock.now();
+    let language = state.language();
     spawn_event_task(sender, move || {
         AppEvent::RecommendationFinished(execute_recommendation(
             runner.as_ref(),
@@ -746,6 +788,7 @@ fn start_recommendation(
             &plan,
             model.as_deref(),
             now,
+            language,
         ))
     });
 }

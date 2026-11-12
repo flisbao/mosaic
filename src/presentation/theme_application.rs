@@ -9,7 +9,7 @@ pub fn apply_theme(
     depth: ColorDepth,
     mut warnings: Vec<String>,
 ) -> Vec<String> {
-    let resolution = resolve_theme(theme, depth);
+    let resolution = resolve_theme(theme, depth, state.language());
     state.set_theme_styles(resolution.styles);
     warnings.extend(resolution.warning);
     warnings
@@ -18,9 +18,11 @@ pub fn apply_theme(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::language::Language;
     use crate::presentation::app_state::TabView;
     use crate::presentation::key_input::KeyInput;
-    use crate::presentation::theme_styles::{ThemeStyles, BASIC_TERMINAL_WARNING};
+    use crate::presentation::messages;
+    use crate::presentation::theme_styles::ThemeStyles;
 
     fn state() -> AppState {
         let tab = |name: &str| TabView {
@@ -28,6 +30,7 @@ mod tests {
             entry_indexes: Vec::new(),
         };
         AppState::new(Vec::new(), vec![tab("Principal"), tab("Notas")])
+            .with_language(Language::BrazilianPortuguese)
     }
 
     fn nord() -> Theme {
@@ -42,7 +45,10 @@ mod tests {
         assert!(app.styles().paints_background());
         assert!(warnings.is_empty());
         let warnings = apply_theme(&mut app, &Theme::Ansi, ColorDepth::TrueColor, Vec::new());
-        assert_eq!(app.styles(), &ThemeStyles::ansi());
+        assert_eq!(
+            app.styles(),
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese)
+        );
         assert!(warnings.is_empty());
     }
 
@@ -50,8 +56,14 @@ mod tests {
     fn a_colored_theme_on_a_basic_terminal_falls_back_and_warns() {
         let mut app = state();
         let warnings = apply_theme(&mut app, &nord(), ColorDepth::Basic, Vec::new());
-        assert_eq!(app.styles(), &ThemeStyles::ansi());
-        assert_eq!(warnings, vec![BASIC_TERMINAL_WARNING.to_string()]);
+        assert_eq!(
+            app.styles(),
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese)
+        );
+        assert_eq!(
+            warnings,
+            vec![messages::basic_terminal_warning(Language::BrazilianPortuguese).to_string()]
+        );
     }
 
     #[test]
@@ -67,7 +79,7 @@ mod tests {
             warnings,
             vec![
                 "[theme] cor inválida".to_string(),
-                BASIC_TERMINAL_WARNING.to_string()
+                messages::basic_terminal_warning(Language::BrazilianPortuguese).to_string()
             ]
         );
     }

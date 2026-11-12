@@ -1,5 +1,7 @@
 use unicode_width::UnicodeWidthStr;
 
+use crate::domain::language::Language;
+
 const SEGMENT_SEPARATOR_WIDTH: usize = 2;
 const KEYS_DESCRIPTION_GAP_WIDTH: usize = 1;
 const FOOTER_LEADING_WIDTH: usize = 1;
@@ -19,10 +21,12 @@ impl HintContext {
         }
     }
 
-    pub fn title(self) -> &'static str {
-        match self {
-            HintContext::Grid => "Ajuda · grade de widgets",
-            HintContext::Focus => "Ajuda · widget aberto",
+    pub fn title(self, language: Language) -> &'static str {
+        match (self, language) {
+            (HintContext::Grid, Language::English) => "Help · widget grid",
+            (HintContext::Focus, Language::English) => "Help · open widget",
+            (HintContext::Grid, Language::BrazilianPortuguese) => "Ajuda · grade de widgets",
+            (HintContext::Focus, Language::BrazilianPortuguese) => "Ajuda · widget aberto",
         }
     }
 }
@@ -30,43 +34,57 @@ impl HintContext {
 #[derive(Debug, PartialEq, Eq)]
 pub struct KeyHint {
     pub keys: &'static str,
-    pub description: &'static str,
+    english: &'static str,
+    portuguese: &'static str,
 }
 
-const fn hint(keys: &'static str, description: &'static str) -> KeyHint {
-    KeyHint { keys, description }
+impl KeyHint {
+    pub fn description(&self, language: Language) -> &'static str {
+        match language {
+            Language::English => self.english,
+            Language::BrazilianPortuguese => self.portuguese,
+        }
+    }
 }
 
-pub const HELP_HINT: KeyHint = hint("?", "ajuda");
-const QUIT_FOOTER_HINT: KeyHint = hint("q", "sair");
-const ADD_WIDGET_HINT: KeyHint = hint("+", "adicionar widget");
+const fn hint(keys: &'static str, english: &'static str, portuguese: &'static str) -> KeyHint {
+    KeyHint {
+        keys,
+        english,
+        portuguese,
+    }
+}
+
+pub const HELP_HINT: KeyHint = hint("?", "help", "ajuda");
+const QUIT_FOOTER_HINT: KeyHint = hint("q", "quit", "sair");
+const ADD_WIDGET_HINT: KeyHint = hint("+", "add widget", "adicionar widget");
 
 const GRID_HINTS: [KeyHint; 6] = [
-    hint("←↑↓→ hjkl", "mover"),
-    hint("Enter", "abrir"),
-    hint("Tab", "próxima aba"),
-    hint("1-9", "ir para a aba"),
-    hint("Shift/Alt+A-Z", "ir para o widget"),
-    hint("Shift+Tab", "aba anterior"),
+    hint("←↑↓→ hjkl", "move", "mover"),
+    hint("Enter", "open", "abrir"),
+    hint("Tab", "next tab", "próxima aba"),
+    hint("1-9", "go to tab", "ir para a aba"),
+    hint("Shift/Alt+A-Z", "go to widget", "ir para o widget"),
+    hint("Shift+Tab", "previous tab", "aba anterior"),
 ];
 
 const FOCUS_HINTS: [KeyHint; 5] = [
-    hint("↑↓ hjkl", "item"),
-    hint("PgUp/PgDn", "página"),
-    hint("Home/End", "início/fim"),
-    hint("a", "ações"),
-    hint("Esc", "voltar"),
+    hint("↑↓ hjkl", "item", "item"),
+    hint("PgUp/PgDn", "page", "página"),
+    hint("Home/End", "start/end", "início/fim"),
+    hint("a", "actions", "ações"),
+    hint("Esc", "back", "voltar"),
 ];
 
 const GLOBAL_HINTS: [KeyHint; 8] = [
     ADD_WIDGET_HINT,
-    hint("r", "atualizar tudo"),
-    hint("R", "recarregar config"),
-    hint("a", "ações do widget focado"),
-    hint("p", "iniciar/pausar pomodoro"),
-    hint("x", "zerar pomodoro"),
-    hint("i", "recomendação (IA)"),
-    hint("q / Ctrl+C", "sair"),
+    hint("r", "refresh all", "atualizar tudo"),
+    hint("R", "reload config", "recarregar config"),
+    hint("a", "focused widget actions", "ações do widget focado"),
+    hint("p", "start/pause pomodoro", "iniciar/pausar pomodoro"),
+    hint("x", "reset pomodoro", "zerar pomodoro"),
+    hint("i", "recommendation (AI)", "recomendação (IA)"),
+    hint("q / Ctrl+C", "quit", "sair"),
 ];
 
 pub fn context_hints(context: HintContext) -> &'static [KeyHint] {
@@ -80,7 +98,11 @@ pub fn global_hints() -> &'static [KeyHint] {
     &GLOBAL_HINTS
 }
 
-pub fn footer_hints(context: HintContext, width: usize) -> Vec<&'static KeyHint> {
+pub fn footer_hints(
+    context: HintContext,
+    width: usize,
+    language: Language,
+) -> Vec<&'static KeyHint> {
     let mut candidates: Vec<&'static KeyHint> = context_hints(context).iter().collect();
     if context == HintContext::Grid {
         candidates.push(&ADD_WIDGET_HINT);
@@ -88,10 +110,10 @@ pub fn footer_hints(context: HintContext, width: usize) -> Vec<&'static KeyHint>
     }
     let mut remaining = width
         .saturating_sub(FOOTER_LEADING_WIDTH)
-        .saturating_sub(segment_width(&HELP_HINT));
+        .saturating_sub(segment_width(&HELP_HINT, language));
     let mut fitted = Vec::new();
     for candidate in candidates {
-        let needed = segment_width(candidate);
+        let needed = segment_width(candidate, language);
         if needed > remaining {
             break;
         }
@@ -102,10 +124,10 @@ pub fn footer_hints(context: HintContext, width: usize) -> Vec<&'static KeyHint>
     fitted
 }
 
-fn segment_width(hint: &KeyHint) -> usize {
+fn segment_width(hint: &KeyHint, language: Language) -> usize {
     hint.keys.width()
         + KEYS_DESCRIPTION_GAP_WIDTH
-        + hint.description.width()
+        + hint.description(language).width()
         + SEGMENT_SEPARATOR_WIDTH
 }
 
@@ -118,7 +140,11 @@ mod tests {
     const WIDTHS_TO_TRY: [usize; 6] = [0, 1, 10, 30, NARROW_WIDTH, WIDE_WIDTH];
 
     fn total_width(hints: &[&KeyHint]) -> usize {
-        FOOTER_LEADING_WIDTH + hints.iter().map(|hint| segment_width(hint)).sum::<usize>()
+        FOOTER_LEADING_WIDTH
+            + hints
+                .iter()
+                .map(|hint| segment_width(hint, Language::BrazilianPortuguese))
+                .sum::<usize>()
     }
 
     #[test]
@@ -131,14 +157,17 @@ mod tests {
     fn footer_always_ends_with_help_hint_at_any_width() {
         for context in [HintContext::Grid, HintContext::Focus] {
             for width in WIDTHS_TO_TRY {
-                assert_eq!(footer_hints(context, width).last(), Some(&&HELP_HINT));
+                assert_eq!(
+                    footer_hints(context, width, Language::BrazilianPortuguese).last(),
+                    Some(&&HELP_HINT)
+                );
             }
         }
     }
 
     #[test]
     fn wide_footer_has_every_context_hint_and_quit_in_grid() {
-        let footer = footer_hints(HintContext::Grid, WIDE_WIDTH);
+        let footer = footer_hints(HintContext::Grid, WIDE_WIDTH, Language::BrazilianPortuguese);
         for hint in context_hints(HintContext::Grid) {
             assert!(footer.contains(&hint), "falta {}", hint.keys);
         }
@@ -148,8 +177,12 @@ mod tests {
 
     #[test]
     fn narrow_footer_drops_trailing_hints_but_keeps_leading_ones() {
-        let narrow = footer_hints(HintContext::Grid, NARROW_WIDTH);
-        let wide = footer_hints(HintContext::Grid, WIDE_WIDTH);
+        let narrow = footer_hints(
+            HintContext::Grid,
+            NARROW_WIDTH,
+            Language::BrazilianPortuguese,
+        );
+        let wide = footer_hints(HintContext::Grid, WIDE_WIDTH, Language::BrazilianPortuguese);
         assert_eq!(
             narrow.first().copied(),
             context_hints(HintContext::Grid).first()
@@ -161,9 +194,13 @@ mod tests {
     #[test]
     fn the_add_widget_key_is_in_the_help_and_in_the_grid_footer_only() {
         assert!(global_hints().iter().any(|hint| hint.keys == "+"));
-        let grid = footer_hints(HintContext::Grid, WIDE_WIDTH);
+        let grid = footer_hints(HintContext::Grid, WIDE_WIDTH, Language::BrazilianPortuguese);
         assert!(grid.iter().any(|hint| hint.keys == "+"));
-        let focus = footer_hints(HintContext::Focus, WIDE_WIDTH);
+        let focus = footer_hints(
+            HintContext::Focus,
+            WIDE_WIDTH,
+            Language::BrazilianPortuguese,
+        );
         assert!(!focus.iter().any(|hint| hint.keys == "+"));
     }
 
@@ -179,5 +216,41 @@ mod tests {
             labels.dedup();
             assert_eq!(labels.len(), hints.len());
         }
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_hint_and_title_is_translated() {
+        for hint in GRID_HINTS
+            .iter()
+            .chain(&GLOBAL_HINTS)
+            .chain(&FOCUS_HINTS)
+            .chain([&HELP_HINT, &QUIT_FOOTER_HINT])
+        {
+            assert!(!hint.description(Language::English).is_empty());
+            assert!(!hint.description(Language::BrazilianPortuguese).is_empty());
+        }
+        for context in [HintContext::Grid, HintContext::Focus] {
+            assert_translated("title", |language| context.title(language).to_string());
+        }
+        assert_translated("quit", |language| {
+            QUIT_FOOTER_HINT.description(language).to_string()
+        });
+    }
+
+    #[test]
+    fn english_footer_lists_the_english_descriptions() {
+        let hints = footer_hints(HintContext::Grid, 200, Language::English);
+        let descriptions: Vec<&str> = hints
+            .iter()
+            .map(|hint| hint.description(Language::English))
+            .collect();
+        assert_eq!(descriptions.last(), Some(&"help"));
+        assert!(descriptions.contains(&"add widget"));
     }
 }

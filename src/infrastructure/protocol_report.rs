@@ -1,5 +1,8 @@
 use serde_json::{Map, Value};
 
+use crate::domain::language::Language;
+use crate::infrastructure::protocol_messages as messages;
+
 use crate::domain::action::ACTION_ITEM_ID_KEY;
 use crate::domain::blocks::Block;
 use crate::domain::widget::{
@@ -25,10 +28,6 @@ pub const MAXIMUM_ACTIONS: usize = 100;
 pub const MAXIMUM_KEY_CHARACTERS: usize = 100;
 
 const EMPTY_PARAMS_JSON: &str = "{}";
-const UNKNOWN_FIELD_MESSAGE: &str = "campo desconhecido";
-const NOT_TEXT_IGNORED_MESSAGE: &str = "precisa ser texto; ignorado";
-const NOT_A_LIST_MESSAGE: &str = "precisa ser uma lista";
-const MISSING_FIELD_MESSAGE: &str = "campo obrigatório ausente";
 const ROOT_KEYS: [&str; 6] = ["protocol", "summary", "detail", "actions", "alerts", "mini"];
 const SUMMARY_KEYS: [&str; 2] = ["title", "blocks"];
 const SECTION_KEYS: [&str; 3] = ["heading", "items", "blocks"];
@@ -36,24 +35,27 @@ const ITEM_KEYS: [&str; 4] = ["id", "text", "flag", "meta"];
 const ACTION_KEYS: [&str; 5] = ["id", "label", "description", "applies_to", "params"];
 const MINI_KEYS: [&str; 3] = ["value", "text", "tone"];
 
-pub fn unsupported_protocol_text(version: u64) -> String {
-    format!("este widget exige o protocolo {version}; atualize o mosaic")
+pub fn parse_snapshot_report(json: &str) -> Result<ParsedSnapshot, ProtocolError> {
+    parse_snapshot_report_in(json, Language::BrazilianPortuguese)
 }
 
-pub fn parse_snapshot_report(json: &str) -> Result<ParsedSnapshot, ProtocolError> {
+pub fn parse_snapshot_report_in(
+    json: &str,
+    language: Language,
+) -> Result<ParsedSnapshot, ProtocolError> {
     let value: Value = serde_json::from_str(json).map_err(ProtocolError::new)?;
     let Value::Object(root) = value else {
-        return Err(ProtocolError::new("a raiz precisa ser um objeto"));
+        return Err(ProtocolError::new(messages::root_not_an_object(language)));
     };
-    let mut reader = Reader::default();
+    let mut reader = Reader::new(language);
     let summary_object = root
         .get("summary")
         .and_then(Value::as_object)
-        .ok_or_else(|| ProtocolError::new("summary: objeto obrigatório"))?;
+        .ok_or_else(|| ProtocolError::new(messages::summary_required(language)))?;
     let title = summary_object
         .get("title")
         .and_then(Value::as_str)
-        .ok_or_else(|| ProtocolError::new("summary.title: texto obrigatório"))?;
+        .ok_or_else(|| ProtocolError::new(messages::summary_title_required(language)))?;
     let title = reader.limited(title, "summary.title");
 
     if let Some(version) = reader.protocol_version(&root) {
@@ -96,10 +98,10 @@ pub(super) fn indexed_path(parent: &str, index: usize) -> String {
     format!("{parent}[{index}]")
 }
 
-#[derive(Default)]
 pub(super) struct Reader {
     problems: Vec<Problem>,
     error_total: usize,
+    language: Language,
 }
 
 fn is_valid_item_id(id: &str) -> bool {
@@ -107,6 +109,18 @@ fn is_valid_item_id(id: &str) -> bool {
 }
 
 impl Reader {
+    fn new(language: Language) -> Self {
+        Self {
+            problems: Vec::new(),
+            error_total: 0,
+            language,
+        }
+    }
+
+    pub(super) fn language(&self) -> Language {
+        self.language
+    }
+
     fn report(&mut self, path: &str, message: &str, severity: Severity) {
         if severity == Severity::Error {
             self.error_total += 1;
@@ -128,7 +142,8 @@ impl Reader {
 
     fn unknown_fields(&mut self, object: &Map<String, Value>, known: &[&str], path: &str) {
         for key in object.keys().filter(|key| !known.contains(&key.as_str())) {
-            self.warning(&key_path(path, key), UNKNOWN_FIELD_MESSAGE);
+            let message = messages::unknown_field(self.language);
+            self.warning(&key_path(path, key), &message);
         }
     }
 
@@ -141,7 +156,8 @@ impl Reader {
         if cleaned.chars().count() <= limit {
             return cleaned;
         }
-        self.warning(path, &format!("texto cortado em {limit} caracteres"));
+        let message = messages::text_cut(self.language, limit);
+        self.warning(path, &message);
         clean_text_limited(&cleaned, limit)
     }
 
@@ -165,11 +181,13 @@ impl Reader {
         match object.get(key) {
             Some(Value::String(text)) => Some(self.limited_to(text, limit, &field_path)),
             Some(_) => {
-                self.error(&field_path, "precisa ser texto");
+                let message = messages::not_text(self.language);
+                self.error(&field_path, &message);
                 None
             }
             None => {
-                self.error(&field_path, MISSING_FIELD_MESSAGE);
+                let message = messages::missing_field(self.language);
+                self.error(&field_path, &message);
                 None
             }
         }
@@ -195,7 +213,8 @@ impl Reader {
             Some(Value::String(text)) => Some(text.as_str()),
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.warning(&child_path(path, key), NOT_TEXT_IGNORED_MESSAGE);
+                let message = messages::not_text_ignored(self.language);
+                self.warning(&child_path(path, key), &message);
                 None
             }
         }
@@ -205,10 +224,8 @@ impl Reader {
         let name = self.optional_string(object, "flag", path)?;
         let flag = Flag::parse(name);
         if flag.is_none() {
-            self.warning(
-                &child_path(path, "flag"),
-                &format!("flag desconhecida: {}", clean_text(name)),
-            );
+            let message = messages::unknown_flag(self.language, &clean_text(name));
+            self.warning(&child_path(path, "flag"), &message);
         }
         flag
     }
@@ -218,18 +235,18 @@ impl Reader {
         match value.as_u64().filter(|version| *version > 0) {
             Some(version) => Some(version),
             None => {
-                self.error("protocol", "precisa ser um número inteiro positivo");
+                let message = messages::invalid_protocol_number(self.language);
+                self.error("protocol", &message);
                 None
             }
         }
     }
 
     fn unsupported_protocol(mut self, title: String, version: u64) -> ParsedSnapshot {
-        self.warning("protocol", &unsupported_protocol_text(version));
+        let text = messages::unsupported_protocol(self.language, version);
+        self.warning("protocol", &text);
         let mut snapshot = WidgetSnapshot::titled(title);
-        snapshot
-            .summary
-            .put_notice_first(unsupported_protocol_text(version), Tone::Normal, None);
+        snapshot.summary.put_notice_first(text, Tone::Normal, None);
         ParsedSnapshot {
             snapshot,
             problems: self.problems,
@@ -246,7 +263,8 @@ impl Reader {
             Some(Value::Array(entries)) => Some(entries),
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.error(&child_path(path, key), NOT_A_LIST_MESSAGE);
+                let message = messages::not_a_list(self.language);
+                self.error(&child_path(path, key), &message);
                 None
             }
         }
@@ -259,7 +277,8 @@ impl Reader {
     ) -> Option<&'a Map<String, Value>> {
         let object = entry.as_object();
         if object.is_none() {
-            self.error(path, "precisa ser um objeto");
+            let message = messages::not_an_object(self.language);
+            self.error(path, &message);
         }
         object
     }
@@ -281,7 +300,8 @@ impl Reader {
         if entries.len() <= limit {
             return entries;
         }
-        self.warning(path, &format!("apenas {limit} itens são lidos"));
+        let message = messages::only_items_read(self.language, limit);
+        self.warning(path, &message);
         &entries[..limit]
     }
 
@@ -311,11 +331,13 @@ impl Reader {
         match object.get(key) {
             Some(Value::Array(entries)) => entries,
             Some(_) => {
-                self.error(&child_path(path, key), NOT_A_LIST_MESSAGE);
+                let message = messages::not_a_list(self.language);
+                self.error(&child_path(path, key), &message);
                 &[]
             }
             None => {
-                self.error(&child_path(path, key), MISSING_FIELD_MESSAGE);
+                let message = messages::missing_field(self.language);
+                self.error(&child_path(path, key), &message);
                 &[]
             }
         }
@@ -326,10 +348,8 @@ impl Reader {
             return Tone::Normal;
         };
         Tone::parse(name).unwrap_or_else(|| {
-            self.warning(
-                &child_path(path, "tone"),
-                &format!("tom desconhecido: {}", clean_text(name)),
-            );
+            let message = messages::unknown_tone(self.language, &clean_text(name));
+            self.warning(&child_path(path, "tone"), &message);
             Tone::Normal
         })
     }
@@ -349,15 +369,17 @@ impl Reader {
 
     fn block(&mut self, entry: &Value, path: &str) -> Option<Block> {
         let Some(object) = entry.as_object() else {
-            self.error(path, "bloco precisa ser um objeto");
+            let message = messages::block_not_an_object(self.language);
+            self.error(path, &message);
             return None;
         };
         let Some(kind) = object.get("type").and_then(Value::as_str) else {
-            self.error(&child_path(path, "type"), "type ausente");
+            let message = messages::type_missing(self.language);
+            self.error(&child_path(path, "type"), &message);
             return None;
         };
         let Some(parser) = find_parser(kind) else {
-            let message = format!("tipo de bloco desconhecido: {}", clean_text(kind));
+            let message = messages::unknown_block_type(self.language, &clean_text(kind));
             self.warning(path, &message);
             return None;
         };
@@ -388,7 +410,8 @@ impl Reader {
     ) -> Option<String> {
         let text = self.required_text_within(object, key, "mini", limit)?;
         if text.is_empty() {
-            self.error(&child_path("mini", key), "precisa ter conteúdo");
+            let message = messages::needs_content(self.language);
+            self.error(&child_path("mini", key), &message);
             return None;
         }
         Some(text)
@@ -436,12 +459,14 @@ impl Reader {
         match object.get("id") {
             Some(Value::String(id)) if is_valid_item_id(id) => Some(id.clone()),
             Some(Value::String(_)) => {
-                self.warning(&id_path, &format!("id precisa ter de 1 a {MAXIMUM_ITEM_ID_CHARACTERS} caracteres, sem controle nem formatação; ignorado"));
+                let message = messages::invalid_item_id(self.language, MAXIMUM_ITEM_ID_CHARACTERS);
+                self.warning(&id_path, &message);
                 None
             }
             Some(Value::Null) | None => None,
             Some(_) => {
-                self.warning(&id_path, "precisa ser texto; ignorado");
+                let message = messages::not_text_ignored(self.language);
+                self.warning(&id_path, &message);
                 None
             }
         }
@@ -453,7 +478,8 @@ impl Reader {
             Some(Value::Object(meta)) => meta,
             Some(Value::Null) | None => return vec![],
             Some(_) => {
-                self.warning(&meta_path, "precisa ser um objeto; ignorado");
+                let message = messages::not_an_object_ignored(self.language);
+                self.warning(&meta_path, &message);
                 return vec![];
             }
         };
@@ -464,7 +490,10 @@ impl Reader {
                     let value = self.limited(text, &key_path(&meta_path, key));
                     pairs.push((clean_text_limited(key, MAXIMUM_TEXT_CHARACTERS), value));
                 }
-                _ => self.warning(&key_path(&meta_path, key), NOT_TEXT_IGNORED_MESSAGE),
+                _ => {
+                    let message = messages::not_text_ignored(self.language);
+                    self.warning(&key_path(&meta_path, key), &message);
+                }
             }
         }
         pairs
@@ -500,18 +529,17 @@ impl Reader {
             None => EMPTY_PARAMS_JSON.to_string(),
             Some(params @ Value::Object(map)) => {
                 if map.contains_key(ACTION_ITEM_ID_KEY) {
+                    let message = messages::reserved_key(self.language);
                     self.warning(
                         &key_path(&key_path(path, "params"), ACTION_ITEM_ID_KEY),
-                        "chave reservada; o Mosaic envia o id do item selecionado",
+                        &message,
                     );
                 }
                 params.to_string()
             }
             Some(_) => {
-                self.warning(
-                    &key_path(path, "params"),
-                    "params precisa ser um objeto; usando {}",
-                );
+                let message = messages::params_not_an_object(self.language);
+                self.warning(&key_path(path, "params"), &message);
                 EMPTY_PARAMS_JSON.to_string()
             }
         }
@@ -526,12 +554,14 @@ impl Reader {
 
     fn alert(&mut self, entry: &Value, path: &str) -> Option<Alert> {
         let Some(object) = entry.as_object() else {
-            self.warning(path, "precisa ser um objeto; descartado");
+            let message = messages::alert_not_an_object(self.language);
+            self.warning(path, &message);
             return None;
         };
         let id = self.alert_id(object, path)?;
         let Some(title) = self.optional_text(object, "title", path) else {
-            self.warning(&child_path(path, "title"), "título ausente; descartado");
+            let message = messages::alert_title_missing(self.language);
+            self.warning(&child_path(path, "title"), &message);
             return None;
         };
         Some(Alert {
@@ -550,12 +580,9 @@ impl Reader {
                 Some(id)
             }
             _ => {
-                self.warning(
-                    &id_path,
-                    &format!(
-                        "id precisa ser um texto de 1 a {MAXIMUM_ALERT_ID_CHARACTERS} caracteres; aviso descartado"
-                    ),
-                );
+                let message =
+                    messages::invalid_alert_id(self.language, MAXIMUM_ALERT_ID_CHARACTERS);
+                self.warning(&id_path, &message);
                 None
             }
         }
@@ -566,10 +593,8 @@ impl Reader {
             Some("warn") => AlertLevel::Warn,
             Some("info") | None => AlertLevel::Info,
             Some(_) => {
-                self.warning(
-                    &child_path(path, "level"),
-                    "nível desconhecido; usando info",
-                );
+                let message = messages::unknown_level(self.language);
+                self.warning(&child_path(path, "level"), &message);
                 AlertLevel::Info
             }
         }
@@ -619,7 +644,7 @@ mod tests {
 
     #[test]
     fn accepting_no_errors_discards_the_value_only_when_an_error_was_reported() {
-        let mut reader = Reader::default();
+        let mut reader = Reader::new(Language::BrazilianPortuguese);
 
         let with_warning = reader.accepting_no_errors(|reader| {
             reader.warning("a", "aviso");
@@ -1508,5 +1533,61 @@ mod tests {
             .find(|problem| problem.path == "alerts")
             .unwrap();
         assert_eq!(warning.message, "apenas 100 itens são lidos");
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::domain::language::LocalizedMessage;
+
+    #[test]
+    fn english_problems_are_reported_in_english() {
+        let json =
+            r#"{"summary":{"title":"T","blocks":[{"type":"lines"},{"type":"nope"}]},"extra":1}"#;
+        let parsed = parse_snapshot_report_in(json, Language::English).unwrap();
+        let messages: Vec<&str> = parsed
+            .problems
+            .iter()
+            .map(|problem| problem.message.as_str())
+            .collect();
+        assert!(messages.contains(&"required field missing"), "{messages:?}");
+        assert!(
+            messages.contains(&"unknown block type: nope"),
+            "{messages:?}"
+        );
+        assert!(messages.contains(&"unknown field"), "{messages:?}");
+    }
+
+    #[test]
+    fn the_same_problems_in_portuguese_keep_the_original_text() {
+        let json = r#"{"summary":{"title":"T","blocks":[{"type":"lines"}]}}"#;
+        let parsed = parse_snapshot_report_in(json, Language::BrazilianPortuguese).unwrap();
+        assert_eq!(parsed.problems[0].message, "campo obrigatório ausente");
+    }
+
+    #[test]
+    fn structural_errors_follow_the_language() {
+        let english = parse_snapshot_report_in("[1]", Language::English).unwrap_err();
+        assert_eq!(
+            english.message(Language::English),
+            "plugin output is not a valid snapshot JSON: the root must be an object"
+        );
+        let portuguese =
+            parse_snapshot_report_in("[1]", Language::BrazilianPortuguese).unwrap_err();
+        assert_eq!(
+            portuguese.to_string(),
+            "saída de plugin não é um JSON válido de snapshot: a raiz precisa ser um objeto"
+        );
+    }
+
+    #[test]
+    fn an_unsupported_protocol_notice_is_translated() {
+        let json = r#"{"protocol":9,"summary":{"title":"T"}}"#;
+        let parsed = parse_snapshot_report_in(json, Language::English).unwrap();
+        assert_eq!(
+            parsed.problems[0].message,
+            "this widget requires protocol 9; update mosaic"
+        );
     }
 }

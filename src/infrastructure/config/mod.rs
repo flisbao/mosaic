@@ -4,17 +4,22 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
+mod messages;
 mod paths;
 mod raw;
 mod unknown_keys;
 mod validation;
 
+pub use messages::default_suggestions;
 pub use paths::{config_directory, config_file_path, read_config_file};
 use raw::RawConfig;
 use unknown_keys::unknown_key_warnings;
 use validation::{
-    build_tabs, build_theme, convert_llm, convert_pomodoro, convert_update, convert_widget,
-    named_tab, TabAssignment,
+    build_tabs, build_theme, convert_llm, convert_pomodoro, convert_ui, convert_update,
+    convert_widget, named_tab, TabAssignment,
 };
 
 use crate::application::launch_spec::{ProviderCommand, WidgetLaunchSpec, WidgetSchedule};
@@ -44,7 +49,6 @@ pub const DEFAULT_CYCLES_BEFORE_LONG_BREAK: u32 = 4;
 pub const DEFAULT_LLM_TIMEOUT_SECONDS: u64 = 120;
 pub const DEFAULT_PRIORITY_PROMPT: &str =
     crate::infrastructure::app_paths::PRIORITY_PROMPT_RELATIVE_PATH;
-pub const DEFAULT_SUGGESTIONS: [&str; 3] = ["Beber água", "Levantar e alongar", "Tomar um café"];
 pub const IMPLICIT_TAB_NAME: &str = "Mosaic";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,6 +192,7 @@ pub struct AppConfig {
     pub llm: LlmConfig,
     pub theme: Theme,
     pub update: UpdateConfig,
+    pub language: Language,
     pub warnings: Vec<String>,
 }
 
@@ -208,42 +213,47 @@ impl std::fmt::Display for SettingLocation {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ConfigError {
-    #[error("falha de leitura ou escrita em {path}: {reason}")]
     Io {
         path: String,
         kind: std::io::ErrorKind,
         reason: String,
     },
-    #[error("configuração inválida: {0}")]
     Parse(String),
-    #[error("widget duplicado na configuração: '{0}'")]
     DuplicateWidgetId(String),
-    #[error("widget '{widget}': '{field}' não pode ser vazio")]
-    EmptyValue { widget: String, field: &'static str },
-    #[error("widget '{widget}': '{field}' contém um nome inválido")]
-    InvalidValue { widget: String, field: &'static str },
-    #[error("widget '{0}': id reservado pelo mosaic")]
+    EmptyValue {
+        widget: String,
+        field: &'static str,
+    },
+    InvalidValue {
+        widget: String,
+        field: &'static str,
+    },
     ReservedWidgetId(String),
-    #[error("{location}: '{field}' precisa ser maior que zero")]
     NotPositive {
         location: SettingLocation,
         field: &'static str,
     },
-    #[error("{location}: '{field}' não pode passar de {maximum}")]
     TooLarge {
         location: SettingLocation,
         field: &'static str,
         maximum: u64,
     },
-    #[error("widget '{widget}': aba '{tab}' não existe na configuração")]
-    UnknownTab { widget: String, tab: String },
-    #[error("nome de aba duplicado na configuração: '{0}'")]
+    UnknownTab {
+        widget: String,
+        tab: String,
+    },
     DuplicateTabName(String),
-    #[error("[llm]: harness desconhecido '{0}' (use \"claude\" ou \"opencode\")")]
     UnknownHarness(String),
-    #[error("não foi possível descobrir o diretório de configuração")]
     MissingConfigDirectory,
 }
+
+impl LocalizedMessage for ConfigError {
+    fn message(&self, language: Language) -> String {
+        messages::config_error(self, language)
+    }
+}
+
+display_in_portuguese!(ConfigError);
 
 impl ConfigError {
     pub fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError + '_ {
@@ -256,14 +266,19 @@ impl ConfigError {
 }
 
 pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
+    parse_config_in(text, Language::BrazilianPortuguese)
+}
+
+pub fn parse_config_in(text: &str, fallback: Language) -> Result<AppConfig, ConfigError> {
     let raw: RawConfig = toml::from_str(text)
-        .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error)))?;
+        .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error, fallback)))?;
     let document: toml::Table = toml::from_str(text)
-        .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error)))?;
+        .map_err(|error| ConfigError::Parse(describe_parse_error(text, &error, fallback)))?;
     let mut seen = HashSet::new();
     let mut widgets = Vec::new();
     let mut tab_assignments = Vec::new();
     let mut warnings = Vec::new();
+    let language = convert_ui(&raw.ui, fallback, &mut warnings);
     for mut widget in raw.widgets {
         require_text(&widget.id, &widget.id, "id")?;
         require_text(&widget.command, &widget.id, "command")?;
@@ -273,7 +288,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         if !seen.insert(widget.id.clone()) {
             return Err(ConfigError::DuplicateWidgetId(widget.id));
         }
-        let tab_name = named_tab(&widget.id, widget.tab.take(), &mut warnings);
+        let tab_name = named_tab(&widget.id, widget.tab.take(), &mut warnings, language);
         tab_assignments.push(TabAssignment {
             widget_id: widget.id.clone(),
             tab_name,
@@ -281,11 +296,11 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         widgets.push(convert_widget(widget)?);
     }
     let tabs = build_tabs(raw.tabs, &tab_assignments)?;
-    let pomodoro = convert_pomodoro(raw.pomodoro, &mut warnings)?;
+    let pomodoro = convert_pomodoro(raw.pomodoro, &mut warnings, language)?;
     let llm = convert_llm(raw.llm)?;
-    let theme = build_theme(raw.theme, &mut warnings);
-    let update = convert_update(raw.update, &mut warnings);
-    warnings.extend(unknown_key_warnings(&document));
+    let theme = build_theme(raw.theme, &mut warnings, language);
+    let update = convert_update(raw.update, &mut warnings, language);
+    warnings.extend(unknown_key_warnings(&document, language));
     Ok(AppConfig {
         widgets,
         tabs,
@@ -293,6 +308,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         llm,
         theme,
         update,
+        language,
         warnings,
     })
 }
@@ -322,18 +338,19 @@ pub fn retain_restart_sections(active: &AppConfig, mut next: AppConfig) -> AppCo
     next
 }
 
-pub fn load_config(directory: &Path) -> Result<AppConfig, ConfigError> {
-    parse_config(&read_installed_config(directory)?)
+pub fn load_config(directory: &Path, fallback: Language) -> Result<AppConfig, ConfigError> {
+    parse_config_in(&read_installed_config(directory, fallback)?, fallback)
 }
 
-pub fn read_installed_config(directory: &Path) -> Result<String, ConfigError> {
+pub fn read_installed_config(directory: &Path, language: Language) -> Result<String, ConfigError> {
     for path in [
         directory.to_path_buf(),
         config_file_path(directory),
         directory.join(PLUGINS_DIRECTORY_NAME),
     ] {
         if path.exists() {
-            verify_trusted_path(&path).map_err(|error| ConfigError::Parse(error.to_string()))?;
+            verify_trusted_path(&path)
+                .map_err(|error| ConfigError::Parse(error.message(language)))?;
         }
     }
     read_config_file(&config_file_path(directory))
@@ -342,8 +359,9 @@ pub fn read_installed_config(directory: &Path) -> Result<String, ConfigError> {
 pub fn prepare_reload(
     current: &[WidgetSettings],
     text: &str,
+    fallback: Language,
 ) -> Result<PreparedWidgets<WidgetLaunchSpec, AppConfig>, ConfigError> {
-    let config = parse_config(text)?;
+    let config = parse_config_in(text, fallback)?;
     let current_identities: Vec<WidgetLaunchSpec> =
         current.iter().map(WidgetSettings::launch_spec).collect();
     let next_identities: Vec<WidgetLaunchSpec> = config
@@ -359,11 +377,15 @@ pub fn prepare_reload(
     })
 }
 
-fn describe_parse_error(text: &str, error: &toml::de::Error) -> String {
+fn describe_parse_error(text: &str, error: &toml::de::Error, language: Language) -> String {
     match error.span() {
         Some(span) => {
             let (line, column) = line_and_column(text, span.start);
-            format!("linha {line}, coluna {column}: {}", error.message())
+            format!(
+                "{}: {}",
+                messages::parse_location(language, line, column),
+                error.message()
+            )
         }
         None => error.message().to_string(),
     }
@@ -1056,7 +1078,11 @@ command = "sh"
     fn reload_with_invalid_toml_reports_line_and_keeps_current() {
         let current = reload_base_widgets();
 
-        let result = prepare_reload(&current, "[[widgets]]\nid = \"jira\"\ncommand = \n");
+        let result = prepare_reload(
+            &current,
+            "[[widgets]]\nid = \"jira\"\ncommand = \n",
+            Language::BrazilianPortuguese,
+        );
 
         assert!(
             matches!(&result, Err(ConfigError::Parse(message)) if message.contains("linha 3")),
@@ -1069,7 +1095,7 @@ command = "sh"
         let current = reload_base_widgets();
         let duplicated = format!("{RELOAD_BASE}\n[[widgets]]\nid = \"jira\"\ncommand = \"sh\"\n");
 
-        let result = prepare_reload(&current, &duplicated);
+        let result = prepare_reload(&current, &duplicated, Language::BrazilianPortuguese);
 
         assert_eq!(
             result,
@@ -1103,7 +1129,8 @@ command = "sh"
             swap_widget_order(RELOAD_BASE),
         ];
         for variant in variants {
-            let prepared = prepare_reload(&current, &variant).unwrap();
+            let prepared =
+                prepare_reload(&current, &variant, Language::BrazilianPortuguese).unwrap();
 
             assert_eq!(prepared.plan.changes.len(), 2, "{variant}");
             assert!(
@@ -1129,7 +1156,7 @@ command = "sh"
         let current = reload_base_widgets();
         let changed = RELOAD_BASE.replace("command = \"sh\"", "command = \"bash\"");
 
-        let prepared = prepare_reload(&current, &changed).unwrap();
+        let prepared = prepare_reload(&current, &changed, Language::BrazilianPortuguese).unwrap();
 
         let changes: Vec<(&str, crate::application::reload_plan::WidgetChange)> = prepared
             .plan
@@ -1210,7 +1237,7 @@ command = "sh"
     fn missing_config_file_is_io_error() {
         let directory = tempfile::tempdir().unwrap();
 
-        let result = load_config(directory.path());
+        let result = load_config(directory.path(), Language::BrazilianPortuguese);
 
         match result {
             Err(ConfigError::Io { path, kind, .. }) => {
@@ -1564,5 +1591,138 @@ check = true
             config.warnings,
             vec!["chave desconhecida '?[31mx' no mosaic.toml (ignorada)".to_string()]
         );
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    const ONE_WIDGET: &str = "[[widgets]]\nid = \"a\"\ncommand = \"x\"\n";
+
+    #[test]
+    fn the_configured_language_wins_over_the_fallback() {
+        let text = format!("[ui]\nlanguage = \"pt-BR\"\n{ONE_WIDGET}");
+        let config = parse_config_in(&text, Language::English).unwrap();
+        assert_eq!(config.language, Language::BrazilianPortuguese);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn without_a_setting_the_fallback_is_kept() {
+        let config = parse_config_in(ONE_WIDGET, Language::English).unwrap();
+        assert_eq!(config.language, Language::English);
+        let config = parse_config_in(ONE_WIDGET, Language::BrazilianPortuguese).unwrap();
+        assert_eq!(config.language, Language::BrazilianPortuguese);
+    }
+
+    #[test]
+    fn an_unknown_language_warns_and_falls_back() {
+        let text = format!("[ui]\nlanguage = \"fr\"\n{ONE_WIDGET}");
+        let config = parse_config_in(&text, Language::English).unwrap();
+        assert_eq!(config.language, Language::English);
+        assert_eq!(
+            config.warnings,
+            vec!["[ui] language: unknown language 'fr'; use \"en\" or \"pt-BR\"".to_string()]
+        );
+        let config = parse_config_in(&text, Language::BrazilianPortuguese).unwrap();
+        assert_eq!(
+            config.warnings,
+            vec!["[ui] language: idioma desconhecido 'fr'; use \"en\" ou \"pt-BR\"".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_non_text_language_warns() {
+        let text = format!("[ui]\nlanguage = 3\n{ONE_WIDGET}");
+        let config = parse_config_in(&text, Language::English).unwrap();
+        assert_eq!(config.warnings.len(), 1);
+        assert!(config.warnings[0].contains("[ui] language"));
+    }
+
+    #[test]
+    fn the_ui_section_is_a_known_section() {
+        let text = format!("[ui]\nlanguage = \"en\"\nvolume = 3\n{ONE_WIDGET}");
+        let config = parse_config_in(&text, Language::English).unwrap();
+        assert_eq!(
+            config.warnings,
+            vec!["[ui]: unknown key 'volume' (ignored)".to_string()]
+        );
+    }
+
+    #[test]
+    fn warnings_follow_the_resolved_language() {
+        let text = "[ui]\nlanguage = \"en\"\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\ntab = true\nbogus = 1\n";
+        let config = parse_config_in(text, Language::BrazilianPortuguese).unwrap();
+        assert_eq!(
+            config.warnings,
+            vec![
+                "widget 'a': 'tab = true' was retired and is ignored".to_string(),
+                "widget 'a': unknown key 'bogus' (ignored)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_suggestions_exist_in_both_languages() {
+        assert_translated("suggestions", |language| {
+            default_suggestions(language).join("|")
+        });
+    }
+
+    #[test]
+    fn syntax_errors_name_the_position_in_the_requested_language() {
+        let english = parse_config_in("[[widgets]\n", Language::English).unwrap_err();
+        assert!(matches!(&english, ConfigError::Parse(text) if text.starts_with("line 1")));
+        let portuguese =
+            parse_config_in("[[widgets]\n", Language::BrazilianPortuguese).unwrap_err();
+        assert!(matches!(&portuguese, ConfigError::Parse(text) if text.starts_with("linha 1")));
+    }
+
+    #[test]
+    fn every_config_error_is_translated() {
+        let location = SettingLocation::Section("llm");
+        let errors = vec![
+            ConfigError::Io {
+                path: "p".to_string(),
+                kind: std::io::ErrorKind::NotFound,
+                reason: "r".to_string(),
+            },
+            ConfigError::Parse("x".to_string()),
+            ConfigError::DuplicateWidgetId("a".to_string()),
+            ConfigError::EmptyValue {
+                widget: "a".to_string(),
+                field: "id",
+            },
+            ConfigError::InvalidValue {
+                widget: "a".to_string(),
+                field: "inherit_env",
+            },
+            ConfigError::ReservedWidgetId("ia".to_string()),
+            ConfigError::NotPositive {
+                location: location.clone(),
+                field: "timeout_seconds",
+            },
+            ConfigError::TooLarge {
+                location,
+                field: "timeout_seconds",
+                maximum: 9,
+            },
+            ConfigError::UnknownTab {
+                widget: "a".to_string(),
+                tab: "t".to_string(),
+            },
+            ConfigError::DuplicateTabName("t".to_string()),
+            ConfigError::UnknownHarness("h".to_string()),
+            ConfigError::MissingConfigDirectory,
+        ];
+        for error in errors {
+            assert_translated("config error", |language| error.message(language));
+            assert_eq!(
+                error.to_string(),
+                error.message(Language::BrazilianPortuguese)
+            );
+        }
     }
 }

@@ -1,6 +1,7 @@
-use super::{AppState, NO_DETAIL_NOTICE, PAGE_JUMP_ITEMS};
+use super::{AppState, PAGE_JUMP_ITEMS};
 use crate::domain::widget::WidgetRecord;
 use crate::presentation::key_input::KeyInput;
+use crate::presentation::messages;
 
 const DECIMAL_RADIX: u32 = 10;
 const FIRST_TAB_NUMBER: usize = 1;
@@ -134,7 +135,7 @@ impl AppState {
             return;
         }
         if !self.has_detail() && !self.is_focused_failing() {
-            self.show_notice(NO_DETAIL_NOTICE.to_string());
+            self.show_notice(messages::no_detail_notice(self.language()).to_string());
             return;
         }
         self.expanded = true;

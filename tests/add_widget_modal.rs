@@ -93,6 +93,7 @@ fn terminal_flow(directory: &Path, answers: &[&str]) -> String {
     let mut input = answers.join("\n");
     input.push_str("\ns\n");
     let mut child = Process::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(["plugins", "setup", "demo", "--config-dir"])
         .arg(directory)
         .stdin(Stdio::piped())

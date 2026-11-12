@@ -6,14 +6,13 @@ mod table;
 use ratatui::text::Line;
 
 use crate::domain::blocks::Block;
+use crate::presentation::messages;
 use crate::presentation::theme_styles::ThemeStyles;
 
 use lines::LinesRenderer;
 use rows::RowsRenderer;
 use stat::StatRenderer;
 use table::TableRenderer;
-
-const INVALID_BLOCK_TEXT: &str = "⚠ bloco inválido";
 
 pub trait BlockRenderer: Sync {
     fn render(
@@ -40,7 +39,7 @@ fn render_block_with(
     renderers
         .iter()
         .find_map(|renderer| renderer.render(block, width, styles))
-        .unwrap_or_else(|| vec![Line::from(INVALID_BLOCK_TEXT)])
+        .unwrap_or_else(|| vec![Line::from(messages::invalid_block(styles.language()))])
 }
 
 #[cfg(test)]
@@ -53,6 +52,7 @@ mod tests {
         table::{Cell, Column},
         BLOCK_TYPE_NAMES,
     };
+    use crate::domain::language::Language;
     use crate::domain::widget_content::{Align, Tone};
     use crate::presentation::theme_styles::ThemeStyles;
 
@@ -110,7 +110,7 @@ mod tests {
             && lines[0]
                 .spans
                 .first()
-                .is_some_and(|span| span.content == INVALID_BLOCK_TEXT)
+                .is_some_and(|span| span.content == messages::invalid_block(Language::English))
     }
 
     #[test]
@@ -135,6 +135,9 @@ mod tests {
             &ThemeStyles::ansi(),
         );
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].spans[0].content, INVALID_BLOCK_TEXT);
+        assert_eq!(
+            lines[0].spans[0].content,
+            messages::invalid_block(Language::English)
+        );
     }
 }

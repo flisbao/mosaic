@@ -1,29 +1,31 @@
+use super::messages;
 use super::raw::{
-    RawLlm, RawNotifyCommand, RawPomodoro, RawTab, RawTabSection, RawTheme, RawUpdate, RawWidget,
+    RawLlm, RawNotifyCommand, RawPomodoro, RawTab, RawTabSection, RawTheme, RawUi, RawUpdate,
+    RawWidget,
 };
 use super::{
     ConfigError, Harness, LlmConfig, PomodoroConfig, SettingLocation, TabSettings, UpdateConfig,
     WidgetSettings, DEFAULT_CYCLES_BEFORE_LONG_BREAK, DEFAULT_FOCUS_MINUTES,
     DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM, DEFAULT_LLM_MAX_ITEMS,
     DEFAULT_LLM_TIMEOUT_SECONDS, DEFAULT_LONG_BREAK_MINUTES, DEFAULT_PRIORITY_PROMPT,
-    DEFAULT_SHORT_BREAK_MINUTES, DEFAULT_SPAN, DEFAULT_SUGGESTIONS, DEFAULT_TIMEOUT_SECONDS,
-    IMPLICIT_TAB_NAME, MAXIMUM_INTERVAL_SECONDS, MAXIMUM_TIMEOUT_SECONDS, MINIMUM_INTERVAL_SECONDS,
+    DEFAULT_SHORT_BREAK_MINUTES, DEFAULT_SPAN, DEFAULT_TIMEOUT_SECONDS, IMPLICIT_TAB_NAME,
+    MAXIMUM_INTERVAL_SECONDS, MAXIMUM_TIMEOUT_SECONDS, MINIMUM_INTERVAL_SECONDS,
 };
 use crate::application::recommendation::LlmSelection;
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::theme::{Rgb, Theme, ThemeError, ThemeRole, DEFAULT_THEME_NAME};
 use crate::domain::widget::WidgetId;
 use crate::infrastructure::child_environment::is_valid_variable_name;
 
 const POMODORO_SECTION: &str = "pomodoro";
-const LEGACY_NOTIFY_COMMAND_WARNING: &str =
-    "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
 const LLM_SECTION: &str = "llm";
 const THEME_SECTION: &str = "theme";
 const UPDATE_SECTION: &str = "update";
 const UPDATE_CHECK_KEY: &str = "check";
+const UI_SECTION: &str = "ui";
+const UI_LANGUAGE_KEY: &str = "language";
 const THEME_NAME_KEY: &str = "name";
 const THEME_PAINT_BACKGROUND_KEY: &str = "paint_background";
-const UNKNOWN_THEME_HINT: &str = "; veja `mosaic themes`";
 const MAXIMUM_WARNING_VALUE_CHARACTERS: usize = 40;
 const ELLIPSIS: char = '…';
 const FIRST_TAB_INDEX: usize = 0;
@@ -37,13 +39,12 @@ pub(super) fn named_tab(
     widget_id: &str,
     tab: Option<RawTab>,
     warnings: &mut Vec<String>,
+    language: Language,
 ) -> Option<String> {
     match tab {
         Some(RawTab::Name(name)) => Some(name),
         Some(RawTab::Legacy(true)) => {
-            warnings.push(format!(
-                "widget '{widget_id}': 'tab = true' foi aposentado e é ignorado"
-            ));
+            warnings.push(messages::retired_tab_flag(language, widget_id));
             None
         }
         Some(RawTab::Legacy(false)) | None => None,
@@ -160,6 +161,7 @@ pub(super) fn convert_widget(widget: RawWidget) -> Result<WidgetSettings, Config
 pub(super) fn convert_pomodoro(
     raw: RawPomodoro,
     warnings: &mut Vec<String>,
+    language: Language,
 ) -> Result<PomodoroConfig, ConfigError> {
     let location = SettingLocation::Section(POMODORO_SECTION);
     let cycles_before_long_break = positive_or_default(
@@ -189,24 +191,28 @@ pub(super) fn convert_pomodoro(
             "long_break_minutes",
         )?,
         cycles_before_long_break,
-        suggestions: raw
-            .suggestions
-            .unwrap_or_else(|| DEFAULT_SUGGESTIONS.iter().map(|s| s.to_string()).collect()),
+        suggestions: raw.suggestions.unwrap_or_else(|| {
+            messages::default_suggestions(language)
+                .iter()
+                .map(|suggestion| suggestion.to_string())
+                .collect()
+        }),
         bell: raw.bell.unwrap_or(true),
-        notify_command: convert_notify_command(raw.notify_command, warnings),
+        notify_command: convert_notify_command(raw.notify_command, warnings, language),
     })
 }
 
 fn convert_notify_command(
     raw: Option<RawNotifyCommand>,
     warnings: &mut Vec<String>,
+    language: Language,
 ) -> Option<Vec<String>> {
     let arguments = match raw? {
         RawNotifyCommand::Arguments(arguments) => arguments,
         RawNotifyCommand::Line(line) => {
             let arguments: Vec<String> = line.split_whitespace().map(str::to_string).collect();
             if !arguments.is_empty() {
-                warnings.push(LEGACY_NOTIFY_COMMAND_WARNING.to_string());
+                warnings.push(messages::legacy_notify_command(language).to_string());
             }
             arguments
         }
@@ -302,8 +308,8 @@ fn at_most(
     Ok(value)
 }
 
-pub(super) fn build_theme(raw: RawTheme, warnings: &mut Vec<String>) -> Theme {
-    let requested = theme_text(THEME_NAME_KEY, raw.name.as_ref(), warnings)
+pub(super) fn build_theme(raw: RawTheme, warnings: &mut Vec<String>, language: Language) -> Theme {
+    let requested = theme_text(THEME_NAME_KEY, raw.name.as_ref(), warnings, language)
         .map(str::trim)
         .unwrap_or_default();
     let name = if requested.is_empty() {
@@ -314,24 +320,28 @@ pub(super) fn build_theme(raw: RawTheme, warnings: &mut Vec<String>) -> Theme {
     let (base, resolved) = match Theme::preset(name) {
         Ok(theme) => (theme, true),
         Err(error) => {
-            warnings.push(theme_warning(&error));
+            warnings.push(theme_warning(&error, language));
             (Theme::Ansi, false)
         }
     };
     if base == Theme::Ansi {
         if resolved && !raw.colors.is_empty() {
-            warnings.push(format!(
-                "[{THEME_SECTION}.colors] não vale para o tema '{DEFAULT_THEME_NAME}' (ele usa as cores do terminal)"
+            warnings.push(messages::colors_ignored_for_terminal_theme(
+                language,
+                THEME_SECTION,
+                DEFAULT_THEME_NAME,
             ));
         }
         return Theme::Ansi;
     }
-    let themed = base.with_overrides(&theme_overrides(&raw.colors, warnings));
+    let themed = base.with_overrides(&theme_overrides(&raw.colors, warnings, language));
     let paints_background = match raw.paint_background {
         Some(toml::Value::Boolean(value)) => value,
         Some(_) => {
-            warnings.push(format!(
-                "[{THEME_SECTION}] {THEME_PAINT_BACKGROUND_KEY}: use true ou false"
+            warnings.push(messages::expected_boolean(
+                language,
+                THEME_SECTION,
+                THEME_PAINT_BACKGROUND_KEY,
             ));
             true
         }
@@ -348,13 +358,15 @@ fn theme_text<'a>(
     key: &str,
     value: Option<&'a toml::Value>,
     warnings: &mut Vec<String>,
+    language: Language,
 ) -> Option<&'a str> {
     match value {
         Some(toml::Value::String(text)) => Some(text),
         Some(_) => {
-            warnings.push(format!(
-                "[{THEME_SECTION}] {}: use um texto entre aspas",
-                shortened(key)
+            warnings.push(messages::expected_quoted_text(
+                language,
+                THEME_SECTION,
+                &shortened(key),
             ));
             None
         }
@@ -365,17 +377,18 @@ fn theme_text<'a>(
 fn theme_overrides(
     colors: &std::collections::BTreeMap<String, toml::Value>,
     warnings: &mut Vec<String>,
+    language: Language,
 ) -> Vec<(ThemeRole, Rgb)> {
     let mut overrides = Vec::new();
     for (key, value) in colors {
         let role = match ThemeRole::from_key(key) {
             Ok(role) => role,
             Err(error) => {
-                warnings.push(theme_warning(&error));
+                warnings.push(theme_warning(&error, language));
                 continue;
             }
         };
-        let Some(value) = theme_text(key, Some(value), warnings) else {
+        let Some(value) = theme_text(key, Some(value), warnings, language) else {
             continue;
         };
         match Rgb::from_hex(value) {
@@ -383,21 +396,21 @@ fn theme_overrides(
             Err(error) => warnings.push(format!(
                 "[{THEME_SECTION}.colors] {}: {}",
                 shortened(key),
-                shortened_theme_error(error)
+                shortened_theme_error(error).message(language)
             )),
         }
     }
     overrides
 }
 
-fn theme_warning(error: &ThemeError) -> String {
+fn theme_warning(error: &ThemeError, language: Language) -> String {
     let hint = match error {
-        ThemeError::UnknownTheme(_) => UNKNOWN_THEME_HINT,
+        ThemeError::UnknownTheme(_) => messages::unknown_theme_hint(language),
         ThemeError::InvalidHex(_) | ThemeError::UnknownRole(_) => "",
     };
     format!(
         "[{THEME_SECTION}] {}{hint}",
-        shortened_theme_error(error.clone())
+        shortened_theme_error(error.clone()).message(language)
     )
 }
 
@@ -420,16 +433,40 @@ fn shortened(value: &str) -> String {
     format!("{kept}{ELLIPSIS}")
 }
 
-pub(super) fn convert_update(raw: RawUpdate, warnings: &mut Vec<String>) -> UpdateConfig {
+pub(super) fn convert_update(
+    raw: RawUpdate,
+    warnings: &mut Vec<String>,
+    language: Language,
+) -> UpdateConfig {
     let check = match raw.check {
         None => true,
         Some(toml::Value::Boolean(value)) => value,
         Some(_) => {
-            warnings.push(format!(
-                "[{UPDATE_SECTION}] {UPDATE_CHECK_KEY}: use true ou false"
+            warnings.push(messages::expected_boolean(
+                language,
+                UPDATE_SECTION,
+                UPDATE_CHECK_KEY,
             ));
             true
         }
     };
     UpdateConfig { check }
+}
+
+pub(super) fn convert_ui(raw: &RawUi, fallback: Language, warnings: &mut Vec<String>) -> Language {
+    match raw.language.as_ref() {
+        None => fallback,
+        Some(toml::Value::String(text)) => Language::from_setting(text).unwrap_or_else(|| {
+            warnings.push(messages::unknown_ui_language(fallback, &shortened(text)));
+            fallback
+        }),
+        Some(_) => {
+            warnings.push(messages::expected_quoted_text(
+                fallback,
+                UI_SECTION,
+                UI_LANGUAGE_KEY,
+            ));
+            fallback
+        }
+    }
 }

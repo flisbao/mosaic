@@ -1,11 +1,13 @@
 use crate::application::ports::CriteriaSource;
 use crate::application::recommendation::{build_plan, RecommendationPlan, WidgetContext};
+use crate::domain::language::{Language, LocalizedMessage};
 use chrono::NaiveDateTime;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SendPolicy {
     pub confirm_before_send: bool,
     pub target_label: String,
+    pub language: Language,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,20 +31,25 @@ pub fn prepare_recommendation(
         Err(error) => return RecommendationStep::Notice(error.to_string()),
     };
     match build_plan(&criteria_text, now, contexts) {
-        Err(error) => RecommendationStep::Notice(error.to_string()),
+        Err(error) => RecommendationStep::Notice(error.message(policy.language)),
         Ok(plan) if policy.confirm_before_send => RecommendationStep::Confirm {
-            text: confirmation_text(&plan, &policy.target_label),
+            text: confirmation_text(&plan, &policy.target_label, policy.language),
             plan,
         },
         Ok(plan) => RecommendationStep::Send(plan),
     }
 }
 
-fn confirmation_text(plan: &RecommendationPlan, target_label: &str) -> String {
-    format!(
-        "Enviar {} itens (~{} tokens, estimativa) para {target_label}?",
-        plan.item_count, plan.estimated_tokens
-    )
+fn confirmation_text(plan: &RecommendationPlan, target_label: &str, language: Language) -> String {
+    let (items, tokens) = (plan.item_count, plan.estimated_tokens);
+    match language {
+        Language::English => {
+            format!("Send {items} items (~{tokens} tokens, estimate) to {target_label}?")
+        }
+        Language::BrazilianPortuguese => {
+            format!("Enviar {items} itens (~{tokens} tokens, estimativa) para {target_label}?")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -51,6 +58,7 @@ mod tests {
     use super::*;
     use crate::application::ports::CriteriaError;
     use crate::application::recommendation::LlmSelection;
+    use crate::domain::language::Language;
     use crate::domain::widget::{
         DetailItem, DetailSection, Summary, WidgetId, WidgetRecord, WidgetSnapshot,
     };
@@ -68,6 +76,7 @@ mod tests {
         SendPolicy {
             confirm_before_send,
             target_label: "claude/sonnet".to_string(),
+            language: Language::BrazilianPortuguese,
         }
     }
 

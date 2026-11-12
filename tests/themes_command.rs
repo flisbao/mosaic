@@ -7,6 +7,7 @@ const EXIT_USAGE: i32 = 2;
 
 fn run_themes(arguments: &[&str], color_term: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .arg("themes")
         .args(arguments)
         .env("COLORTERM", color_term)

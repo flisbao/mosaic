@@ -26,6 +26,7 @@ impl Fixture {
     }
     fn run(&self, arguments: &[&str], input: &str) -> Output {
         let mut process = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+            .env("MOSAIC_LANGUAGE", "pt-BR")
             .args(["plugins", "install", "--to"])
             .arg(self.path("target"))
             .arg("--skills-dir")
@@ -216,6 +217,7 @@ fn remote_usage_errors_and_offline_catalog_do_not_download() {
         assert_eq!(fixture.run(&args, "").status.code(), Some(2), "{args:?}");
     }
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(["plugins", "list"])
         .env("PATH", Path::new("/nonexistent"))
         .output()
@@ -302,6 +304,7 @@ fn installing_javascript_then_setup_uses_node() {
     );
     assert!(output.status.success(), "{}", text(&output));
     let mut child = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(["plugins", "setup", "github", "--print", "--config-dir"])
         .arg(fixture.path("configuration"))
         .stdin(Stdio::piped())
@@ -330,6 +333,7 @@ fn relative_destination_creates_a_working_skill_link_and_is_repeatable() {
     let fixture = Fixture::new();
     for expected in ["skill instalada", "skill já instalada"] {
         let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+            .env("MOSAIC_LANGUAGE", "pt-BR")
             .current_dir(fixture.root.path())
             .env("PATH", fixture.path("bin"))
             .args([

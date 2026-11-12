@@ -8,14 +8,14 @@ use crate::application::ports::{
 };
 use crate::application::recommendation_view::{idle_snapshot, recommendation_snapshot};
 use crate::application::reload::{apply_if_current, WidgetGenerations, WidgetUpdate};
+use crate::domain::language::Language;
 use crate::domain::release::ReleaseVersion;
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 use crate::domain::widget_content::AlertLevel;
 use crate::presentation::app_state::AppState;
 use crate::presentation::key_input::KeyInput;
+use crate::presentation::messages;
 
-const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
-const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
 const NOTICE_SEPARATOR: &str = " | ";
 
 pub enum AppEvent {
@@ -69,7 +69,7 @@ pub fn apply_event(
         }
         AppEvent::ActionFinished(id, notice) => {
             state.finish_action(&id);
-            state.show_notice(describe_notice(notice));
+            state.show_notice(describe_notice(notice, state.language()));
         }
         AppEvent::RecommendationFinished(result) => {
             apply_recommendation_result(state, context, result, now)
@@ -79,12 +79,12 @@ pub fn apply_event(
     }
 }
 
-pub fn update_notice(version: &ReleaseVersion) -> String {
-    format!("versão {version} disponível; rode mosaic update")
+pub fn update_notice(version: &ReleaseVersion, language: Language) -> String {
+    messages::update_available_notice(language, &version.to_string())
 }
 
 fn announce_update(state: &mut AppState, version: &ReleaseVersion) {
-    let notice = update_notice(version);
+    let notice = update_notice(version, state.language());
     let combined = match state.notice() {
         Some(existing) => format!("{existing}{NOTICE_SEPARATOR}{notice}"),
         None => notice,
@@ -121,21 +121,23 @@ fn apply_recommendation_result(
         Ok(outcome) => {
             state.update_widget(
                 &recommendation_widget,
-                Ok(recommendation_snapshot(&outcome.recommendation)),
+                Ok(recommendation_snapshot(
+                    &outcome.recommendation,
+                    state.language(),
+                )),
                 now,
             );
+            let language = state.language();
             state.show_notice(match outcome.save_warning {
-                Some(reason) => {
-                    format!("{RECOMMENDATION_READY_MESSAGE}, mas não foi possível salvar: {reason}")
-                }
-                None => RECOMMENDATION_READY_MESSAGE.to_string(),
+                Some(reason) => messages::recommendation_ready_but_unsaved(language, &reason),
+                None => messages::recommendation_ready(language).to_string(),
             });
         }
         Err(LlmError::Unavailable(message)) => {
             if let Some(store) = context.recommendation_store {
                 state.update_widget(
                     &recommendation_widget,
-                    stored_recommendation_result(store),
+                    stored_recommendation_result(store, state.language()),
                     now,
                 );
             }
@@ -151,20 +153,21 @@ fn apply_recommendation_result(
 
 pub fn stored_recommendation_result(
     store: &dyn RecommendationStore,
+    language: Language,
 ) -> Result<WidgetSnapshot, SourceError> {
     Ok(match store.load() {
-        Some(stored) => recommendation_snapshot(&stored),
-        None => idle_snapshot(),
+        Some(stored) => recommendation_snapshot(&stored, language),
+        None => idle_snapshot(language),
     })
 }
 
-fn describe_notice(notice: ActionNotice) -> String {
+fn describe_notice(notice: ActionNotice, language: Language) -> String {
     match notice {
         ActionNotice::Succeeded(message) if message.is_empty() => {
-            ACTION_DONE_FALLBACK_MESSAGE.to_string()
+            messages::action_done_fallback(language).to_string()
         }
         ActionNotice::Succeeded(message) => message,
-        ActionNotice::Failed(message) => format!("Falha: {message}"),
+        ActionNotice::Failed(message) => messages::action_failed(language, &message),
     }
 }
 
@@ -187,6 +190,7 @@ mod tests {
                 entry_indexes: Vec::new(),
             }],
         )
+        .with_language(Language::BrazilianPortuguese)
     }
 
     fn announce(state: &mut AppState, version: &str) {
@@ -231,15 +235,21 @@ mod tests {
     #[test]
     fn describe_notice_falls_back_when_the_message_is_empty() {
         assert_eq!(
-            describe_notice(ActionNotice::Succeeded(String::new())),
-            ACTION_DONE_FALLBACK_MESSAGE
+            describe_notice(
+                ActionNotice::Succeeded(String::new()),
+                Language::BrazilianPortuguese
+            ),
+            "Ação concluída"
         );
     }
 
     #[test]
     fn describe_notice_keeps_the_success_message() {
         assert_eq!(
-            describe_notice(ActionNotice::Succeeded("movido".to_string())),
+            describe_notice(
+                ActionNotice::Succeeded("movido".to_string()),
+                Language::BrazilianPortuguese
+            ),
             "movido"
         );
     }
@@ -247,7 +257,10 @@ mod tests {
     #[test]
     fn describe_notice_prefixes_failures() {
         assert_eq!(
-            describe_notice(ActionNotice::Failed("quebrou".to_string())),
+            describe_notice(
+                ActionNotice::Failed("quebrou".to_string()),
+                Language::BrazilianPortuguese
+            ),
             "Falha: quebrou"
         );
     }

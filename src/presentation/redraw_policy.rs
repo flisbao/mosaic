@@ -30,6 +30,7 @@ mod tests {
     use chrono::{NaiveDate, NaiveDateTime};
 
     use super::*;
+    use crate::domain::language::Language;
 
     fn at(hour: u32, minute: u32, second: u32, millisecond: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 10, 19)
@@ -64,11 +65,14 @@ mod tests {
             cycles_before_long_break: 4,
             suggestions: vec![],
         };
-        let stopped =
-            AppState::new(vec![], vec![]).with_pomodoro(PomodoroTimer::new(settings.clone()));
+        let stopped = AppState::new(vec![], vec![])
+            .with_language(Language::BrazilianPortuguese)
+            .with_pomodoro(PomodoroTimer::new(settings.clone()));
         let mut timer = PomodoroTimer::new(settings);
         timer.toggle();
-        let running = AppState::new(vec![], vec![]).with_pomodoro(timer);
+        let running = AppState::new(vec![], vec![])
+            .with_language(Language::BrazilianPortuguese)
+            .with_pomodoro(timer);
         assert!(!clock_changes_what_is_drawn(&stopped));
         assert!(clock_changes_what_is_drawn(&running));
     }

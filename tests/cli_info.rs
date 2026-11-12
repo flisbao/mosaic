@@ -8,6 +8,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn run_mosaic(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(arguments)
         .env("XDG_CONFIG_HOME", "/nonexistent-mosaic-test")
         .stdin(Stdio::null())

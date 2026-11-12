@@ -8,6 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::application::ports::Cancellable;
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
 use thiserror::Error;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -17,29 +19,81 @@ const MAXIMUM_ERROR_BYTES: usize = 16_384;
 const CANCEL_RELEASE_LIMIT: Duration = Duration::from_secs(2);
 #[derive(Debug, Error)]
 pub enum ProcessError {
-    #[error("não foi possível iniciar '{program}': {source}")]
     Spawn {
         program: String,
         #[source]
         source: std::io::Error,
     },
-    #[error("falha ao aguardar o processo: {0}")]
     Wait(#[source] std::io::Error),
-    #[error("processo excedeu o tempo limite de {limit_seconds}s")]
-    TimedOut { limit_seconds: u64 },
-    #[error("saída excedeu o limite de {limit_bytes} bytes")]
-    OutputTooLarge { limit_bytes: usize },
-    #[error("processo cancelado")]
+    TimedOut {
+        limit_seconds: u64,
+    },
+    OutputTooLarge {
+        limit_bytes: usize,
+    },
     Cancelled,
-    #[error("tempo limite inválido")]
     InvalidTimeout,
-    #[error("falha ao ler a saída do processo")]
     OutputUnreadable,
-    #[error("{}", failure_description(.status, .stderr))]
-    ExitedWithFailure { status: ExitStatus, stderr: String },
-    #[error("saída do processo não é UTF-8 válido")]
+    ExitedWithFailure {
+        status: ExitStatus,
+        stderr: String,
+    },
     InvalidUtf8,
 }
+
+impl LocalizedMessage for ProcessError {
+    fn message(&self, language: Language) -> String {
+        match (self, language) {
+            (Self::Spawn { program, source }, Language::English) => {
+                format!("could not start '{program}': {source}")
+            }
+            (Self::Spawn { program, source }, Language::BrazilianPortuguese) => {
+                format!("não foi possível iniciar '{program}': {source}")
+            }
+            (Self::Wait(source), Language::English) => {
+                format!("failed to wait for the process: {source}")
+            }
+            (Self::Wait(source), Language::BrazilianPortuguese) => {
+                format!("falha ao aguardar o processo: {source}")
+            }
+            (Self::TimedOut { limit_seconds }, Language::English) => {
+                format!("process exceeded the time limit of {limit_seconds}s")
+            }
+            (Self::TimedOut { limit_seconds }, Language::BrazilianPortuguese) => {
+                format!("processo excedeu o tempo limite de {limit_seconds}s")
+            }
+            (Self::OutputTooLarge { limit_bytes }, Language::English) => {
+                format!("output exceeded the limit of {limit_bytes} bytes")
+            }
+            (Self::OutputTooLarge { limit_bytes }, Language::BrazilianPortuguese) => {
+                format!("saída excedeu o limite de {limit_bytes} bytes")
+            }
+            (Self::Cancelled, Language::English) => "process cancelled".to_string(),
+            (Self::Cancelled, Language::BrazilianPortuguese) => "processo cancelado".to_string(),
+            (Self::InvalidTimeout, Language::English) => "invalid time limit".to_string(),
+            (Self::InvalidTimeout, Language::BrazilianPortuguese) => {
+                "tempo limite inválido".to_string()
+            }
+            (Self::OutputUnreadable, Language::English) => {
+                "failed to read the process output".to_string()
+            }
+            (Self::OutputUnreadable, Language::BrazilianPortuguese) => {
+                "falha ao ler a saída do processo".to_string()
+            }
+            (Self::ExitedWithFailure { status, stderr }, language) => {
+                failure_description(status, stderr, language)
+            }
+            (Self::InvalidUtf8, Language::English) => {
+                "process output is not valid UTF-8".to_string()
+            }
+            (Self::InvalidUtf8, Language::BrazilianPortuguese) => {
+                "saída do processo não é UTF-8 válido".to_string()
+            }
+        }
+    }
+}
+
+display_in_portuguese!(ProcessError);
 
 impl ProcessError {
     pub fn program_not_found(&self) -> bool {
@@ -47,9 +101,12 @@ impl ProcessError {
     }
 }
 
-fn failure_description(status: &ExitStatus, stderr: &str) -> String {
+fn failure_description(status: &ExitStatus, stderr: &str, language: Language) -> String {
     if stderr.is_empty() {
-        format!("processo terminou com falha ({status})")
+        match language {
+            Language::English => format!("process failed ({status})"),
+            Language::BrazilianPortuguese => format!("processo terminou com falha ({status})"),
+        }
     } else {
         stderr.to_string()
     }

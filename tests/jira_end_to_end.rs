@@ -83,7 +83,11 @@ fn jira_runner(
         inherit_env: None,
         timeout: SNAPSHOT_TIMEOUT,
     };
-    PluginRunner::new(command, state_dir.to_path_buf())
+    PluginRunner::new(command, state_dir.to_path_buf()).with_language(
+        mosaic::infrastructure::shared_language::SharedLanguage::new(
+            mosaic::domain::language::Language::BrazilianPortuguese,
+        ),
+    )
 }
 
 fn all_files(directory: &Path) -> Vec<PathBuf> {

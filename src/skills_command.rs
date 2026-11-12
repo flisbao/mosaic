@@ -1,29 +1,56 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use mosaic::display_in_portuguese;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::infrastructure::skills_installer::{install_skills, SkillOutcome};
 use thiserror::Error;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
-const SKILLS_USAGE: &str = "uso: mosaic skills install [--from DIRETORIO] [--to DIRETORIO]";
 const INSTALL_SUBCOMMAND: &str = "install";
 const FROM_FLAG: &str = "--from";
 const TO_FLAG: &str = "--to";
 const PACKAGED_SKILLS_DIRECTORY: &str = "/usr/share/mosaic/skills";
 const CLAUDE_SKILLS_RELATIVE_PATH: &str = ".claude/skills";
 
+fn skills_usage(language: Language) -> &'static str {
+    language.pick(
+        "usage: mosaic skills install [--from DIRECTORY] [--to DIRECTORY]",
+        "uso: mosaic skills install [--from DIRETORIO] [--to DIRETORIO]",
+    )
+}
+
 #[derive(Debug, Error, PartialEq)]
 enum SkillsUsageError {
-    #[error("{SKILLS_USAGE}")]
     UnknownSubcommand,
-    #[error("{0} precisa de DIRETORIO\n{SKILLS_USAGE}")]
     FlagWithoutValue(&'static str),
-    #[error("argumento desconhecido: {0}\n{SKILLS_USAGE}")]
     UnknownArgument(String),
-    #[error("não foi possível descobrir a pasta pessoal; use {TO_FLAG}\n{SKILLS_USAGE}")]
     NoHomeDirectory,
 }
+
+impl LocalizedMessage for SkillsUsageError {
+    fn message(&self, language: Language) -> String {
+        let usage = skills_usage(language);
+        match self {
+            Self::UnknownSubcommand => usage.to_string(),
+            Self::FlagWithoutValue(flag) => language.pick(
+                format!("{flag} needs DIRECTORY\n{usage}"),
+                format!("{flag} precisa de DIRETORIO\n{usage}"),
+            ),
+            Self::UnknownArgument(argument) => language.pick(
+                format!("unknown argument: {argument}\n{usage}"),
+                format!("argumento desconhecido: {argument}\n{usage}"),
+            ),
+            Self::NoHomeDirectory => language.pick(
+                format!("could not find the home folder; use {TO_FLAG}\n{usage}"),
+                format!("não foi possível descobrir a pasta pessoal; use {TO_FLAG}\n{usage}"),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(SkillsUsageError);
 
 #[derive(Debug, PartialEq)]
 struct InstallInvocation {
@@ -59,52 +86,78 @@ fn parse_install_arguments(arguments: &[String]) -> Result<InstallInvocation, Sk
 }
 
 pub fn run(arguments: &[String]) -> ExitCode {
+    let language = Language::detect_from_environment();
     match arguments.split_first() {
-        Some((subcommand, rest)) if subcommand == INSTALL_SUBCOMMAND => run_install(rest),
+        Some((subcommand, rest)) if subcommand == INSTALL_SUBCOMMAND => run_install(rest, language),
         _ => {
-            eprintln!("{}", SkillsUsageError::UnknownSubcommand);
+            eprintln!("{}", SkillsUsageError::UnknownSubcommand.message(language));
             ExitCode::from(EXIT_CODE_USAGE)
         }
     }
 }
 
-fn run_install(arguments: &[String]) -> ExitCode {
+fn run_install(arguments: &[String], language: Language) -> ExitCode {
     let invocation = match parse_install_arguments(arguments) {
         Ok(invocation) => invocation,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(language));
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
     let outcomes = match install_skills(&invocation.source, &invocation.target) {
         Ok(outcomes) => outcomes,
         Err(error) => {
-            eprintln!("mosaic: {error}");
+            eprintln!("mosaic: {}", error.message(language));
             return ExitCode::from(EXIT_CODE_FAILURE);
         }
     };
-    report(&outcomes, &invocation)
+    report(&outcomes, &invocation, language)
 }
 
-fn report(outcomes: &[SkillOutcome], invocation: &InstallInvocation) -> ExitCode {
+fn report(
+    outcomes: &[SkillOutcome],
+    invocation: &InstallInvocation,
+    language: Language,
+) -> ExitCode {
     let mut conflicts = 0;
     for outcome in outcomes {
         match outcome {
-            SkillOutcome::Linked(name) => println!("instalada: {name}"),
-            SkillOutcome::AlreadyLinked(name) => println!("já instalada: {name}"),
+            SkillOutcome::Linked(name) => {
+                println!("{}: {name}", language.pick("installed", "instalada"))
+            }
+            SkillOutcome::AlreadyLinked(name) => {
+                println!(
+                    "{}: {name}",
+                    language.pick("already installed", "já instalada")
+                )
+            }
             SkillOutcome::Conflict(name) => {
                 conflicts += 1;
+                let path = invocation.target.join(name).display().to_string();
                 eprintln!(
-                    "conflito: {} já existe e não é a skill do Mosaic; remova-a para instalar",
-                    invocation.target.join(name).display()
+                    "{}",
+                    language.pick(
+                        format!("conflict: {path} already exists and is not the Mosaic skill; remove it to install"),
+                        format!("conflito: {path} já existe e não é a skill do Mosaic; remova-a para instalar"),
+                    )
                 );
             }
         }
     }
     println!(
-        "{} skills em {}",
-        outcomes.len() - conflicts,
-        invocation.target.display()
+        "{}",
+        language.pick(
+            format!(
+                "{} skills in {}",
+                outcomes.len() - conflicts,
+                invocation.target.display()
+            ),
+            format!(
+                "{} skills em {}",
+                outcomes.len() - conflicts,
+                invocation.target.display()
+            ),
+        )
     );
     if conflicts == 0 {
         ExitCode::SUCCESS

@@ -5,12 +5,16 @@ const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 #[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
+use crate::domain::language::Language;
 use crate::infrastructure::app_paths::PRIORITY_PROMPT_RELATIVE_PATH;
 use crate::infrastructure::config::{config_file_path, ConfigError};
 
+#[path = "default_config_english.rs"]
+mod english;
+
 const PLUGINS_DIRECTORY_NAME: &str = "plugins";
 
-const DEFAULT_CONFIG: &str = r##"# Mosaic: cada bloco [[widgets]] abaixo é um widget do painel.
+const PORTUGUESE_DEFAULT_CONFIG: &str = r##"# Mosaic: cada bloco [[widgets]] abaixo é um widget do painel.
 # Depois de editar este arquivo, aperte R no painel para recarregar.
 #
 #   mosaic plugins install jira     copia um plugin de serviço (veja `mosaic plugins list`)
@@ -34,7 +38,7 @@ llm_sections = ["inbox", "in progress", "acompanhar_jira"]
 KANBAN_DIR = "~/kanban"
 "##;
 
-const REFERENCE_CONFIG: &str = r##"[[widgets]]
+const PORTUGUESE_REFERENCE_CONFIG: &str = r##"[[widgets]]
 id = "kanban"
 command = "python3"
 args = ["plugins/kanban.py"]
@@ -70,6 +74,11 @@ harness = "claude"
 timeout_seconds = 120
 confirm_before_send = true
 priority_prompt = "prompts/prioridade.md"
+
+# --- Idioma da interface (padrão: o do sistema; "en" ou "pt-BR") ---
+# Ordem de escolha: este campo, a variável MOSAIC_LANGUAGE, depois LC_ALL/LC_MESSAGES/LANG.
+# [ui]
+# language = "pt-BR"
 
 # --- Tema de cores (descomente para trocar; `mosaic themes` lista os presets com amostras) ---
 # Sem esta seção o Mosaic usa as cores do seu terminal (tema "default"). Os temas coloridos
@@ -218,19 +227,28 @@ const BUNDLED_PLUGINS: [(&str, &str); 5] = [
     ("gallery.js", include_str!("../../plugins/gallery.js")),
 ];
 
-pub fn default_config_text() -> &'static str {
-    DEFAULT_CONFIG
+pub fn default_config_text(language: Language) -> &'static str {
+    match language {
+        Language::English => english::DEFAULT_CONFIG,
+        Language::BrazilianPortuguese => PORTUGUESE_DEFAULT_CONFIG,
+    }
 }
 
-pub fn reference_config_text() -> &'static str {
-    REFERENCE_CONFIG
+pub fn reference_config_text(language: Language) -> &'static str {
+    match language {
+        Language::English => english::REFERENCE_CONFIG,
+        Language::BrazilianPortuguese => PORTUGUESE_REFERENCE_CONFIG,
+    }
 }
 
 pub fn default_priority_prompt() -> &'static str {
     PRIORITY_PROMPT
 }
 
-pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError> {
+pub fn install_defaults_if_missing(
+    directory: &Path,
+    language: Language,
+) -> Result<bool, ConfigError> {
     let config_path = config_file_path(directory);
     if config_path.exists() {
         return Ok(false);
@@ -249,7 +267,7 @@ pub fn install_defaults_if_missing(directory: &Path) -> Result<bool, ConfigError
         create_private_directory(prompts_directory)?;
     }
     write_private_file(&prompt_path, PRIORITY_PROMPT)?;
-    write_private_file(&config_path, DEFAULT_CONFIG)?;
+    write_private_file(&config_path, default_config_text(language))?;
     Ok(true)
 }
 
@@ -302,7 +320,7 @@ mod tests {
 
     #[test]
     fn reference_config_parses_without_duplicates() {
-        let config = parse_config(reference_config_text()).unwrap();
+        let config = parse_config(reference_config_text(Language::BrazilianPortuguese)).unwrap();
         let ids: Vec<&str> = config.widgets.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, vec!["kanban", "example-python", "example-node"]);
         assert!(config.warnings.is_empty());
@@ -312,7 +330,9 @@ mod tests {
     #[test]
     fn install_creates_config_and_plugins_when_missing() {
         let directory = tempfile::tempdir().unwrap();
-        assert!(install_defaults_if_missing(directory.path()).unwrap());
+        assert!(
+            install_defaults_if_missing(directory.path(), Language::BrazilianPortuguese).unwrap()
+        );
         assert!(config_file_path(directory.path()).is_file());
         for plugin in ["kanban.py", "example.py", "example.js"] {
             assert!(
@@ -324,7 +344,10 @@ mod tests {
 
     #[test]
     fn default_kanban_uses_the_minimum_interval() {
-        let config = crate::infrastructure::config::parse_config(reference_config_text()).unwrap();
+        let config = crate::infrastructure::config::parse_config(reference_config_text(
+            Language::BrazilianPortuguese,
+        ))
+        .unwrap();
         let kanban = &config.widgets[0];
         assert_eq!(kanban.id.as_str(), "kanban");
         assert_eq!(kanban.interval_seconds, 30);
@@ -333,7 +356,7 @@ mod tests {
 
     #[test]
     fn reference_config_enables_kanban_for_the_llm() {
-        let config = parse_config(reference_config_text()).unwrap();
+        let config = parse_config(reference_config_text(Language::BrazilianPortuguese)).unwrap();
         assert_eq!(
             config.widgets[0].llm_selection.sections,
             vec!["inbox", "in progress", "acompanhar_jira"]
@@ -343,7 +366,7 @@ mod tests {
 
     #[test]
     fn reference_config_parses_with_pomodoro_and_llm_sections() {
-        let config = parse_config(reference_config_text()).unwrap();
+        let config = parse_config(reference_config_text(Language::BrazilianPortuguese)).unwrap();
         assert!(config.pomodoro.enabled);
         assert_eq!(config.pomodoro.notify_command, None);
         assert!(config.llm.confirm_before_send);
@@ -353,7 +376,7 @@ mod tests {
     #[test]
     fn install_creates_the_priority_prompt() {
         let directory = tempfile::tempdir().unwrap();
-        install_defaults_if_missing(directory.path()).unwrap();
+        install_defaults_if_missing(directory.path(), Language::BrazilianPortuguese).unwrap();
         let installed =
             std::fs::read_to_string(directory.path().join("prompts/prioridade.md")).unwrap();
         assert_eq!(installed, default_priority_prompt());
@@ -367,7 +390,7 @@ mod tests {
     #[test]
     fn install_creates_only_the_core_plugins() {
         let directory = tempfile::tempdir().unwrap();
-        install_defaults_if_missing(directory.path()).unwrap();
+        install_defaults_if_missing(directory.path(), Language::BrazilianPortuguese).unwrap();
         let plugins = directory.path().join("plugins");
         for file in [
             "kanban.py",
@@ -385,7 +408,7 @@ mod tests {
 
     #[test]
     fn reference_config_tells_how_to_install_the_service_plugins() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("mosaic plugins install"));
         let first_service_block = text.find("# --- Jira").unwrap();
         assert!(text.find("mosaic plugins install").unwrap() < first_service_block);
@@ -393,7 +416,7 @@ mod tests {
 
     #[test]
     fn reference_config_still_parses_and_has_no_active_jira_widget() {
-        let config = parse_config(reference_config_text()).unwrap();
+        let config = parse_config(reference_config_text(Language::BrazilianPortuguese)).unwrap();
         assert!(config
             .widgets
             .iter()
@@ -402,7 +425,7 @@ mod tests {
 
     #[test]
     fn reference_config_documents_jira_examples() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("JIRA_SITE"));
         assert!(text.contains("--jql"));
         assert!(text.contains("currentUser()"));
@@ -413,7 +436,7 @@ mod tests {
     #[test]
     fn install_creates_the_gallery_plugins() {
         let directory = tempfile::tempdir().unwrap();
-        install_defaults_if_missing(directory.path()).unwrap();
+        install_defaults_if_missing(directory.path(), Language::BrazilianPortuguese).unwrap();
         for name in ["plugins/gallery.py", "plugins/gallery.js"] {
             let installed = std::fs::read_to_string(directory.path().join(name)).unwrap();
             assert!(installed.contains("alerts"), "{name}");
@@ -422,7 +445,7 @@ mod tests {
 
     #[test]
     fn reference_config_documents_the_gallery_examples() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("# args = [\"plugins/gallery.py\"]"));
         assert!(text.contains("# args = [\"plugins/gallery.js\"]"));
         let config = parse_config(text).unwrap();
@@ -434,14 +457,14 @@ mod tests {
 
     #[test]
     fn reference_config_has_commented_calendar_widget() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("# args = [\"plugins/calendar/calendar_widget.py\"]"));
         assert!(text.contains("# CALENDAR_SOURCE = \"ics\""));
     }
 
     #[test]
     fn reference_config_has_commented_pull_request_widgets() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("# args = [\"plugins/github/github_prs.py\"]"));
         assert!(text.contains("# args = [\"plugins/azure-devops/azure_devops.py\"]"));
         assert!(text.contains("# args = [\"plugins/gitlab/gitlab_mrs.py\"]"));
@@ -452,7 +475,7 @@ mod tests {
 
     #[test]
     fn reference_config_has_commented_azure_pipelines_widget() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("# args = [\"plugins/azure-pipelines/azure_pipelines.py\"]"));
         assert!(text.contains("# AZDO_PROJECTS = \"meu-projeto\""));
         let config = parse_config(text).unwrap();
@@ -464,7 +487,7 @@ mod tests {
 
     #[test]
     fn reference_config_documents_the_update_check_as_a_comment() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("# [update]"));
         assert!(text.contains("# check = false"));
         assert!(text.contains("MOSAIC_NO_UPDATE_CHECK"));
@@ -475,7 +498,7 @@ mod tests {
 
     #[test]
     fn reference_config_documents_the_theme_section() {
-        let text = reference_config_text();
+        let text = reference_config_text(Language::BrazilianPortuguese);
         assert!(text.contains("# [theme]"));
         assert!(text.contains("# name = \"tokyo-night\""));
         assert!(text.contains("mosaic themes"));
@@ -488,7 +511,7 @@ mod tests {
 
     #[test]
     fn default_config_is_short_and_needs_only_python() {
-        let text = default_config_text();
+        let text = default_config_text(Language::BrazilianPortuguese);
         assert!(
             text.lines().count() <= MAXIMUM_DEFAULT_CONFIG_LINES,
             "{} linhas",
@@ -503,7 +526,7 @@ mod tests {
 
     #[test]
     fn default_config_points_to_the_next_steps() {
-        let text = default_config_text();
+        let text = default_config_text(Language::BrazilianPortuguese);
         for expected in [
             "mosaic plugins install",
             "mosaic plugins setup",
@@ -516,7 +539,7 @@ mod tests {
 
     #[test]
     fn default_config_keeps_the_kanban_sections_for_the_llm() {
-        let config = parse_config(default_config_text()).unwrap();
+        let config = parse_config(default_config_text(Language::BrazilianPortuguese)).unwrap();
         assert_eq!(
             config.widgets[1].llm_selection.sections,
             vec!["inbox", "in progress", "acompanhar_jira"]
@@ -526,18 +549,86 @@ mod tests {
     #[test]
     fn install_writes_the_short_default_config() {
         let directory = tempfile::tempdir().unwrap();
-        install_defaults_if_missing(directory.path()).unwrap();
+        install_defaults_if_missing(directory.path(), Language::BrazilianPortuguese).unwrap();
         let installed = std::fs::read_to_string(config_file_path(directory.path())).unwrap();
-        assert_eq!(installed, default_config_text());
+        assert_eq!(
+            installed,
+            default_config_text(Language::BrazilianPortuguese)
+        );
     }
 
     #[test]
     fn install_never_overwrites_existing_config() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(config_file_path(directory.path()), "# meu arquivo").unwrap();
-        assert!(!install_defaults_if_missing(directory.path()).unwrap());
+        assert!(
+            !install_defaults_if_missing(directory.path(), Language::BrazilianPortuguese).unwrap()
+        );
         let content = std::fs::read_to_string(config_file_path(directory.path())).unwrap();
         assert_eq!(content, "# meu arquivo");
         assert!(!directory.path().join("plugins").exists());
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::infrastructure::config::parse_config_in;
+
+    #[test]
+    fn both_languages_parse_without_warnings_and_declare_the_same_widgets() {
+        for text in [default_config_text, reference_config_text] {
+            let english = parse_config_in(text(Language::English), Language::English).unwrap();
+            let portuguese = parse_config_in(
+                text(Language::BrazilianPortuguese),
+                Language::BrazilianPortuguese,
+            )
+            .unwrap();
+            assert!(english.warnings.is_empty(), "{:?}", english.warnings);
+            assert!(portuguese.warnings.is_empty(), "{:?}", portuguese.warnings);
+            let ids = |config: &crate::infrastructure::config::AppConfig| {
+                config
+                    .widgets
+                    .iter()
+                    .map(|widget| widget.id.as_str().to_string())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&english), ids(&portuguese));
+        }
+    }
+
+    #[test]
+    fn the_reference_config_documents_the_ui_section_in_both_languages() {
+        for language in [Language::English, Language::BrazilianPortuguese] {
+            let text = reference_config_text(language);
+            assert!(text.contains("# [ui]"), "{language}");
+            assert!(text.contains("# language = "), "{language}");
+            assert!(text.contains("MOSAIC_LANGUAGE"), "{language}");
+        }
+    }
+
+    #[test]
+    fn the_english_texts_have_no_portuguese_prose() {
+        for text in [
+            default_config_text(Language::English),
+            reference_config_text(Language::English),
+        ] {
+            for word in [
+                "Depois de editar",
+                "descomente",
+                "Idioma da interface",
+                "Minhas tarefas",
+            ] {
+                assert!(!text.contains(word), "{word}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_first_run_writes_the_config_in_the_requested_language() {
+        let directory = tempfile::tempdir().unwrap();
+        install_defaults_if_missing(directory.path(), Language::English).unwrap();
+        let written = fs::read_to_string(config_file_path(directory.path())).unwrap();
+        assert!(written.contains("After editing this file"));
     }
 }

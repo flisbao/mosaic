@@ -35,6 +35,7 @@ const EXISTING_CONFIG: &str = "# meu painel\n[[widgets]]\nid = \"outro\"\ncomman
 
 fn setup(config_directory: &Path, extra: &[&str], input: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(["plugins", "setup", "demo", "--config-dir"])
         .arg(config_directory)
         .args(extra)
@@ -148,6 +149,7 @@ fn a_plugin_that_is_not_installed_points_to_the_install_command() {
 #[test]
 fn a_missing_name_is_a_usage_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(["plugins", "setup"])
         .stdin(Stdio::null())
         .output()

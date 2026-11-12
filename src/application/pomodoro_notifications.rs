@@ -1,35 +1,68 @@
 use crate::application::ports::AlertMessage;
+use crate::domain::language::Language;
 use crate::domain::pomodoro::{Phase, PhaseEnded};
 
-const FOCUS_ENDED_TITLE: &str = "Foco concluído";
-const BREAK_ENDED_TITLE: &str = "Descanso terminou";
-const DEFAULT_REST_BODY: &str = "Hora de descansar";
-const BREAK_ENDED_BODY: &str = "Volte ao foco ou troque de tarefa (p inicia)";
-
-pub fn alert_for(ended: &PhaseEnded) -> AlertMessage {
+pub fn alert_for(ended: &PhaseEnded, language: Language) -> AlertMessage {
     match ended.finished {
         Phase::Focus => {
-            let headline = ended.suggestion.as_deref().unwrap_or(DEFAULT_REST_BODY);
+            let headline = ended
+                .suggestion
+                .as_deref()
+                .unwrap_or_else(|| default_rest_body(language));
+            let next = phase_label(ended.next, language);
             AlertMessage {
-                title: FOCUS_ENDED_TITLE.to_string(),
-                body: format!(
-                    "{headline}\nPróximo: {} (p inicia)",
-                    phase_label(ended.next)
-                ),
+                title: focus_ended_title(language).to_string(),
+                body: match language {
+                    Language::English => format!("{headline}\nNext: {next} (p starts)"),
+                    Language::BrazilianPortuguese => {
+                        format!("{headline}\nPróximo: {next} (p inicia)")
+                    }
+                },
             }
         }
         Phase::ShortBreak | Phase::LongBreak => AlertMessage {
-            title: BREAK_ENDED_TITLE.to_string(),
-            body: BREAK_ENDED_BODY.to_string(),
+            title: break_ended_title(language).to_string(),
+            body: break_ended_body(language).to_string(),
         },
     }
 }
 
-pub fn phase_label(phase: Phase) -> &'static str {
-    match phase {
-        Phase::Focus => "foco",
-        Phase::ShortBreak => "descanso curto",
-        Phase::LongBreak => "descanso longo",
+fn focus_ended_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Focus finished",
+        Language::BrazilianPortuguese => "Foco concluído",
+    }
+}
+
+fn break_ended_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Break is over",
+        Language::BrazilianPortuguese => "Descanso terminou",
+    }
+}
+
+fn default_rest_body(language: Language) -> &'static str {
+    match language {
+        Language::English => "Time to rest",
+        Language::BrazilianPortuguese => "Hora de descansar",
+    }
+}
+
+fn break_ended_body(language: Language) -> &'static str {
+    match language {
+        Language::English => "Back to focus or switch tasks (p starts)",
+        Language::BrazilianPortuguese => "Volte ao foco ou troque de tarefa (p inicia)",
+    }
+}
+
+pub fn phase_label(phase: Phase, language: Language) -> &'static str {
+    match (phase, language) {
+        (Phase::Focus, Language::English) => "focus",
+        (Phase::ShortBreak, Language::English) => "short break",
+        (Phase::LongBreak, Language::English) => "long break",
+        (Phase::Focus, Language::BrazilianPortuguese) => "foco",
+        (Phase::ShortBreak, Language::BrazilianPortuguese) => "descanso curto",
+        (Phase::LongBreak, Language::BrazilianPortuguese) => "descanso longo",
     }
 }
 
@@ -39,9 +72,18 @@ mod tests {
 
     #[test]
     fn phase_labels_are_the_user_facing_names() {
-        assert_eq!(phase_label(Phase::Focus), "foco");
-        assert_eq!(phase_label(Phase::ShortBreak), "descanso curto");
-        assert_eq!(phase_label(Phase::LongBreak), "descanso longo");
+        assert_eq!(
+            phase_label(Phase::Focus, Language::BrazilianPortuguese),
+            "foco"
+        );
+        assert_eq!(
+            phase_label(Phase::ShortBreak, Language::BrazilianPortuguese),
+            "descanso curto"
+        );
+        assert_eq!(
+            phase_label(Phase::LongBreak, Language::BrazilianPortuguese),
+            "descanso longo"
+        );
     }
 
     fn focus_ended(next: Phase, suggestion: Option<&str>) -> PhaseEnded {
@@ -54,20 +96,29 @@ mod tests {
 
     #[test]
     fn focus_end_shows_suggestion_and_next_phase() {
-        let alert = alert_for(&focus_ended(Phase::ShortBreak, Some("Beber água")));
+        let alert = alert_for(
+            &focus_ended(Phase::ShortBreak, Some("Beber água")),
+            Language::BrazilianPortuguese,
+        );
         assert_eq!(alert.title, "Foco concluído");
         assert_eq!(alert.body, "Beber água\nPróximo: descanso curto (p inicia)");
     }
 
     #[test]
     fn focus_end_without_suggestion_says_time_to_rest() {
-        let alert = alert_for(&focus_ended(Phase::ShortBreak, None));
+        let alert = alert_for(
+            &focus_ended(Phase::ShortBreak, None),
+            Language::BrazilianPortuguese,
+        );
         assert!(alert.body.starts_with("Hora de descansar\n"));
     }
 
     #[test]
     fn long_break_is_named_in_the_next_phase_line() {
-        let alert = alert_for(&focus_ended(Phase::LongBreak, Some("Levantar")));
+        let alert = alert_for(
+            &focus_ended(Phase::LongBreak, Some("Levantar")),
+            Language::BrazilianPortuguese,
+        );
         assert!(alert.body.ends_with("Próximo: descanso longo (p inicia)"));
     }
 
@@ -78,7 +129,7 @@ mod tests {
             next: Phase::Focus,
             suggestion: None,
         };
-        let alert = alert_for(&ended);
+        let alert = alert_for(&ended, Language::BrazilianPortuguese);
         assert_eq!(alert.title, "Descanso terminou");
         assert_eq!(alert.body, "Volte ao foco ou troque de tarefa (p inicia)");
     }

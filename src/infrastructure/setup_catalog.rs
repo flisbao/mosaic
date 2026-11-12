@@ -4,21 +4,33 @@ use std::path::PathBuf;
 use crate::application::ports::{
     ConfigWriteError, SetupCatalog, SetupCatalogError, SetupCatalogSnapshot, WidgetConfigWriter,
 };
+use crate::domain::language::LocalizedMessage;
 use crate::domain::plugin_setup::InstalledPlugin;
 use crate::infrastructure::config::PLUGINS_DIRECTORY_NAME;
 use crate::infrastructure::config_appender::{append_blocks, inspect_config};
-use crate::infrastructure::setup_manifest::{read_manifest_with_version, MANIFEST_FILE_NAME};
+use crate::infrastructure::setup_manifest::{read_manifest_with_version_in, MANIFEST_FILE_NAME};
+use crate::infrastructure::shared_language::SharedLanguage;
 
 pub struct FileSetupCatalog {
     config_directory: PathBuf,
+    language: SharedLanguage,
 }
 
 impl FileSetupCatalog {
     pub fn new(config_directory: PathBuf) -> Self {
-        Self { config_directory }
+        Self {
+            config_directory,
+            language: SharedLanguage::default(),
+        }
+    }
+
+    pub fn with_language(mut self, language: SharedLanguage) -> Self {
+        self.language = language;
+        self
     }
 
     fn installed_plugins(&self) -> (Vec<InstalledPlugin>, Vec<String>) {
+        let language = self.language.get();
         let mut plugins = Vec::new();
         let mut problems = Vec::new();
         let plugins_directory = self.config_directory.join(PLUGINS_DIRECTORY_NAME);
@@ -31,7 +43,7 @@ impl FileSetupCatalog {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
-            match read_manifest_with_version(&manifest_path) {
+            match read_manifest_with_version_in(&manifest_path, language) {
                 Ok((manifest, version)) => plugins.push(InstalledPlugin {
                     name,
                     version: version.map(|version| version.to_string()),
@@ -48,8 +60,9 @@ impl FileSetupCatalog {
 
 impl SetupCatalog for FileSetupCatalog {
     fn load(&self) -> Result<SetupCatalogSnapshot, SetupCatalogError> {
-        let overview = inspect_config(&self.config_directory)
-            .map_err(|error| SetupCatalogError(error.to_string()))?;
+        let language = self.language.get();
+        let overview = inspect_config(&self.config_directory, language)
+            .map_err(|error| SetupCatalogError(error.message(language)))?;
         let (plugins, problems) = self.installed_plugins();
         Ok(SetupCatalogSnapshot {
             plugins,
@@ -62,18 +75,28 @@ impl SetupCatalog for FileSetupCatalog {
 
 pub struct FileWidgetConfigWriter {
     config_directory: PathBuf,
+    language: SharedLanguage,
 }
 
 impl FileWidgetConfigWriter {
     pub fn new(config_directory: PathBuf) -> Self {
-        Self { config_directory }
+        Self {
+            config_directory,
+            language: SharedLanguage::default(),
+        }
+    }
+
+    pub fn with_language(mut self, language: SharedLanguage) -> Self {
+        self.language = language;
+        self
     }
 }
 
 impl WidgetConfigWriter for FileWidgetConfigWriter {
     fn append(&self, blocks: &[String]) -> Result<(), ConfigWriteError> {
-        append_blocks(&self.config_directory, blocks)
-            .map_err(|error| ConfigWriteError(error.to_string()))
+        let language = self.language.get();
+        append_blocks(&self.config_directory, blocks, language)
+            .map_err(|error| ConfigWriteError(error.message(language)))
     }
 }
 

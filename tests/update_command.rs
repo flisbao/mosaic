@@ -82,6 +82,7 @@ impl Fixture {
     ) -> Output {
         let mut process = spawn_retrying(
             Command::new(executable)
+                .env("MOSAIC_LANGUAGE", "pt-BR")
                 .arg("update")
                 .args(arguments)
                 .env("MOSAIC_DOWNLOAD_BASE", base)
@@ -111,6 +112,7 @@ fn text(output: &Output) -> String {
 fn version_of(executable: &Path) -> String {
     let output = spawn_retrying(
         Command::new(executable)
+            .env("MOSAIC_LANGUAGE", "pt-BR")
             .arg("--version")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()),
@@ -306,6 +308,7 @@ fn updating_does_not_leak_the_environment_to_curl() {
         &format!("#!/bin/sh\nenv > {}\nexit 22\n", record.display()),
     );
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(["update", "--check"])
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
         .env("SEGREDO_DO_USUARIO", "nao-vaza")

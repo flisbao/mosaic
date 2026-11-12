@@ -49,6 +49,13 @@ impl Language {
             .map_or(Language::English, |value| Language::from_locale(&value))
     }
 
+    pub fn pick<T>(self, english: T, portuguese: T) -> T {
+        match self {
+            Language::English => english,
+            Language::BrazilianPortuguese => portuguese,
+        }
+    }
+
     pub fn detect_from_environment() -> Self {
         Self::detect(|name| std::env::var(name).ok())
     }
@@ -86,6 +93,12 @@ mod tests {
     fn lookup(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         let map: HashMap<&str, &str> = pairs.iter().copied().collect();
         move |name| map.get(name).map(|value| value.to_string())
+    }
+
+    #[test]
+    fn pick_selects_by_language() {
+        assert_eq!(Language::English.pick("a", "b"), "a");
+        assert_eq!(Language::BrazilianPortuguese.pick("a", "b"), "b");
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::domain::blocks::{
     Block, BlockKind,
 };
 use crate::domain::widget_content::{Align, Tone};
+use crate::infrastructure::protocol_messages as messages;
 use crate::infrastructure::protocol_report::{child_path, indexed_path, Reader};
 
 use super::BlockParser;
@@ -30,7 +31,8 @@ fn parse_columns(reader: &mut Reader, object: &Map<String, Value>, path: &str) -
     let columns_path = child_path(path, "columns");
     let entries = reader.required_list(object, "columns", path);
     if entries.is_empty() && object.get("columns").is_some_and(Value::is_array) {
-        reader.error(&columns_path, "precisa ter ao menos uma coluna");
+        let message = messages::table_needs_a_column(reader.language());
+        reader.error(&columns_path, &message);
     }
     reader.parse_each(entries, MAXIMUM_TABLE_COLUMNS, &columns_path, parse_column)
 }
@@ -47,10 +49,8 @@ fn parse_align(reader: &mut Reader, column: &Map<String, Value>, path: &str) -> 
         Some("right") => Align::Right,
         Some("left") | None => Align::Left,
         Some(_) => {
-            reader.warning(
-                &child_path(path, "align"),
-                "alinhamento desconhecido; usando left",
-            );
+            let message = messages::unknown_alignment(reader.language());
+            reader.warning(&child_path(path, "align"), &message);
             Align::Left
         }
     }
@@ -74,17 +74,13 @@ fn parse_rows(
 
 fn parse_row(reader: &mut Reader, entry: &Value, width: usize, path: &str) -> Option<Vec<Cell>> {
     let Some(entries) = entry.as_array() else {
-        reader.error(path, "precisa ser uma lista de células");
+        let message = messages::row_is_not_a_list_of_cells(reader.language());
+        reader.error(path, &message);
         return None;
     };
     if entries.len() != width {
-        reader.warning(
-            path,
-            &format!(
-                "a linha tem {} células e a tabela {width} colunas",
-                entries.len()
-            ),
-        );
+        let message = messages::row_width_mismatch(reader.language(), entries.len(), width);
+        reader.warning(path, &message);
     }
     let mut cells = vec![];
     for (index, cell) in entries.iter().take(width).enumerate() {
@@ -114,7 +110,8 @@ fn parse_cell(reader: &mut Reader, entry: &Value, path: &str) -> Option<Cell> {
             })
         }
         _ => {
-            reader.error(path, "célula precisa ser texto ou objeto");
+            let message = messages::cell_not_text_or_object(reader.language());
+            reader.error(path, &message);
             None
         }
     }

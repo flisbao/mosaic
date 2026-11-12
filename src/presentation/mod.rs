@@ -7,6 +7,7 @@ pub mod grid_layout;
 pub mod indexed_palette;
 pub mod key_hints;
 pub mod key_input;
+pub mod messages;
 pub mod redraw_policy;
 pub mod reload_notice;
 pub mod render;

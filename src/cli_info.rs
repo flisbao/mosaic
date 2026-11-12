@@ -1,12 +1,12 @@
 use std::process::ExitCode;
 
+use mosaic::domain::language::Language;
 use mosaic::infrastructure::app_paths::config_directory;
 use mosaic::infrastructure::default_files::reference_config_text;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DOCUMENTATION_URL: &str = "https://github.com/flisbao/mosaic";
-const UNKNOWN_CONFIG_DIRECTORY: &str = "(pasta de configuração do sistema)";
 const VERSION_ARGUMENTS: [&str; 3] = ["--version", "-V", "version"];
 const HELP_ARGUMENTS: [&str; 3] = ["--help", "-h", "help"];
 const DEFAULT_CONFIG_ARGUMENT: &str = "--default-config";
@@ -32,21 +32,22 @@ fn recognize(argument: &str) -> Request<'_> {
 
 pub fn run(arguments: &[String]) -> Option<ExitCode> {
     let first = arguments.first()?;
+    let language = Language::detect_from_environment();
     Some(match recognize(first) {
         Request::Version => {
             println!("{}", version_text());
             ExitCode::SUCCESS
         }
         Request::Help => {
-            println!("{}", help_text());
+            println!("{}", help_text(language));
             ExitCode::SUCCESS
         }
         Request::DefaultConfig => {
-            print!("{}", reference_config_text());
+            print!("{}", reference_config_text(language));
             ExitCode::SUCCESS
         }
         Request::Unknown(argument) => {
-            eprintln!("mosaic: argumento desconhecido: {argument}\nuse: mosaic --help");
+            eprintln!("{}", unknown_argument_message(language, argument));
             ExitCode::from(EXIT_CODE_USAGE)
         }
     })
@@ -56,11 +57,49 @@ fn version_text() -> String {
     format!("mosaic {VERSION}")
 }
 
-fn help_text() -> String {
+fn help_text(language: Language) -> String {
     let configuration = config_directory()
         .map(|directory| directory.display().to_string())
-        .unwrap_or_else(|| UNKNOWN_CONFIG_DIRECTORY.to_string());
-    format!(
+        .unwrap_or_else(|| unknown_config_directory(language).to_string());
+    match language {
+        Language::English => format!(
+        "mosaic {VERSION}: terminal dashboard built from widgets
+
+Usage:
+  mosaic                            opens the panel
+  mosaic --help | -h | help         shows this help
+  mosaic --version | -V | version   shows the installed version
+  mosaic --default-config           prints the reference mosaic.toml, with every option commented
+  mosaic plugins list               lists the official shortcuts, offline
+  mosaic plugins install owner/repo[/subdir] [--yes]  downloads a public plugin with Git; asks for confirmation [y/N]
+  mosaic plugins install NAME...   installs official shortcuts; --from DIR copies local plugins
+  mosaic plugins setup NAME         terminal interview that builds the widget and writes it to mosaic.toml
+  mosaic tabs list | add NAME       lists the tabs in mosaic.toml or creates a new tab
+  mosaic themes [NAME]              lists the color themes or shows one
+  mosaic check COMMAND...           validates the output of a widget; 'mosaic check --config' validates mosaic.toml
+  mosaic skills install             links the Claude Code skills
+  mosaic update [--check] [--yes]   checks for a new version; without --check, updates the binary (asks [y/N])
+
+Quick start:
+  mosaic plugins list
+  mosaic plugins install jira
+  mosaic plugins install flisbao/mosaic/plugins/jira --yes
+  mosaic plugins setup jira
+  mosaic                          (press + to add a widget without leaving the panel; R reloads mosaic.toml)
+
+Configuration: {configuration}
+  mosaic.toml  widgets, tabs, theme ([theme] name = \"tokyo-night\"), pomodoro and AI
+  plugins/     the installed plugins
+  Created on the first run; XDG_CONFIG_HOME changes the folder.
+
+New version notice: at most one query per day to github.com when the panel opens.
+  Turn it off with [update] check = false in mosaic.toml or MOSAIC_NO_UPDATE_CHECK=1.
+
+In the panel: ? shows the keys, + adds a widget, R reloads, r refreshes, q quits.
+Each subcommand shows its usage when called without arguments or with a wrong argument.
+Documentation: {DOCUMENTATION_URL}"
+        ),
+        Language::BrazilianPortuguese => format!(
         "mosaic {VERSION}: painel de terminal feito de widgets
 
 Uso:
@@ -95,7 +134,24 @@ Aviso de versão nova: no máximo uma consulta por dia ao github.com ao abrir o 
 No painel: ? mostra as teclas, + adiciona um widget, R recarrega, r atualiza, q sai.
 Cada subcomando mostra o seu uso quando chamado sem argumentos ou com argumento errado.
 Documentação: {DOCUMENTATION_URL}"
-    )
+        ),
+    }
+}
+
+fn unknown_config_directory(language: Language) -> &'static str {
+    match language {
+        Language::English => "(system configuration folder)",
+        Language::BrazilianPortuguese => "(pasta de configuração do sistema)",
+    }
+}
+
+fn unknown_argument_message(language: Language, argument: &str) -> String {
+    match language {
+        Language::English => format!("mosaic: unknown argument: {argument}\nuse: mosaic --help"),
+        Language::BrazilianPortuguese => {
+            format!("mosaic: argumento desconhecido: {argument}\nuse: mosaic --help")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -112,7 +168,7 @@ mod tests {
 
     #[test]
     fn the_help_lists_every_subcommand_and_the_first_steps() {
-        let help = help_text();
+        let help = help_text(Language::BrazilianPortuguese);
         for subcommand in [
             "plugins install",
             "plugins setup",
@@ -135,5 +191,33 @@ mod tests {
     #[test]
     fn no_arguments_means_open_the_panel() {
         assert!(run(&[]).is_none());
+    }
+
+    #[test]
+    fn the_english_help_is_translated_and_lists_every_subcommand() {
+        let help = help_text(Language::English);
+        for expected in [
+            "Usage:",
+            "Quick start:",
+            "press + to add a widget",
+            "mosaic update [--check] [--yes]",
+            "asks for confirmation [y/N]",
+            "MOSAIC_NO_UPDATE_CHECK=1",
+        ] {
+            assert!(help.contains(expected), "{expected}");
+        }
+        assert!(!help.contains("Primeiros passos"));
+    }
+
+    #[test]
+    fn the_unknown_argument_message_is_translated() {
+        assert_eq!(
+            unknown_argument_message(Language::English, "--x"),
+            "mosaic: unknown argument: --x\nuse: mosaic --help"
+        );
+        assert_eq!(
+            unknown_argument_message(Language::BrazilianPortuguese, "--x"),
+            "mosaic: argumento desconhecido: --x\nuse: mosaic --help"
+        );
     }
 }

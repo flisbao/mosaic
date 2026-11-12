@@ -5,22 +5,20 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
+use crate::domain::language::Language;
 use crate::domain::widget::WidgetRecord;
 use crate::presentation::app_state::WidgetEntry;
 use crate::presentation::grid_layout::{visible_item_capacity, MINIMUM_BOX_HEIGHT};
+use crate::presentation::messages;
 use crate::presentation::text_fit::{display_width, truncate_to_width};
 use crate::presentation::theme_styles::ThemeStyles;
 use crate::presentation::widget_view::render_blocks_limited;
 
-const LOADING_TEXT: &str = "carregando…";
-const FAILURE_PREFIX: &str = "⚠ falha: ";
 pub const FAILURE_MARK: &str = "⚠ ";
 const MINIMUM_BOX_WIDTH: u16 = 3;
 const BORDER_COLUMNS: u16 = 2;
 const REFRESH_INDICATOR: &str = " ⟳";
 const OVERFLOW_PREFIX: &str = "+";
-const OVERFLOW_SUFFIX: &str = " itens";
-const STALE_AGE_PREFIX: &str = "sem atualizar há ";
 const MINUTES_PER_HOUR: i64 = 60;
 const HOURS_PER_DAY: i64 = 24;
 
@@ -152,7 +150,7 @@ fn no_snapshot_lines(
             .lines()
             .map(|line| failure_line(line, width, styles))
             .collect(),
-        None => vec![Line::from(LOADING_TEXT)],
+        None => vec![Line::from(messages::loading(styles.language()))],
     }
 }
 
@@ -168,28 +166,30 @@ pub(crate) fn failure_header(
     };
     let mut lines = Vec::new();
     if detail == FailureDetail::Shown {
-        let reason = format!("{FAILURE_PREFIX}{message}");
+        let reason = format!("{}{message}", messages::failure_prefix(styles.language()));
         lines.extend(reason.lines().map(|line| failure_line(line, width, styles)));
     }
     if let Some(age) = record.age(now) {
-        let text = format!("{STALE_AGE_PREFIX}{}", age_text(age));
+        let text = format!(
+            "{}{}",
+            messages::stale_age_prefix(styles.language()),
+            age_text(age, styles.language())
+        );
         lines.push(failure_line(&text, width, styles));
     }
     lines
 }
 
-pub fn age_text(age: TimeDelta) -> String {
+pub fn age_text(age: TimeDelta, language: Language) -> String {
     let minutes = age.num_minutes();
     let hours = minutes / MINUTES_PER_HOUR;
     let days = hours / HOURS_PER_DAY;
     if minutes < MINUTES_PER_HOUR {
-        format!("{minutes} min")
+        messages::age_minutes(minutes)
     } else if hours < HOURS_PER_DAY {
-        format!("{hours} h")
-    } else if days == 1 {
-        "1 dia".to_string()
+        messages::age_hours(hours)
     } else {
-        format!("{days} dias")
+        messages::age_days(language, days)
     }
 }
 
@@ -259,7 +259,10 @@ fn clip_limited(
 }
 
 fn overflow_line(omitted: usize, styles: &ThemeStyles) -> Line<'static> {
-    let text = format!("{OVERFLOW_PREFIX}{omitted}{OVERFLOW_SUFFIX}");
+    let text = format!(
+        "{OVERFLOW_PREFIX}{omitted}{}",
+        messages::overflow_suffix(styles.language())
+    );
     Line::from(Span::styled(text, styles.muted()))
 }
 
@@ -293,14 +296,14 @@ mod tests {
             40,
             now(),
             FailureDetail::Hidden,
-            &ThemeStyles::ansi(),
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese),
         );
         let shown = failure_header(
             &record,
             40,
             now(),
             FailureDetail::Shown,
-            &ThemeStyles::ansi(),
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese),
         );
 
         assert!(hidden.is_empty());
@@ -315,7 +318,7 @@ mod tests {
 
     #[test]
     fn border_style_depends_on_failure_then_emphasis() {
-        let styles = ThemeStyles::ansi();
+        let styles = ThemeStyles::ansi().with_language(Language::BrazilianPortuguese);
         let loading = WidgetRecord::loading();
         let mut failing = WidgetRecord::loading();
         failing.apply::<String>(Err("x".to_string()), now());
@@ -339,10 +342,14 @@ mod tests {
         let lines: Vec<Line<'static>> = (1..=10)
             .map(|number| line(&format!("linha {number}")))
             .collect();
-        let clipped: Vec<String> = clip_with_overflow(lines, 4, &ThemeStyles::ansi())
-            .iter()
-            .map(line_text)
-            .collect();
+        let clipped: Vec<String> = clip_with_overflow(
+            lines,
+            4,
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese),
+        )
+        .iter()
+        .map(line_text)
+        .collect();
         assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+7 itens"]);
     }
 
@@ -351,10 +358,15 @@ mod tests {
         let prefix: Vec<Line<'static>> = (1..=4)
             .map(|number| line(&format!("linha {number}")))
             .collect();
-        let clipped: Vec<String> = clip_limited(prefix, 10, 4, &ThemeStyles::ansi())
-            .iter()
-            .map(line_text)
-            .collect();
+        let clipped: Vec<String> = clip_limited(
+            prefix,
+            10,
+            4,
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese),
+        )
+        .iter()
+        .map(line_text)
+        .collect();
         assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+7 itens"]);
     }
 
@@ -362,14 +374,23 @@ mod tests {
     fn lines_within_capacity_are_kept() {
         let lines = vec![line("a"), line("b")];
         assert_eq!(
-            clip_with_overflow(lines.clone(), 2, &ThemeStyles::ansi()),
+            clip_with_overflow(
+                lines.clone(),
+                2,
+                &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese)
+            ),
             lines
         );
     }
 
     #[test]
     fn capacity_zero_renders_nothing() {
-        assert!(clip_with_overflow(vec![line("a"), line("b")], 0, &ThemeStyles::ansi()).is_empty());
+        assert!(clip_with_overflow(
+            vec![line("a"), line("b")],
+            0,
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese)
+        )
+        .is_empty());
     }
 
     #[test]
@@ -406,20 +427,42 @@ mod tests {
         let lines: Vec<Line<'static>> = (1..=5)
             .map(|number| line(&format!("linha {number}")))
             .collect();
-        let clipped: Vec<String> = clip_with_overflow(lines, 4, &ThemeStyles::ansi())
-            .iter()
-            .map(line_text)
-            .collect();
+        let clipped: Vec<String> = clip_with_overflow(
+            lines,
+            4,
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese),
+        )
+        .iter()
+        .map(line_text)
+        .collect();
         assert_eq!(clipped, vec!["linha 1", "linha 2", "linha 3", "+2 itens"]);
     }
 
     #[test]
     fn age_text_uses_minutes_hours_then_days() {
-        assert_eq!(age_text(TimeDelta::minutes(0)), "0 min");
-        assert_eq!(age_text(TimeDelta::minutes(59)), "59 min");
-        assert_eq!(age_text(TimeDelta::minutes(60)), "1 h");
-        assert_eq!(age_text(TimeDelta::minutes(125)), "2 h");
-        assert_eq!(age_text(TimeDelta::hours(24)), "1 dia");
-        assert_eq!(age_text(TimeDelta::hours(48)), "2 dias");
+        assert_eq!(
+            age_text(TimeDelta::minutes(0), Language::BrazilianPortuguese),
+            "0 min"
+        );
+        assert_eq!(
+            age_text(TimeDelta::minutes(59), Language::BrazilianPortuguese),
+            "59 min"
+        );
+        assert_eq!(
+            age_text(TimeDelta::minutes(60), Language::BrazilianPortuguese),
+            "1 h"
+        );
+        assert_eq!(
+            age_text(TimeDelta::minutes(125), Language::BrazilianPortuguese),
+            "2 h"
+        );
+        assert_eq!(
+            age_text(TimeDelta::hours(24), Language::BrazilianPortuguese),
+            "1 dia"
+        );
+        assert_eq!(
+            age_text(TimeDelta::hours(48), Language::BrazilianPortuguese),
+            "2 dias"
+        );
     }
 }

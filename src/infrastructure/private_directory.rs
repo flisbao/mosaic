@@ -7,6 +7,9 @@ use std::path::Path;
 
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 #[cfg(unix)]
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 #[cfg(unix)]
@@ -24,19 +27,87 @@ const ROOT_USER_ID: u32 = 0;
 #[cfg(unix)]
 const CURRENT_PROCESS_DIRECTORY: &str = "/proc/self";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrivateDirectoryFault {
+    Io(String),
+    AncestorOwnedByAnotherUser,
+    AncestorWritableByOthers,
+    UnknownCurrentUser,
+    NotAPlainDirectory,
+    OwnedByAnotherUser,
+    OpenPermissions,
+    WritableByAnyone,
+    UnsupportedPlatform,
+}
+
 #[derive(Debug, Error)]
-#[error("diretório privado inseguro '{path}': {reason}")]
 pub struct PrivateDirectoryError {
     path: String,
-    reason: String,
+    fault: PrivateDirectoryFault,
 }
 
 impl PrivateDirectoryError {
-    fn new(path: &Path, reason: impl Into<String>) -> Self {
+    fn new(path: &Path, fault: PrivateDirectoryFault) -> Self {
         Self {
             path: path.display().to_string(),
-            reason: reason.into(),
+            fault,
         }
+    }
+
+    fn io(path: &Path, error: std::io::Error) -> Self {
+        Self::new(path, PrivateDirectoryFault::Io(error.to_string()))
+    }
+}
+
+impl LocalizedMessage for PrivateDirectoryError {
+    fn message(&self, language: Language) -> String {
+        let path = &self.path;
+        let reason = fault_text(&self.fault, language);
+        match language {
+            Language::English => format!("insecure private directory '{path}': {reason}"),
+            Language::BrazilianPortuguese => {
+                format!("diretório privado inseguro '{path}': {reason}")
+            }
+        }
+    }
+}
+
+display_in_portuguese!(PrivateDirectoryError);
+
+fn fault_text(fault: &PrivateDirectoryFault, language: Language) -> String {
+    use PrivateDirectoryFault as Fault;
+    let (english, portuguese) = match fault {
+        Fault::Io(reason) => return reason.clone(),
+        Fault::AncestorOwnedByAnotherUser => (
+            "ancestor directory belongs to another user",
+            "diretório ancestral pertence a outro usuário",
+        ),
+        Fault::AncestorWritableByOthers => (
+            "ancestor directory is writable by other users",
+            "diretório ancestral gravável por outros usuários",
+        ),
+        Fault::UnknownCurrentUser => (
+            "could not determine the current user",
+            "não foi possível determinar o usuário atual",
+        ),
+        Fault::NotAPlainDirectory => (
+            "not a plain directory (symbolic link or file)",
+            "não é um diretório comum (link simbólico ou arquivo)",
+        ),
+        Fault::OwnedByAnotherUser => ("belongs to another user", "pertence a outro usuário"),
+        Fault::OpenPermissions => (
+            "permissions open to other users",
+            "permissões abertas para outros usuários",
+        ),
+        Fault::WritableByAnyone => ("writable by any user", "gravável por qualquer usuário"),
+        Fault::UnsupportedPlatform => (
+            "private directories are only supported on unix systems",
+            "diretório privado só é suportado em sistemas unix",
+        ),
+    };
+    match language {
+        Language::English => english.to_string(),
+        Language::BrazilianPortuguese => portuguese.to_string(),
     }
 }
 
@@ -68,19 +139,19 @@ fn verify_ancestors(
         if ancestor.as_os_str().is_empty() || Some(ancestor) == stop_at {
             break;
         }
-        let metadata = fs::metadata(ancestor)
-            .map_err(|error| PrivateDirectoryError::new(ancestor, error.to_string()))?;
+        let metadata =
+            fs::metadata(ancestor).map_err(|error| PrivateDirectoryError::io(ancestor, error))?;
         if metadata.uid() != user_id && metadata.uid() != ROOT_USER_ID {
             return Err(PrivateDirectoryError::new(
                 ancestor,
-                "diretório ancestral pertence a outro usuário",
+                PrivateDirectoryFault::AncestorOwnedByAnotherUser,
             ));
         }
         let mode = metadata.permissions().mode();
         if mode & OTHERS_AND_GROUP_WRITE_MASK != 0 && mode & STICKY_BIT == 0 {
             return Err(PrivateDirectoryError::new(
                 ancestor,
-                "diretório ancestral gravável por outros usuários",
+                PrivateDirectoryFault::AncestorWritableByOthers,
             ));
         }
     }
@@ -94,37 +165,40 @@ pub fn prepare_private_directory(path: &Path) -> Result<(), PrivateDirectoryErro
             .recursive(true)
             .mode(PRIVATE_DIRECTORY_MODE)
             .create(parent)
-            .map_err(|error| PrivateDirectoryError::new(path, error.to_string()))?;
+            .map_err(|error| PrivateDirectoryError::io(path, error))?;
     }
     let user_id = current_user_id().ok_or_else(|| {
-        PrivateDirectoryError::new(path, "não foi possível determinar o usuário atual")
+        PrivateDirectoryError::new(path, PrivateDirectoryFault::UnknownCurrentUser)
     })?;
     verify_ancestors(path, user_id, dirs::home_dir().as_deref())?;
     match DirBuilder::new().mode(PRIVATE_DIRECTORY_MODE).create(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(PrivateDirectoryError::new(path, error.to_string())),
+        Err(error) => return Err(PrivateDirectoryError::io(path, error)),
     }
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| PrivateDirectoryError::new(path, error.to_string()))?;
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| PrivateDirectoryError::io(path, error))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(PrivateDirectoryError::new(
             path,
-            "não é um diretório comum (link simbólico ou arquivo)",
+            PrivateDirectoryFault::NotAPlainDirectory,
         ));
     }
     if metadata.uid() != user_id {
-        return Err(PrivateDirectoryError::new(path, "pertence a outro usuário"));
+        return Err(PrivateDirectoryError::new(
+            path,
+            PrivateDirectoryFault::OwnedByAnotherUser,
+        ));
     }
     if metadata.permissions().mode() & GROUP_AND_OTHERS_MASK != 0 {
         fs::set_permissions(path, Permissions::from_mode(PRIVATE_DIRECTORY_MODE))
-            .map_err(|error| PrivateDirectoryError::new(path, error.to_string()))?;
-        let tightened = fs::metadata(path)
-            .map_err(|error| PrivateDirectoryError::new(path, error.to_string()))?;
+            .map_err(|error| PrivateDirectoryError::io(path, error))?;
+        let tightened =
+            fs::metadata(path).map_err(|error| PrivateDirectoryError::io(path, error))?;
         if tightened.permissions().mode() & PERMISSION_BITS_MASK & GROUP_AND_OTHERS_MASK != 0 {
             return Err(PrivateDirectoryError::new(
                 path,
-                "permissões abertas para outros usuários",
+                PrivateDirectoryFault::OpenPermissions,
             ));
         }
     }
@@ -133,18 +207,20 @@ pub fn prepare_private_directory(path: &Path) -> Result<(), PrivateDirectoryErro
 
 #[cfg(unix)]
 pub fn verify_trusted_path(path: &Path) -> Result<(), PrivateDirectoryError> {
-    let metadata =
-        fs::metadata(path).map_err(|error| PrivateDirectoryError::new(path, error.to_string()))?;
+    let metadata = fs::metadata(path).map_err(|error| PrivateDirectoryError::io(path, error))?;
     let user_id = current_user_id().ok_or_else(|| {
-        PrivateDirectoryError::new(path, "não foi possível determinar o usuário atual")
+        PrivateDirectoryError::new(path, PrivateDirectoryFault::UnknownCurrentUser)
     })?;
     if metadata.uid() != user_id && metadata.uid() != ROOT_USER_ID {
-        return Err(PrivateDirectoryError::new(path, "pertence a outro usuário"));
+        return Err(PrivateDirectoryError::new(
+            path,
+            PrivateDirectoryFault::OwnedByAnotherUser,
+        ));
     }
     if metadata.permissions().mode() & OTHERS_WRITE_MASK != 0 {
         return Err(PrivateDirectoryError::new(
             path,
-            "gravável por qualquer usuário",
+            PrivateDirectoryFault::WritableByAnyone,
         ));
     }
     Ok(())
@@ -159,7 +235,7 @@ pub fn verify_trusted_path(_path: &Path) -> Result<(), PrivateDirectoryError> {
 pub fn prepare_private_directory(path: &Path) -> Result<(), PrivateDirectoryError> {
     Err(PrivateDirectoryError::new(
         path,
-        "diretório privado só é suportado em sistemas unix",
+        PrivateDirectoryFault::UnsupportedPlatform,
     ))
 }
 
@@ -252,6 +328,41 @@ mod tests {
         assert_eq!(
             user_id_from_sources(&[missing, base.path()]),
             Some(expected)
+        );
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_fault_is_translated() {
+        use PrivateDirectoryFault as Fault;
+        let faults = [
+            Fault::AncestorOwnedByAnotherUser,
+            Fault::AncestorWritableByOthers,
+            Fault::UnknownCurrentUser,
+            Fault::NotAPlainDirectory,
+            Fault::OwnedByAnotherUser,
+            Fault::OpenPermissions,
+            Fault::WritableByAnyone,
+            Fault::UnsupportedPlatform,
+        ];
+        for fault in faults {
+            let error = PrivateDirectoryError::new(Path::new("/x"), fault);
+            assert_translated("private directory", |language| error.message(language));
+        }
+    }
+
+    #[test]
+    fn english_message_names_the_path() {
+        let error =
+            PrivateDirectoryError::new(Path::new("/x"), PrivateDirectoryFault::OwnedByAnotherUser);
+        assert_eq!(
+            error.message(Language::English),
+            "insecure private directory '/x': belongs to another user"
         );
     }
 }

@@ -1,13 +1,14 @@
 use ratatui::style::Style;
 use ratatui::text::Line;
 
+use crate::domain::language::Language;
 use crate::domain::widget_content::Tone;
 use crate::presentation::app_state::WidgetEntry;
+use crate::presentation::messages;
 use crate::presentation::text_fit::truncate_to_width;
 use crate::presentation::theme_styles::ThemeStyles;
 use crate::presentation::widget_box::{entry_title, FAILURE_MARK};
 
-const ITEM_COUNT_SUFFIX: &str = " itens";
 const VALUE_SEPARATOR: &str = " ";
 
 pub fn focus_column_lines(
@@ -37,7 +38,7 @@ fn focus_row(
     let text = format!(
         "{mark}{}{VALUE_SEPARATOR}{}",
         entry_title(entry),
-        summary_value(entry)
+        summary_value(entry, styles.language())
     );
     Line::styled(
         truncate_to_width(&text, width),
@@ -45,14 +46,18 @@ fn focus_row(
     )
 }
 
-fn summary_value(entry: &WidgetEntry) -> String {
+fn summary_value(entry: &WidgetEntry, language: Language) -> String {
     match entry
         .record
         .snapshot()
         .and_then(|snapshot| snapshot.mini.as_ref())
     {
         Some(mini) => format!("{}{VALUE_SEPARATOR}{}", mini.value, mini.text),
-        None => format!("{}{ITEM_COUNT_SUFFIX}", displayed_item_count(entry)),
+        None => format!(
+            "{}{}",
+            displayed_item_count(entry),
+            messages::overflow_suffix(language)
+        ),
     }
 }
 
@@ -171,10 +176,15 @@ mod tests {
             Some(1),
         );
         let entries = [&agenda, &kanban, &capped];
-        let rows: Vec<String> = focus_column_lines(&entries, Some(0), 40, &ThemeStyles::ansi())
-            .iter()
-            .map(line_text)
-            .collect();
+        let rows: Vec<String> = focus_column_lines(
+            &entries,
+            Some(0),
+            40,
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese),
+        )
+        .iter()
+        .map(line_text)
+        .collect();
         assert_eq!(rows.len(), 3);
         assert!(rows[0].contains("3 reuniões"), "{rows:?}");
         assert!(rows[1].contains("2 itens"), "{rows:?}");
@@ -186,7 +196,12 @@ mod tests {
         let failing = entry("kanban", failed(), None);
         let healthy = entry("agenda", ready(titled_snapshot("Agenda")), None);
         let entries = [&healthy, &failing];
-        let lines = focus_column_lines(&entries, Some(0), 40, &ThemeStyles::ansi());
+        let lines = focus_column_lines(
+            &entries,
+            Some(0),
+            40,
+            &ThemeStyles::ansi().with_language(Language::BrazilianPortuguese),
+        );
         let failing_line = &lines[1];
         assert!(line_text(failing_line).starts_with('⚠'), "{failing_line:?}");
         assert_eq!(failing_line.style.fg, Some(Color::Red));

@@ -110,7 +110,11 @@ pub fn execute_remote_install(
         })?;
     }
     if !options.assume_yes {
-        let approved = match confirm_default_no(prompter, INSTALL_QUESTION) {
+        let approved = match confirm_default_no(
+            prompter,
+            INSTALL_QUESTION,
+            mosaic::domain::language::Language::detect_from_environment(),
+        ) {
             Ok(approved) => approved,
             Err(PromptError::EndOfInput) => false,
             Err(error) => return Err(error.into()),

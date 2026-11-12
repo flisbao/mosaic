@@ -6,6 +6,7 @@ use mosaic::application::plugin_setup::{
     run_setup, SetupError, SetupOptions, SetupResult, TabContext,
 };
 use mosaic::application::ports::{PromptError, Prompter};
+use mosaic::domain::language::Language;
 use mosaic::infrastructure::app_paths::config_directory;
 use mosaic::infrastructure::config::{config_file_path, PLUGINS_DIRECTORY_NAME};
 use mosaic::infrastructure::config_appender::{
@@ -123,11 +124,12 @@ fn execute(
     prompter: &mut impl Prompter,
     output: &mut impl Write,
 ) -> Result<(), SetupFailure> {
+    let language = Language::detect_from_environment();
     let manifest = load_manifest(&invocation.config_directory, &invocation.name)?;
     let overview = if invocation.print_only {
-        inspect_config(&invocation.config_directory).ok()
+        inspect_config(&invocation.config_directory, language).ok()
     } else {
-        Some(inspect_config(&invocation.config_directory)?)
+        Some(inspect_config(&invocation.config_directory, language)?)
     };
     let options = setup_options(invocation, overview);
     let result = run_setup(&manifest, &options, prompter)?;
@@ -140,7 +142,11 @@ fn execute(
         writeln_checked(output, "Nada foi gravado.")?;
         return Ok(());
     }
-    append_blocks(&invocation.config_directory, &result.toml_blocks())?;
+    append_blocks(
+        &invocation.config_directory,
+        &result.toml_blocks(),
+        language,
+    )?;
     writeln_checked(
         output,
         &format!(
@@ -194,7 +200,8 @@ fn show_block(result: &SetupResult, output: &mut impl Write) -> Result<(), Setup
 
 fn confirm_write(prompter: &mut impl Prompter, config_path: &Path) -> Result<bool, SetupFailure> {
     let question = format!("Gravar este widget em {}? [S/n]: ", config_path.display());
-    confirm(prompter, &question).map_err(|error| SetupFailure::Setup(SetupError::Prompt(error)))
+    confirm(prompter, &question, Language::detect_from_environment())
+        .map_err(|error| SetupFailure::Setup(SetupError::Prompt(error)))
 }
 
 fn writeln_checked(output: &mut impl Write, text: &str) -> Result<(), SetupFailure> {

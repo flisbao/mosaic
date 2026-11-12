@@ -4,7 +4,9 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::infrastructure::config::{config_file_path, parse_config, ConfigError};
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+use crate::infrastructure::config::{config_file_path, parse_config_in, ConfigError};
 
 const FILE_NEWLINE: &str = "\n";
 const TABS_KEY: &str = "tabs";
@@ -12,13 +14,40 @@ const TAB_NAME_KEY: &str = "name";
 
 #[derive(Debug, Error, PartialEq)]
 pub enum AppendError {
-    #[error("{path}: {reason}")]
     Io { path: String, reason: String },
-    #[error("o mosaic.toml atual já tem erro: {0}")]
     CurrentConfigInvalid(ConfigError),
-    #[error("o widget novo deixaria o mosaic.toml inválido (nada foi gravado): {0}")]
     NewConfigInvalid(ConfigError),
 }
+
+impl LocalizedMessage for AppendError {
+    fn message(&self, language: Language) -> String {
+        match (self, language) {
+            (Self::Io { path, reason }, _) => format!("{path}: {reason}"),
+            (Self::CurrentConfigInvalid(error), Language::English) => {
+                format!(
+                    "the current mosaic.toml already has an error: {}",
+                    error.message(language)
+                )
+            }
+            (Self::CurrentConfigInvalid(error), Language::BrazilianPortuguese) => {
+                format!(
+                    "o mosaic.toml atual já tem erro: {}",
+                    error.message(language)
+                )
+            }
+            (Self::NewConfigInvalid(error), Language::English) => format!(
+                "the new widget would make mosaic.toml invalid (nothing was written): {}",
+                error.message(language)
+            ),
+            (Self::NewConfigInvalid(error), Language::BrazilianPortuguese) => format!(
+                "o widget novo deixaria o mosaic.toml inválido (nada foi gravado): {}",
+                error.message(language)
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(AppendError);
 
 fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> AppendError + '_ {
     move |error| AppendError::Io {
@@ -40,10 +69,10 @@ pub struct TabOverview {
     pub widget_ids: Vec<String>,
 }
 
-pub fn inspect_config(directory: &Path) -> Result<ConfigOverview, AppendError> {
+pub fn inspect_config(directory: &Path, language: Language) -> Result<ConfigOverview, AppendError> {
     let path = config_file_path(directory);
     let text = fs::read_to_string(&path).map_err(io_error(&path))?;
-    let config = parse_config(&text).map_err(AppendError::CurrentConfigInvalid)?;
+    let config = parse_config_in(&text, language).map_err(AppendError::CurrentConfigInvalid)?;
     Ok(ConfigOverview {
         widget_ids: config
             .widgets
@@ -83,14 +112,18 @@ fn declared_tab_names(text: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn append_blocks(directory: &Path, blocks: &[String]) -> Result<(), AppendError> {
+pub fn append_blocks(
+    directory: &Path,
+    blocks: &[String],
+    language: Language,
+) -> Result<(), AppendError> {
     let path = config_file_path(directory);
     let current = fs::read_to_string(&path).map_err(io_error(&path))?;
-    parse_config(&current).map_err(AppendError::CurrentConfigInvalid)?;
+    parse_config_in(&current, language).map_err(AppendError::CurrentConfigInvalid)?;
     let updated = blocks
         .iter()
         .fold(current, |text, block| joined(&text, block));
-    parse_config(&updated).map_err(AppendError::NewConfigInvalid)?;
+    parse_config_in(&updated, language).map_err(AppendError::NewConfigInvalid)?;
     replace_file(&path, &updated)
 }
 
@@ -136,6 +169,7 @@ fn restrict_creation_mode(_options: &mut fs::OpenOptions, _permissions: &fs::Per
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::language::Language;
 
     const BLOCK: &str = "[[widgets]]\nid = \"novo\"\ncommand = \"python3\"\n";
 
@@ -149,11 +183,18 @@ mod tests {
     fn the_block_is_appended_after_the_existing_text_keeping_it_intact() {
         let original = "# meu painel\n[[widgets]]\nid = \"a\"\ncommand = \"x\"\n";
         let directory = directory_with(original);
-        append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap();
+        append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
         assert_eq!(text, format!("{original}\n{BLOCK}"));
         assert_eq!(
-            inspect_config(directory.path()).unwrap().widget_ids,
+            inspect_config(directory.path(), Language::BrazilianPortuguese)
+                .unwrap()
+                .widget_ids,
             vec!["a", "novo"]
         );
     }
@@ -161,7 +202,12 @@ mod tests {
     #[test]
     fn a_missing_final_newline_is_added_before_the_block() {
         let directory = directory_with("# sem quebra no fim");
-        append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap();
+        append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
         assert!(text.starts_with("# sem quebra no fim\n\n[[widgets]]"));
     }
@@ -170,7 +216,12 @@ mod tests {
     fn a_duplicate_id_is_refused_and_the_file_is_not_touched() {
         let original = "[[widgets]]\nid = \"novo\"\ncommand = \"x\"\n";
         let directory = directory_with(original);
-        let error = append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap_err();
+        let error = append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap_err();
         assert!(matches!(error, AppendError::NewConfigInvalid(_)));
         let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
         assert_eq!(text, original);
@@ -179,14 +230,24 @@ mod tests {
     #[test]
     fn a_config_that_is_already_broken_is_not_modified() {
         let directory = directory_with("isto não é toml [");
-        let error = append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap_err();
+        let error = append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap_err();
         assert!(matches!(error, AppendError::CurrentConfigInvalid(_)));
     }
 
     #[test]
     fn a_missing_config_file_names_the_path() {
         let directory = tempfile::tempdir().unwrap();
-        let error = append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap_err();
+        let error = append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("mosaic.toml"));
     }
 
@@ -197,8 +258,8 @@ mod tests {
             "[[tabs]]\nname = \"Trabalho\"\n".to_string(),
             "[[widgets]]\nid = \"w\"\ncommand = \"x\"\ntab = \"Trabalho\"\n".to_string(),
         ];
-        append_blocks(directory.path(), &blocks).unwrap();
-        let overview = inspect_config(directory.path()).unwrap();
+        append_blocks(directory.path(), &blocks, Language::BrazilianPortuguese).unwrap();
+        let overview = inspect_config(directory.path(), Language::BrazilianPortuguese).unwrap();
         assert_eq!(overview.declared_tabs, vec!["Trabalho"]);
         assert_eq!(overview.tabs[0].widget_ids, vec!["w"]);
     }
@@ -208,7 +269,8 @@ mod tests {
         let original = "# painel\n";
         let directory = directory_with(original);
         let block = "[[widgets]]\nid = \"w\"\ncommand = \"x\"\ntab = \"Fantasma\"\n".to_string();
-        let error = append_blocks(directory.path(), &[block]).unwrap_err();
+        let error =
+            append_blocks(directory.path(), &[block], Language::BrazilianPortuguese).unwrap_err();
         assert!(matches!(error, AppendError::NewConfigInvalid(_)));
         let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
         assert_eq!(text, original);
@@ -217,13 +279,15 @@ mod tests {
     #[test]
     fn the_overview_tells_declared_tabs_from_the_implicit_one() {
         let without = directory_with("[[widgets]]\nid = \"a\"\ncommand = \"x\"\n");
-        let overview = inspect_config(without.path()).unwrap();
+        let overview = inspect_config(without.path(), Language::BrazilianPortuguese).unwrap();
         assert!(overview.declared_tabs.is_empty());
         assert_eq!(overview.tabs.len(), 1);
         assert_eq!(overview.tabs[0].widget_ids, vec!["a"]);
         let with = directory_with("[[tabs]]\nname = \"Work\"\n[[tabs]]\nname = \"Home\"\n");
         assert_eq!(
-            inspect_config(with.path()).unwrap().declared_tabs,
+            inspect_config(with.path(), Language::BrazilianPortuguese)
+                .unwrap()
+                .declared_tabs,
             vec!["Work", "Home"]
         );
     }
@@ -233,7 +297,12 @@ mod tests {
         let directory = directory_with("");
         let temporary = directory.path().join("mosaic.toml.tmp");
         fs::write(&temporary, "sobra de uma execução interrompida").unwrap();
-        append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap();
+        append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         assert!(!temporary.exists());
         let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
         assert_eq!(text, BLOCK);
@@ -246,7 +315,12 @@ mod tests {
         let victim = directory.path().join("alvo-do-link");
         fs::write(&victim, "intacto").unwrap();
         std::os::unix::fs::symlink(&victim, directory.path().join("mosaic.toml.tmp")).unwrap();
-        append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap();
+        append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         assert_eq!(fs::read_to_string(&victim).unwrap(), "intacto");
         let text = fs::read_to_string(config_file_path(directory.path())).unwrap();
         assert_eq!(text, BLOCK);
@@ -272,7 +346,12 @@ mod tests {
         let directory = directory_with("");
         let path = config_file_path(directory.path());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        append_blocks(directory.path(), &[BLOCK.to_string()]).unwrap();
+        append_blocks(
+            directory.path(),
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }

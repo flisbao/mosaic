@@ -1,8 +1,20 @@
 use std::ffi::OsString;
 use std::process::Command;
 
-const ALWAYS_INHERITED_NAMES: [&str; 10] = [
-    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TZ", "LANG", "LANGUAGE", "TMPDIR",
+use crate::domain::language::LANGUAGE_VARIABLE;
+
+const ALWAYS_INHERITED_NAMES: [&str; 11] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "TZ",
+    "LANG",
+    "LANGUAGE",
+    "TMPDIR",
+    LANGUAGE_VARIABLE,
 ];
 const ALWAYS_INHERITED_PREFIXES: [&str; 2] = ["LC_", "XDG_"];
 const NON_INTERACTIVE_DEFAULTS: [(&str, &str); 2] = [

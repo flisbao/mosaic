@@ -26,7 +26,11 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         inherit_env: None,
         timeout: std::time::Duration::from_secs(10),
     };
-    PluginRunner::new(command, root.to_path_buf())
+    PluginRunner::new(command, root.to_path_buf()).with_language(
+        mosaic::infrastructure::shared_language::SharedLanguage::new(
+            mosaic::domain::language::Language::BrazilianPortuguese,
+        ),
+    )
 }
 
 fn kanban_with_one_item() -> (tempfile::TempDir, PathBuf) {

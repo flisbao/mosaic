@@ -27,7 +27,13 @@ fn gallery_output(command: &str, script: &str) -> Result<String, SourceError> {
         inherit_env: None,
         timeout: std::time::Duration::from_secs(10),
     };
-    PluginRunner::new(provider, root.to_path_buf()).raw_snapshot_output()
+    PluginRunner::new(provider, root.to_path_buf())
+        .with_language(
+            mosaic::infrastructure::shared_language::SharedLanguage::new(
+                mosaic::domain::language::Language::BrazilianPortuguese,
+            ),
+        )
+        .raw_snapshot_output()
 }
 
 fn block_type_names(blocks: &[Block]) -> Vec<&'static str> {

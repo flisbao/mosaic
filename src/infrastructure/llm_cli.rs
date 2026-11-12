@@ -4,27 +4,30 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::application::ports::{CancellableLlmRunner, LlmError, LlmRequest, LlmRunner};
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::config::{Harness, LlmConfig};
 use crate::infrastructure::private_directory::prepare_private_directory;
 use crate::infrastructure::process::{run_process, CancelFlag, HasCancelFlag, ProcessLimits};
+use crate::infrastructure::shared_language::SharedLanguage;
 
 pub const MAXIMUM_LLM_OUTPUT_BYTES: usize = 262_144;
 
 pub fn build_llm_runner(
     config: &LlmConfig,
     working_directory: PathBuf,
+    language: SharedLanguage,
 ) -> Arc<dyn CancellableLlmRunner> {
     let program = config.harness.program_name().to_string();
     let timeout = Duration::from_secs(config.timeout_seconds);
     match config.harness {
-        Harness::Claude => Arc::new(ClaudeCli::new(
-            program,
-            working_directory,
-            config.max_budget_usd,
-            timeout,
-        )),
-        Harness::OpenCode => Arc::new(OpenCodeCli::new(program, working_directory, timeout)),
+        Harness::Claude => Arc::new(
+            ClaudeCli::new(program, working_directory, config.max_budget_usd, timeout)
+                .with_language(language),
+        ),
+        Harness::OpenCode => {
+            Arc::new(OpenCodeCli::new(program, working_directory, timeout).with_language(language))
+        }
     }
 }
 
@@ -118,6 +121,7 @@ pub struct LlmCli<H: HarnessCommand> {
     working_directory: PathBuf,
     timeout: Duration,
     cancel_flag: CancelFlag,
+    language: SharedLanguage,
 }
 
 pub type ClaudeCli = LlmCli<ClaudeHarness>;
@@ -136,7 +140,13 @@ impl<H: HarnessCommand> LlmCli<H> {
             working_directory,
             timeout,
             cancel_flag: CancelFlag::default(),
+            language: SharedLanguage::default(),
         }
+    }
+
+    pub fn with_language(mut self, language: SharedLanguage) -> Self {
+        self.language = language;
+        self
     }
 
     pub fn arguments(&self, request: &LlmRequest) -> Vec<String> {
@@ -181,7 +191,12 @@ impl<H: HarnessCommand> LlmRunner for LlmCli<H> {
             environment: &environment,
             stdin_text: Some(&request.prompt),
         };
-        run_cli(&invocation, self.timeout, &self.cancel_flag)
+        run_cli(
+            &invocation,
+            self.timeout,
+            &self.cancel_flag,
+            self.language.get(),
+        )
     }
 }
 
@@ -203,9 +218,10 @@ fn run_cli(
     invocation: &CliInvocation,
     timeout: Duration,
     cancel: &CancelFlag,
+    language: Language,
 ) -> Result<String, LlmError> {
     prepare_private_directory(invocation.working_directory)
-        .map_err(|error| LlmError::Failed(error.to_string()))?;
+        .map_err(|error| LlmError::Failed(error.message(language)))?;
     let mut command = Command::new(invocation.program);
     command
         .args(invocation.arguments)
@@ -222,14 +238,21 @@ fn run_cli(
     };
     run_process(command, invocation.stdin_text, &limits, cancel).map_err(|error| {
         if error.program_not_found() {
-            LlmError::Unavailable(format!("`{}` não encontrado no PATH", invocation.program))
+            LlmError::Unavailable(program_not_found(language, invocation.program))
         } else {
             LlmError::Failed(clean_text_limited(
-                &error.to_string(),
+                &error.message(language),
                 MAXIMUM_TEXT_CHARACTERS,
             ))
         }
     })
+}
+
+fn program_not_found(language: Language, program: &str) -> String {
+    match language {
+        Language::English => format!("`{program}` not found in PATH"),
+        Language::BrazilianPortuguese => format!("`{program}` não encontrado no PATH"),
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -243,6 +266,8 @@ mod tests {
     use super::*;
     use crate::application::ports::Cancellable;
     use crate::application::ports::{LlmError, LlmRequest, LlmRunner};
+    use crate::domain::language::Language;
+    use crate::infrastructure::shared_language::SharedLanguage;
 
     #[test]
     fn factory_builds_a_cancellable_runner_for_each_harness() {
@@ -257,7 +282,11 @@ mod tests {
                 confirm_before_send: true,
                 priority_prompt: "prompts/prioridade.md".to_string(),
             };
-            let runner = build_llm_runner(&config, directory.path().join(harness.program_name()));
+            let runner = build_llm_runner(
+                &config,
+                directory.path().join(harness.program_name()),
+                SharedLanguage::new(Language::BrazilianPortuguese),
+            );
             runner.cancel();
             let error = runner.run(&request("oi", None)).unwrap_err();
             assert!(error.to_string().contains("cancelado"), "{error}");
@@ -305,6 +334,7 @@ mod tests {
             None,
             Duration::from_secs(timeout_seconds),
         )
+        .with_language(SharedLanguage::new(Language::BrazilianPortuguese))
     }
 
     fn opencode(program: String, directory: &Path, timeout_seconds: u64) -> OpenCodeCli {
@@ -313,6 +343,7 @@ mod tests {
             directory.join("neutro"),
             Duration::from_secs(timeout_seconds),
         )
+        .with_language(SharedLanguage::new(Language::BrazilianPortuguese))
     }
 
     #[test]
@@ -358,7 +389,8 @@ mod tests {
             "/tmp".into(),
             Some(0.05),
             Duration::from_secs(5),
-        );
+        )
+        .with_language(SharedLanguage::new(Language::BrazilianPortuguese));
         let arguments = cli.arguments(&request("p", Some("haiku")));
         let joined = arguments.join(" ");
         assert!(joined.contains("--model haiku"), "{joined}");

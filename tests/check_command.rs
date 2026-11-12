@@ -10,6 +10,7 @@ const EXIT_USAGE: i32 = 2;
 
 fn run_check(working_directory: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .arg("check")
         .args(arguments)
         .current_dir(working_directory)
@@ -192,6 +193,7 @@ fn check_timeout_flag_limits_the_provider() {
 
 fn run_mosaic(working_directory: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .args(arguments)
         .current_dir(working_directory)
         .env("HOME", working_directory)

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use mosaic::application::ports::{PromptError, Prompter};
+use mosaic::display_in_portuguese;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::domain::widget_draft::tab_toml_block;
 use mosaic::infrastructure::app_paths::config_directory;
 use mosaic::infrastructure::config::config_file_path;
@@ -16,41 +18,84 @@ use crate::confirmation::confirm;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
-const TABS_USAGE: &str =
-    "uso: mosaic tabs list [--config-dir DIRETORIO] | mosaic tabs add NOME [--config-dir DIRETORIO]";
 const LIST_SUBCOMMAND: &str = "list";
 const ADD_SUBCOMMAND: &str = "add";
 const CONFIG_DIR_FLAG: &str = "--config-dir";
 
+fn tabs_usage(language: Language) -> &'static str {
+    language.pick(
+        "usage: mosaic tabs list [--config-dir DIRECTORY] | mosaic tabs add NAME [--config-dir DIRECTORY]",
+        "uso: mosaic tabs list [--config-dir DIRETORIO] | mosaic tabs add NOME [--config-dir DIRETORIO]",
+    )
+}
+
 #[derive(Debug, Error, PartialEq)]
 enum TabsUsageError {
-    #[error("{TABS_USAGE}")]
     UnknownSubcommand,
-    #[error("{CONFIG_DIR_FLAG} precisa de DIRETORIO\n{TABS_USAGE}")]
     FlagWithoutValue,
-    #[error("argumento desconhecido: {0}\n{TABS_USAGE}")]
     UnknownArgument(String),
-    #[error("add precisa do NOME da aba\n{TABS_USAGE}")]
     MissingName,
-    #[error(
-        "não foi possível descobrir a pasta de configuração; use {CONFIG_DIR_FLAG}\n{TABS_USAGE}"
-    )]
     NoConfigDirectory,
 }
 
+impl LocalizedMessage for TabsUsageError {
+    fn message(&self, language: Language) -> String {
+        let usage = tabs_usage(language);
+        match self {
+            Self::UnknownSubcommand => usage.to_string(),
+            Self::FlagWithoutValue => language.pick(
+                format!("{CONFIG_DIR_FLAG} needs DIRECTORY\n{usage}"),
+                format!("{CONFIG_DIR_FLAG} precisa de DIRETORIO\n{usage}"),
+            ),
+            Self::UnknownArgument(argument) => language.pick(
+                format!("unknown argument: {argument}\n{usage}"),
+                format!("argumento desconhecido: {argument}\n{usage}"),
+            ),
+            Self::MissingName => language.pick(
+                format!("add needs the tab NAME\n{usage}"),
+                format!("add precisa do NOME da aba\n{usage}"),
+            ),
+            Self::NoConfigDirectory => language.pick(
+                format!("could not find the configuration folder; use {CONFIG_DIR_FLAG}\n{usage}"),
+                format!("não foi possível descobrir a pasta de configuração; use {CONFIG_DIR_FLAG}\n{usage}"),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(TabsUsageError);
+
 #[derive(Debug, Error)]
 enum TabsFailure {
-    #[error(transparent)]
     Config(#[from] AppendError),
-    #[error("já existe uma aba chamada \"{0}\"")]
     Duplicate(String),
-    #[error("o nome da aba não pode ser vazio")]
     BlankName,
-    #[error("não consegui escrever na saída: {0}")]
     Output(String),
-    #[error(transparent)]
     Prompt(#[from] PromptError),
 }
+
+impl LocalizedMessage for TabsFailure {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::Config(error) => error.message(language),
+            Self::Duplicate(name) => language.pick(
+                format!("a tab named \"{name}\" already exists"),
+                format!("já existe uma aba chamada \"{name}\""),
+            ),
+            Self::BlankName => language.pick(
+                "the tab name cannot be empty".to_string(),
+                "o nome da aba não pode ser vazio".to_string(),
+            ),
+            Self::Output(reason) => language.pick(
+                format!("could not write to the output: {reason}"),
+                format!("não consegui escrever na saída: {reason}"),
+            ),
+            Self::Prompt(error) => error.to_string(),
+        }
+    }
+}
+
+display_in_portuguese!(TabsFailure);
 
 #[derive(Debug, PartialEq)]
 enum Action {
@@ -101,22 +146,29 @@ fn parse_arguments(arguments: &[String]) -> Result<TabsInvocation, TabsUsageErro
 }
 
 pub fn run(arguments: &[String]) -> ExitCode {
+    let language = Language::detect_from_environment();
     let invocation = match parse_arguments(arguments) {
         Ok(invocation) => invocation,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(language));
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
     let mut prompter = StreamPrompter::new(io::stdin().lock(), io::stdout());
-    match execute(&invocation, &mut prompter, &mut io::stdout()) {
+    match execute(&invocation, &mut prompter, &mut io::stdout(), language) {
         Ok(()) => ExitCode::SUCCESS,
         Err(TabsFailure::Prompt(PromptError::EndOfInput)) => {
-            eprintln!("mosaic: cancelado (a entrada terminou); nada foi gravado");
+            eprintln!(
+                "{}",
+                language.pick(
+                    "mosaic: cancelled (the input ended); nothing was written",
+                    "mosaic: cancelado (a entrada terminou); nada foi gravado",
+                )
+            );
             ExitCode::from(EXIT_CODE_FAILURE)
         }
         Err(error) => {
-            eprintln!("mosaic: {error}");
+            eprintln!("mosaic: {}", error.message(language));
             ExitCode::from(EXIT_CODE_FAILURE)
         }
     }
@@ -126,21 +178,39 @@ fn execute(
     invocation: &TabsInvocation,
     prompter: &mut impl Prompter,
     output: &mut impl Write,
+    language: Language,
 ) -> Result<(), TabsFailure> {
-    let overview = inspect_config(&invocation.config_directory)?;
+    let overview = inspect_config(&invocation.config_directory, language)?;
     match &invocation.action {
-        Action::List => list(&overview, output),
-        Action::Add(name) => add(invocation, &overview, name.trim(), prompter, output),
+        Action::List => list(&overview, output, language),
+        Action::Add(name) => add(
+            invocation,
+            &overview,
+            name.trim(),
+            prompter,
+            output,
+            language,
+        ),
     }
 }
 
-fn list(overview: &ConfigOverview, output: &mut impl Write) -> Result<(), TabsFailure> {
+fn list(
+    overview: &ConfigOverview,
+    output: &mut impl Write,
+    language: Language,
+) -> Result<(), TabsFailure> {
     if overview.declared_tabs.is_empty() {
         write_line(
             output,
-            &format!(
-                "Nenhuma aba declarada: os {} widgets ficam numa aba única. Crie a primeira com: mosaic tabs add NOME",
-                overview.widget_ids.len()
+            &language.pick(
+                format!(
+                    "No tab declared: the {} widgets live in a single tab. Create the first one with: mosaic tabs add NAME",
+                    overview.widget_ids.len()
+                ),
+                format!(
+                    "Nenhuma aba declarada: os {} widgets ficam numa aba única. Crie a primeira com: mosaic tabs add NOME",
+                    overview.widget_ids.len()
+                ),
             ),
         )?;
         return Ok(());
@@ -165,6 +235,7 @@ fn add(
     name: &str,
     prompter: &mut impl Prompter,
     output: &mut impl Write,
+    language: Language,
 ) -> Result<(), TabsFailure> {
     if name.is_empty() {
         return Err(TabsFailure::BlankName);
@@ -179,22 +250,44 @@ fn add(
     if overview.declared_tabs.is_empty() && !overview.widget_ids.is_empty() {
         write_line(
             output,
-            &format!(
-                "Atenção: o mosaic.toml não declara abas. Ao declarar a primeira, os {} widgets que já existem sem 'tab' passam a ficar nela.",
-                overview.widget_ids.len()
+            &language.pick(
+                format!(
+                    "Note: mosaic.toml declares no tabs. When you declare the first one, the {} existing widgets without 'tab' move into it.",
+                    overview.widget_ids.len()
+                ),
+                format!(
+                    "Atenção: o mosaic.toml não declara abas. Ao declarar a primeira, os {} widgets que já existem sem 'tab' passam a ficar nela.",
+                    overview.widget_ids.len()
+                ),
             ),
         )?;
-        let question = "Criar a aba mesmo assim? [S/n]: ";
-        if !confirm(prompter, question)? {
-            return write_line(output, "Nada foi gravado.");
+        let question = language.pick(
+            "Create the tab anyway? [Y/n]: ",
+            "Criar a aba mesmo assim? [S/n]: ",
+        );
+        if !confirm(prompter, question, language)? {
+            return write_line(
+                output,
+                language.pick("Nothing was written.", "Nada foi gravado."),
+            );
         }
     }
-    append_blocks(&invocation.config_directory, &[tab_toml_block(name)])?;
+    append_blocks(
+        &invocation.config_directory,
+        &[tab_toml_block(name)],
+        language,
+    )?;
     write_line(
         output,
-        &format!(
-            "Aba \"{name}\" criada em {}. Para pôr um widget nela, use 'tab = \"{name}\"' no widget ou escolha a aba em: mosaic plugins setup NOME. Aperte R no mosaic para recarregar.",
-            config_file_path(&invocation.config_directory).display()
+        &language.pick(
+            format!(
+                "Tab \"{name}\" created in {}. To put a widget in it, use 'tab = \"{name}\"' in the widget or choose the tab in: mosaic plugins setup NAME. Press R in mosaic to reload.",
+                config_file_path(&invocation.config_directory).display()
+            ),
+            format!(
+                "Aba \"{name}\" criada em {}. Para pôr um widget nela, use 'tab = \"{name}\"' no widget ou escolha a aba em: mosaic plugins setup NOME. Aperte R no mosaic para recarregar.",
+                config_file_path(&invocation.config_directory).display()
+            ),
         ),
     )
 }

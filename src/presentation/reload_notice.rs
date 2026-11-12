@@ -1,25 +1,30 @@
 use crate::application::reload_policy::RestartSections;
+use crate::domain::language::Language;
+use crate::presentation::messages;
 use crate::presentation::tab_layout::startup_notice;
 
-const RELOAD_DONE_NOTICE: &str = "Configuração recarregada";
-const RESTART_REQUIRED_NOTICE: &str = "só valem após reiniciar";
 const LABEL_SEPARATOR: &str = "/";
 
-pub fn added_widget_notice(widget_id: &str, reload_notice: Option<&str>) -> String {
-    let added = format!("Widget \"{widget_id}\" gravado no mosaic.toml");
+pub fn added_widget_notice(
+    widget_id: &str,
+    reload_notice: Option<&str>,
+    language: Language,
+) -> String {
+    let added = messages::widget_added_notice(language, widget_id);
     match reload_notice {
         Some(reload) => format!("{added}. {reload}"),
         None => added,
     }
 }
 
-pub fn reload_notice(restart: &RestartSections, warnings: &[String]) -> String {
-    let mut notice = RELOAD_DONE_NOTICE.to_string();
-    let labels = restart.labels();
+pub fn reload_notice(restart: &RestartSections, warnings: &[String], language: Language) -> String {
+    let mut notice = messages::reload_done_notice(language).to_string();
+    let labels = restart.labels(language);
     if !labels.is_empty() {
         notice.push_str(&format!(
-            "; {} {RESTART_REQUIRED_NOTICE}",
-            labels.join(LABEL_SEPARATOR)
+            "; {} {}",
+            labels.join(LABEL_SEPARATOR),
+            messages::restart_required_notice(language)
         ));
     }
     if let Some(joined_warnings) = startup_notice(warnings) {
@@ -35,11 +40,15 @@ mod tests {
     #[test]
     fn the_added_widget_notice_names_the_widget_and_keeps_the_reload_result() {
         assert_eq!(
-            added_widget_notice("jira", Some("Configuração recarregada")),
+            added_widget_notice(
+                "jira",
+                Some("Configuração recarregada"),
+                Language::BrazilianPortuguese
+            ),
             "Widget \"jira\" gravado no mosaic.toml. Configuração recarregada"
         );
         assert_eq!(
-            added_widget_notice("jira", None),
+            added_widget_notice("jira", None, Language::BrazilianPortuguese),
             "Widget \"jira\" gravado no mosaic.toml"
         );
     }
@@ -47,7 +56,11 @@ mod tests {
     #[test]
     fn plain_notice_without_restart_sections_or_warnings() {
         assert_eq!(
-            reload_notice(&RestartSections::default(), &[]),
+            reload_notice(
+                &RestartSections::default(),
+                &[],
+                Language::BrazilianPortuguese
+            ),
             "Configuração recarregada"
         );
     }
@@ -72,19 +85,19 @@ mod tests {
             ..RestartSections::default()
         };
         assert_eq!(
-            reload_notice(&update, &[]),
+            reload_notice(&update, &[], Language::BrazilianPortuguese),
             "Configuração recarregada; [update] só valem após reiniciar"
         );
         assert_eq!(
-            reload_notice(&llm, &[]),
+            reload_notice(&llm, &[], Language::BrazilianPortuguese),
             "Configuração recarregada; [llm] só valem após reiniciar"
         );
         assert_eq!(
-            reload_notice(&pomodoro, &[]),
+            reload_notice(&pomodoro, &[], Language::BrazilianPortuguese),
             "Configuração recarregada; [pomodoro]/notificações só valem após reiniciar"
         );
         assert_eq!(
-            reload_notice(&both, &[]),
+            reload_notice(&both, &[], Language::BrazilianPortuguese),
             "Configuração recarregada; [llm]/[pomodoro]/notificações só valem após reiniciar"
         );
     }
@@ -93,7 +106,11 @@ mod tests {
     fn appends_warnings_joined_by_the_shared_separator() {
         let warnings = vec!["a".to_string(), "b".to_string()];
         assert_eq!(
-            reload_notice(&RestartSections::default(), &warnings),
+            reload_notice(
+                &RestartSections::default(),
+                &warnings,
+                Language::BrazilianPortuguese
+            ),
             "Configuração recarregada. a | b"
         );
     }

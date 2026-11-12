@@ -1,13 +1,23 @@
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::snapshot_report::Problem;
 use crate::domain::widget::{Flag, WidgetSnapshot};
 use crate::domain::widget_content::Tone;
-use crate::infrastructure::protocol_report::{parse_snapshot_report, Severity};
+use crate::infrastructure::protocol_messages as messages;
+use crate::infrastructure::protocol_report::{parse_snapshot_report_in, Severity};
 
 #[derive(Debug, Error)]
-#[error("saída de plugin não é um JSON válido de snapshot: {0}")]
 pub struct ProtocolError(String);
+
+impl LocalizedMessage for ProtocolError {
+    fn message(&self, language: Language) -> String {
+        format!("{}: {}", messages::protocol_error_prefix(language), self.0)
+    }
+}
+
+display_in_portuguese!(ProtocolError);
 
 pub const MAXIMUM_ERROR_NOTICES: usize = 3;
 
@@ -18,9 +28,13 @@ impl ProtocolError {
 }
 
 pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
-    let parsed = parse_snapshot_report(json)?;
+    parse_snapshot_in(json, Language::BrazilianPortuguese)
+}
+
+pub fn parse_snapshot_in(json: &str, language: Language) -> Result<WidgetSnapshot, ProtocolError> {
+    let parsed = parse_snapshot_report_in(json, language)?;
     let mut snapshot = parsed.snapshot;
-    for notice in error_notices(&parsed.problems).into_iter().rev() {
+    for notice in error_notices(&parsed.problems, language).into_iter().rev() {
         snapshot
             .summary
             .put_notice_first(notice, Tone::Warn, Some(Flag::Attention));
@@ -28,41 +42,42 @@ pub fn parse_snapshot(json: &str) -> Result<WidgetSnapshot, ProtocolError> {
     Ok(snapshot)
 }
 
-fn error_notices(problems: &[Problem]) -> Vec<String> {
+fn error_notices(problems: &[Problem], language: Language) -> Vec<String> {
     let errors: Vec<&Problem> = problems
         .iter()
         .filter(|problem| problem.severity == Severity::Error)
         .collect();
     if errors.len() <= MAXIMUM_ERROR_NOTICES {
-        return errors.into_iter().map(problem_notice).collect();
+        return errors
+            .into_iter()
+            .map(|problem| problem_notice(problem, language))
+            .collect();
     }
     let shown = MAXIMUM_ERROR_NOTICES - 1;
     let mut notices: Vec<String> = errors[..shown]
         .iter()
-        .map(|problem| problem_notice(problem))
+        .map(|problem| problem_notice(problem, language))
         .collect();
-    notices.push(format!("… e mais {} erros", errors.len() - shown));
+    notices.push(messages::and_more_errors(language, errors.len() - shown));
     notices
 }
 
-const INVALID_BLOCK_LABEL: &str = "bloco inválido";
-const INVALID_MINI_LABEL: &str = "mini inválido";
 const MINI_PATH_ROOT: &str = "mini";
 
-fn problem_notice(problem: &Problem) -> String {
+fn problem_notice(problem: &Problem, language: Language) -> String {
     format!(
         "{}: {}: {}",
-        notice_label(&problem.path),
+        notice_label(&problem.path, language),
         problem.path,
         problem.message
     )
 }
 
-fn notice_label(path: &str) -> &'static str {
+fn notice_label(path: &str, language: Language) -> &'static str {
     if path.split(['.', '[']).next() == Some(MINI_PATH_ROOT) {
-        INVALID_MINI_LABEL
+        messages::invalid_mini_label(language)
     } else {
-        INVALID_BLOCK_LABEL
+        messages::invalid_block_label(language)
     }
 }
 

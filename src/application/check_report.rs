@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::application::ports::SourceError;
+use crate::domain::language::Language;
 use crate::domain::snapshot_report::{ParsedSnapshot, Problem, Severity};
 use crate::domain::widget::{Mini, WidgetSnapshot};
 
@@ -21,14 +22,15 @@ pub fn build_check_report(
     raw: Result<String, SourceError>,
     parse: &dyn Fn(&str) -> Result<ParsedSnapshot, SnapshotParseFailure>,
     preview: &dyn Fn(&WidgetSnapshot) -> Vec<String>,
+    language: Language,
 ) -> CheckOutcome {
     let parsed = raw
         .map_err(|error| error.to_string())
         .and_then(|output| parse(&output).map_err(|error| error.to_string()));
     match parsed {
-        Ok(parsed) => report_parsed(parsed, preview),
+        Ok(parsed) => report_parsed(parsed, preview, language),
         Err(message) => CheckOutcome {
-            text: format!("ERRO {message}"),
+            text: format!("{} {message}", language.pick("ERROR", "ERRO")),
             exit_code: EXIT_CODE_INVALID,
         },
     }
@@ -37,6 +39,7 @@ pub fn build_check_report(
 fn report_parsed(
     parsed: ParsedSnapshot,
     preview: &dyn Fn(&WidgetSnapshot) -> Vec<String>,
+    language: Language,
 ) -> CheckOutcome {
     let has_errors = parsed
         .problems
@@ -44,7 +47,10 @@ fn report_parsed(
         .any(|problem| problem.severity == Severity::Error);
     let mut problems = parsed.problems;
     problems.sort_by_key(|problem| problem.severity != Severity::Error);
-    let mut lines: Vec<String> = problems.iter().map(problem_line).collect();
+    let mut lines: Vec<String> = problems
+        .iter()
+        .map(|problem| problem_line(problem, language))
+        .collect();
     if !lines.is_empty() {
         lines.push(String::new());
     }
@@ -65,10 +71,10 @@ fn mini_line(mini: &Mini) -> String {
     format!("mini: {} {}", mini.value, mini.text)
 }
 
-fn problem_line(problem: &Problem) -> String {
+fn problem_line(problem: &Problem, language: Language) -> String {
     let label = match problem.severity {
-        Severity::Error => "ERRO",
-        Severity::Warning => "AVISO",
+        Severity::Error => language.pick("ERROR", "ERRO"),
+        Severity::Warning => language.pick("WARNING", "AVISO"),
     };
     format!("{label} {}: {}", problem.path, problem.message)
 }
@@ -100,7 +106,12 @@ mod tests {
             })
         };
         let preview = |_: &WidgetSnapshot| vec!["linha da prévia".to_string()];
-        build_check_report(Ok("{}".to_string()), &parse, &preview)
+        build_check_report(
+            Ok("{}".to_string()),
+            &parse,
+            &preview,
+            Language::BrazilianPortuguese,
+        )
     }
 
     #[test]
@@ -140,6 +151,7 @@ mod tests {
             Err(SourceError::Failed("plugin quebrou".to_string())),
             &parse,
             &preview,
+            Language::BrazilianPortuguese,
         );
         assert_eq!(outcome.exit_code, 1);
         assert_eq!(outcome.text, "ERRO plugin quebrou");
@@ -149,7 +161,12 @@ mod tests {
     fn invalid_json_is_reported_as_an_error() {
         let parse = |_: &str| Err(SnapshotParseFailure("JSON ruim".to_string()));
         let preview = |_: &WidgetSnapshot| -> Vec<String> { unreachable!() };
-        let outcome = build_check_report(Ok("{".to_string()), &parse, &preview);
+        let outcome = build_check_report(
+            Ok("{".to_string()),
+            &parse,
+            &preview,
+            Language::BrazilianPortuguese,
+        );
         assert_eq!(outcome.exit_code, 1);
         assert_eq!(outcome.text, "ERRO JSON ruim");
     }
@@ -170,7 +187,12 @@ mod tests {
             })
         };
         let preview = |_: &WidgetSnapshot| vec!["linha da prévia".to_string()];
-        let outcome = build_check_report(Ok("{}".to_string()), &parse, &preview);
+        let outcome = build_check_report(
+            Ok("{}".to_string()),
+            &parse,
+            &preview,
+            Language::BrazilianPortuguese,
+        );
         assert_eq!(outcome.text, "Agenda\nmini: 12 tarefas\nlinha da prévia");
     }
 

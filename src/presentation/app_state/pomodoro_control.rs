@@ -4,11 +4,21 @@ use thiserror::Error;
 
 use crate::application::pomodoro_notifications::alert_for;
 use crate::application::ports::AlertMessage;
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::pomodoro::PomodoroTimer;
+use crate::presentation::messages;
 
 #[derive(Debug, Error, PartialEq)]
-#[error("Pomodoro desligado na configuração")]
 pub(super) struct PomodoroDisabled;
+
+impl LocalizedMessage for PomodoroDisabled {
+    fn message(&self, language: Language) -> String {
+        messages::pomodoro_disabled_notice(language).to_string()
+    }
+}
+
+display_in_portuguese!(PomodoroDisabled);
 
 #[derive(Default)]
 pub(super) struct PomodoroControl {
@@ -34,9 +44,13 @@ impl PomodoroControl {
         Ok(())
     }
 
-    pub(super) fn advance(&mut self, elapsed: Duration) -> Option<AlertMessage> {
+    pub(super) fn advance(
+        &mut self,
+        elapsed: Duration,
+        language: Language,
+    ) -> Option<AlertMessage> {
         let ended = self.timer.as_mut()?.advance(elapsed)?;
-        Some(alert_for(&ended))
+        Some(alert_for(&ended, language))
     }
 }
 
@@ -45,6 +59,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::domain::language::Language;
     use crate::domain::pomodoro::{PomodoroSettings, PomodoroTimer};
 
     fn enabled_control() -> PomodoroControl {
@@ -69,7 +84,10 @@ mod tests {
     #[test]
     fn disabled_control_never_produces_alerts() {
         let mut control = PomodoroControl::default();
-        assert_eq!(control.advance(Duration::from_secs(60 * 60)), None);
+        assert_eq!(
+            control.advance(Duration::from_secs(60 * 60), Language::BrazilianPortuguese),
+            None
+        );
     }
 
     #[test]
@@ -77,9 +95,12 @@ mod tests {
         let mut control = enabled_control();
         control.toggle().unwrap();
 
-        assert_eq!(control.advance(Duration::from_secs(60)), None);
+        assert_eq!(
+            control.advance(Duration::from_secs(60), Language::BrazilianPortuguese),
+            None
+        );
         let alert = control
-            .advance(Duration::from_secs(25 * 60))
+            .advance(Duration::from_secs(25 * 60), Language::BrazilianPortuguese)
             .expect("aviso de fim de foco");
 
         assert_eq!(alert.title, "Foco concluído");

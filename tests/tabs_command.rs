@@ -12,6 +12,7 @@ const WIDGET: &str = "[[widgets]]\nid = \"jira-a\"\ncommand = \"x\"\n";
 
 fn tabs(config_directory: &Path, arguments: &[&str], input: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .arg("tabs")
         .args(arguments)
         .arg("--config-dir")

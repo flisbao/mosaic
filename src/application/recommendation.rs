@@ -1,6 +1,9 @@
 use chrono::NaiveDateTime;
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 use crate::domain::widget::{DetailItem, WidgetId, WidgetRecord};
 use crate::domain::widget_content::{collapse_whitespace, truncate_characters};
 
@@ -31,11 +34,28 @@ pub struct RecommendationPlan {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum RecommendationError {
-    #[error("nenhum widget configurado para a IA; defina `llm_sections`")]
     NoWidgetSelected,
-    #[error("nenhum item nas seções selecionadas")]
     NoItems,
 }
+
+impl LocalizedMessage for RecommendationError {
+    fn message(&self, language: Language) -> String {
+        match (self, language) {
+            (Self::NoWidgetSelected, Language::English) => {
+                "no widget configured for the AI; set `llm_sections`".to_string()
+            }
+            (Self::NoWidgetSelected, Language::BrazilianPortuguese) => {
+                "nenhum widget configurado para a IA; defina `llm_sections`".to_string()
+            }
+            (Self::NoItems, Language::English) => "no items in the selected sections".to_string(),
+            (Self::NoItems, Language::BrazilianPortuguese) => {
+                "nenhum item nas seções selecionadas".to_string()
+            }
+        }
+    }
+}
+
+display_in_portuguese!(RecommendationError);
 
 pub fn estimate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(CHARACTERS_PER_TOKEN)

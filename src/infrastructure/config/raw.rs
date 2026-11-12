@@ -16,6 +16,8 @@ pub(super) struct RawConfig {
     pub(super) theme: RawTheme,
     #[serde(default)]
     pub(super) update: RawUpdate,
+    #[serde(default)]
+    pub(super) ui: RawUi,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +95,14 @@ pub(super) struct RawUpdate {
     pub(super) check: Option<toml::Value>,
 }
 
-pub(super) const ROOT_KEYS: [&str; 6] = ["tabs", "widgets", "pomodoro", "llm", "theme", "update"];
+#[derive(Deserialize, Default)]
+pub(super) struct RawUi {
+    pub(super) language: Option<toml::Value>,
+}
+
+pub(super) const ROOT_KEYS: [&str; 7] = [
+    "tabs", "widgets", "pomodoro", "llm", "theme", "update", "ui",
+];
 
 pub(super) const TAB_KEYS: [&str; 1] = ["name"];
 
@@ -137,3 +146,5 @@ pub(super) const LLM_KEYS: [&str; 7] = [
 pub(super) const THEME_KEYS: [&str; 3] = ["name", "paint_background", "colors"];
 
 pub(super) const UPDATE_KEYS: [&str; 1] = ["check"];
+
+pub(super) const UI_KEYS: [&str; 1] = ["language"];

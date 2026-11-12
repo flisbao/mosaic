@@ -4,6 +4,7 @@ use crate::application::ports::{
     LlmError, LlmRequest, LlmRunner, RecommendationStore, StoredRecommendation,
 };
 use crate::application::recommendation::RecommendationPlan;
+use crate::domain::language::Language;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecommendationOutcome {
@@ -11,7 +12,12 @@ pub struct RecommendationOutcome {
     pub save_warning: Option<String>,
 }
 
-const EMPTY_ANSWER_MESSAGE: &str = "a IA devolveu uma resposta vazia";
+fn empty_answer_message(language: Language) -> &'static str {
+    match language {
+        Language::English => "the AI returned an empty answer",
+        Language::BrazilianPortuguese => "a IA devolveu uma resposta vazia",
+    }
+}
 
 pub fn execute_recommendation(
     runner: &dyn LlmRunner,
@@ -19,6 +25,7 @@ pub fn execute_recommendation(
     plan: &RecommendationPlan,
     model: Option<&str>,
     now: NaiveDateTime,
+    language: Language,
 ) -> Result<RecommendationOutcome, LlmError> {
     let answer = runner.run(&LlmRequest {
         prompt: plan.prompt.clone(),
@@ -26,7 +33,7 @@ pub fn execute_recommendation(
     })?;
     let text = answer.trim();
     if text.is_empty() {
-        return Err(LlmError::Failed(EMPTY_ANSWER_MESSAGE.to_string()));
+        return Err(LlmError::Failed(empty_answer_message(language).to_string()));
     }
     let recommendation = StoredRecommendation {
         text: text.to_string(),
@@ -111,7 +118,15 @@ mod tests {
         let runner = FakeRunner::answering(Ok("1. Fazer X\n".to_string()));
         let store = FakeStore::default();
 
-        let result = execute_recommendation(&runner, &store, &plan(), None, now()).unwrap();
+        let result = execute_recommendation(
+            &runner,
+            &store,
+            &plan(),
+            None,
+            now(),
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
 
         assert_eq!(result.recommendation.text, "1. Fazer X");
         assert_eq!(result.recommendation.created_at, now());
@@ -122,7 +137,15 @@ mod tests {
     #[test]
     fn save_failure_keeps_the_recommendation_and_exposes_a_warning() {
         let runner = FakeRunner::answering(Ok("1. Fazer X".to_string()));
-        let outcome = execute_recommendation(&runner, &FailingStore, &plan(), None, now()).unwrap();
+        let outcome = execute_recommendation(
+            &runner,
+            &FailingStore,
+            &plan(),
+            None,
+            now(),
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         assert_eq!(outcome.recommendation.text, "1. Fazer X");
         assert_eq!(outcome.save_warning.as_deref(), Some("disco cheio"));
     }
@@ -136,6 +159,7 @@ mod tests {
             &plan(),
             Some("haiku"),
             now(),
+            Language::BrazilianPortuguese,
         )
         .unwrap();
         let requests = runner.requests.lock().unwrap();
@@ -152,7 +176,15 @@ mod tests {
     fn empty_answer_is_an_error_and_is_not_saved() {
         let runner = FakeRunner::answering(Ok("  \n ".to_string()));
         let store = FakeStore::default();
-        let error = execute_recommendation(&runner, &store, &plan(), None, now()).unwrap_err();
+        let error = execute_recommendation(
+            &runner,
+            &store,
+            &plan(),
+            None,
+            now(),
+            Language::BrazilianPortuguese,
+        )
+        .unwrap_err();
         assert_eq!(
             error,
             LlmError::Failed("a IA devolveu uma resposta vazia".to_string())
@@ -164,7 +196,15 @@ mod tests {
     fn runner_error_is_propagated_and_nothing_saved() {
         let runner = FakeRunner::answering(Err(LlmError::Unavailable("sem claude".to_string())));
         let store = FakeStore::default();
-        let error = execute_recommendation(&runner, &store, &plan(), None, now()).unwrap_err();
+        let error = execute_recommendation(
+            &runner,
+            &store,
+            &plan(),
+            None,
+            now(),
+            Language::BrazilianPortuguese,
+        )
+        .unwrap_err();
         assert_eq!(error, LlmError::Unavailable("sem claude".to_string()));
         assert_eq!(store.load(), None);
     }

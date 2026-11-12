@@ -3,16 +3,17 @@ use ratatui::text::{Line, Span};
 
 use crate::application::plugin_catalog::OFFICIAL_PLUGINS;
 use crate::application::setup_session::{Prompt, PromptInput, SetupState};
+use crate::domain::language::Language;
 use crate::domain::plugin_setup::InstalledPlugin;
 use crate::domain::widget_content::Tone;
 use crate::presentation::app_state::{
     AddWidgetFlow, AddWidgetStep, Answering, ChoiceRow, Review, TextField,
 };
+use crate::presentation::messages;
 use crate::presentation::text_fit::{display_width, truncate_to_width, wrap_to_width};
 use crate::presentation::theme_styles::ThemeStyles;
 
 pub const MODAL_WIDTH: u16 = 72;
-const MODAL_TITLE: &str = "Adicionar widget";
 const TITLE_SEPARATOR: &str = " · ";
 const SELECTION_MARKER: &str = "> ";
 const NO_SELECTION_MARKER: &str = "  ";
@@ -22,23 +23,7 @@ const VERSION_PREFIX: &str = "v";
 const COLUMN_GAP: &str = "  ";
 const CUT_MARK: &str = "…";
 const CURSOR_PLACEHOLDER: char = ' ';
-const CHOOSE_PLUGIN_HEADING: &str = "Escolha o plugin do widget";
-const NO_PLUGIN_HEADING: &str = "Nenhum plugin instalado.";
-const INSTALL_HINT: &str = "Instale um e abra este fluxo de novo:";
-const INSTALL_COMMAND: &str = "mosaic plugins install <nome>";
-const OFFICIAL_HEADING: &str = "Plugins do catálogo oficial:";
-const IGNORED_PREFIX: &str = "ignorado: ";
-const REVIEW_HEADING: &str = "Este trecho será acrescentado ao mosaic.toml:";
-const SAVE_FAILED_PREFIX: &str = "Não gravou: ";
-const NOTE_PREFIX: &str = "Atenção: ";
 const ERROR_PREFIX: &str = "! ";
-const LIST_FOOTER: &str = "↑↓ escolhe  Enter seleciona  Esc cancela";
-const EMPTY_FOOTER: &str = "Esc fecha";
-const TEXT_FOOTER: &str = "Enter confirma  Esc cancela";
-const CHOICE_FOOTER: &str = "↑↓ escolhe  Enter confirma  Esc cancela";
-const REVIEW_FOOTER: &str = "Enter grava e recarrega  Esc cancela";
-const MORE_ABOVE: &str = "  ↑ mais";
-const MORE_BELOW: &str = "  ↓ mais";
 const MORE_MARKER_ROWS: usize = 2;
 const FOOTER_ROWS: usize = 2;
 const HINT_SEPARATOR: &str = " · ";
@@ -122,11 +107,17 @@ fn windowed(
     }
     let mut lines = Vec::new();
     if first > 0 {
-        lines.push(Line::styled(MORE_ABOVE, styles.muted()));
+        lines.push(Line::styled(
+            messages::more_above(styles.language()),
+            styles.muted(),
+        ));
     }
     lines.extend(groups[first..last].iter().flatten().cloned());
     if last < groups.len() {
-        lines.push(Line::styled(MORE_BELOW, styles.muted()));
+        lines.push(Line::styled(
+            messages::more_below(styles.language()),
+            styles.muted(),
+        ));
     }
     lines
 }
@@ -154,12 +145,15 @@ fn plugin_list(
     let width = size.width;
     if flow.plugins().is_empty() {
         return Layout {
-            title: MODAL_TITLE.to_string(),
+            title: messages::add_widget_title(styles.language()).to_string(),
             body: no_plugins(flow, width, styles),
-            footer: EMPTY_FOOTER,
+            footer: messages::empty_footer(styles.language()),
         };
     }
-    let mut body = vec![heading(CHOOSE_PLUGIN_HEADING, styles), Line::default()];
+    let mut body = vec![
+        heading(messages::choose_plugin_heading(styles.language()), styles),
+        Line::default(),
+    ];
     let problems = problem_lines(flow.problems(), width, styles);
     let room = size
         .height
@@ -173,9 +167,9 @@ fn plugin_list(
     body.extend(windowed(groups, selected, room, styles));
     body.extend(problems);
     Layout {
-        title: MODAL_TITLE.to_string(),
+        title: messages::add_widget_title(styles.language()).to_string(),
         body,
-        footer: LIST_FOOTER,
+        footer: messages::list_footer(styles.language()),
     }
 }
 
@@ -224,21 +218,26 @@ fn problem_lines(problems: &[String], width: usize, styles: &ThemeStyles) -> Vec
         return Vec::new();
     }
     let mut lines = vec![Line::default()];
-    lines.extend(
-        problems.iter().flat_map(|problem| {
-            wrapped(&format!("{IGNORED_PREFIX}{problem}"), width, styles.warn())
-        }),
-    );
+    lines.extend(problems.iter().flat_map(|problem| {
+        wrapped(
+            &format!("{}{problem}", messages::ignored_prefix(styles.language())),
+            width,
+            styles.warn(),
+        )
+    }));
     lines
 }
 
 fn no_plugins(flow: &AddWidgetFlow, width: usize, styles: &ThemeStyles) -> Vec<Line<'static>> {
     let mut lines = vec![
-        heading(NO_PLUGIN_HEADING, styles),
-        Line::from(INSTALL_HINT),
-        Line::styled(format!("{INDENT}{INSTALL_COMMAND}"), styles.accent()),
+        heading(messages::no_plugin_heading(styles.language()), styles),
+        Line::from(messages::install_hint(styles.language())),
+        Line::styled(
+            format!("{INDENT}{}", messages::install_command(styles.language())),
+            styles.accent(),
+        ),
         Line::default(),
-        Line::from(OFFICIAL_HEADING),
+        Line::from(messages::official_plugins_heading(styles.language())),
     ];
     lines.extend(wrapped(
         &format!("{INDENT}{}", OFFICIAL_PLUGINS.join(", ")),
@@ -251,12 +250,16 @@ fn no_plugins(flow: &AddWidgetFlow, width: usize, styles: &ThemeStyles) -> Vec<L
 
 fn answering_layout(answering: &Answering, size: Dimensions, styles: &ThemeStyles) -> Layout {
     let width = size.width;
-    let title = format!("{MODAL_TITLE}{TITLE_SEPARATOR}{}", answering.plugin_name());
+    let title = format!(
+        "{}{TITLE_SEPARATOR}{}",
+        messages::add_widget_title(styles.language()),
+        answering.plugin_name()
+    );
     let SetupState::Asking(prompt) = answering.state() else {
         return Layout {
             title,
             body: Vec::new(),
-            footer: TEXT_FOOTER,
+            footer: messages::text_footer(styles.language()),
         };
     };
     let mut body = vec![heading(&prompt.title, styles)];
@@ -264,7 +267,7 @@ fn answering_layout(answering: &Answering, size: Dimensions, styles: &ThemeStyle
         body.extend(wrapped(explanation, width, styles.muted()));
     }
     body.push(Line::styled(
-        truncate_to_width(&hint_text(prompt), width),
+        truncate_to_width(&hint_text(prompt, styles.language()), width),
         styles.muted(),
     ));
     body.push(Line::default());
@@ -272,7 +275,7 @@ fn answering_layout(answering: &Answering, size: Dimensions, styles: &ThemeStyle
     let footer = match &prompt.input {
         PromptInput::Text => {
             body.push(input_line(answering.field(), prompt, width, styles));
-            TEXT_FOOTER
+            messages::text_footer(styles.language())
         }
         PromptInput::Choice(_) => {
             let room = size
@@ -285,7 +288,7 @@ fn answering_layout(answering: &Answering, size: Dimensions, styles: &ThemeStyle
                 room,
                 styles,
             ));
-            CHOICE_FOOTER
+            messages::choice_footer(styles.language())
         }
     };
     body.extend(errors);
@@ -309,18 +312,18 @@ fn error_lines(message: Option<&str>, width: usize, styles: &ThemeStyles) -> Vec
     lines
 }
 
-fn hint_text(prompt: &Prompt) -> String {
+fn hint_text(prompt: &Prompt, language: Language) -> String {
     let mut parts = Vec::new();
     if prompt.required {
-        parts.push("obrigatório".to_string());
+        parts.push(messages::required_hint(language).to_string());
     } else if let Some(default) = prompt
         .default
         .as_ref()
         .filter(|_| prompt.input == PromptInput::Text)
     {
-        parts.push(format!("Enter usa o padrão ({default})"));
+        parts.push(messages::default_hint(language, default));
     } else if prompt.blank.is_none() {
-        parts.push("opcional: Enter pula".to_string());
+        parts.push(messages::optional_hint(language).to_string());
     }
     parts.extend(prompt.hint.clone());
     parts.join(HINT_SEPARATOR)
@@ -437,7 +440,10 @@ fn choice_row_lines(
 }
 
 fn review_layout(review: &Review, width: usize, styles: &ThemeStyles) -> Layout {
-    let mut body = vec![heading(REVIEW_HEADING, styles), Line::default()];
+    let mut body = vec![
+        heading(messages::review_heading(styles.language()), styles),
+        Line::default(),
+    ];
     for (position, block) in review.blocks().iter().enumerate() {
         if position > 0 {
             body.push(Line::default());
@@ -451,7 +457,7 @@ fn review_layout(review: &Review, width: usize, styles: &ThemeStyles) -> Layout 
     for note in review.notes() {
         body.push(Line::default());
         body.extend(wrapped(
-            &format!("{NOTE_PREFIX}{note}"),
+            &format!("{}{note}", messages::note_prefix(styles.language())),
             width,
             styles.warn(),
         ));
@@ -459,18 +465,23 @@ fn review_layout(review: &Review, width: usize, styles: &ThemeStyles) -> Layout 
     if let Some(message) = review.error() {
         body.push(Line::default());
         body.extend(wrapped(
-            &format!("{SAVE_FAILED_PREFIX}{message}"),
+            &format!(
+                "{}{message}",
+                messages::save_failed_prefix(styles.language())
+            ),
             width,
             styles.danger(),
         ));
     }
     Layout {
         title: format!(
-            "{MODAL_TITLE}{TITLE_SEPARATOR}{}{TITLE_SEPARATOR}revisar",
-            review.plugin_name()
+            "{}{TITLE_SEPARATOR}{}{TITLE_SEPARATOR}{}",
+            messages::add_widget_title(styles.language()),
+            review.plugin_name(),
+            messages::review_title_suffix(styles.language())
         ),
         body,
-        footer: REVIEW_FOOTER,
+        footer: messages::review_footer(styles.language()),
     }
 }
 
@@ -587,7 +598,8 @@ mod tests {
     }
 
     fn state_with(snapshot: SetupCatalogSnapshot) -> AppState {
-        let mut state = AppState::new(Vec::new(), Vec::new());
+        let mut state =
+            AppState::new(Vec::new(), Vec::new()).with_language(Language::BrazilianPortuguese);
         state.open_add_widget(snapshot);
         state
     }
@@ -955,7 +967,8 @@ mod tests {
 
     #[test]
     fn the_empty_panel_points_to_the_plus_key() {
-        let state = AppState::new(Vec::new(), Vec::new());
+        let state =
+            AppState::new(Vec::new(), Vec::new()).with_language(Language::BrazilianPortuguese);
         let text = screen_of(&buffer_of(&state, WIDTH, HEIGHT));
         assert!(text.contains("nenhum widget ainda"), "{text}");
         assert!(
@@ -968,7 +981,8 @@ mod tests {
     #[test]
     fn the_empty_panel_hint_is_themed_and_hidden_once_a_widget_exists() {
         let theme = Theme::preset("nord").unwrap();
-        let mut state = AppState::new(Vec::new(), Vec::new());
+        let mut state =
+            AppState::new(Vec::new(), Vec::new()).with_language(Language::BrazilianPortuguese);
         state.set_theme_styles(ThemeStyles::new(&theme, ColorDepth::TrueColor));
         let buffer = buffer_of(&state, WIDTH, HEIGHT);
         let title = cell_of(&buffer, "nenhum widget ainda");
@@ -984,7 +998,8 @@ mod tests {
                 name: "Mosaic".to_string(),
                 entry_indexes: vec![0],
             }],
-        );
+        )
+        .with_language(Language::BrazilianPortuguese);
         let text = screen_of(&buffer_of(&with_widget, WIDTH, HEIGHT));
         assert!(!text.contains("nenhum widget ainda"), "{text}");
     }

@@ -10,6 +10,7 @@ const EXIT_USAGE: i32 = 2;
 
 fn run_plugins(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("MOSAIC_LANGUAGE", "pt-BR")
         .arg("plugins")
         .args(arguments)
         .stdin(Stdio::null())

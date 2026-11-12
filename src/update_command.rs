@@ -164,7 +164,11 @@ pub fn execute_update(
 }
 
 fn confirmed(prompter: &mut impl Prompter) -> Result<bool, UpdateCommandError> {
-    match confirm_default_no(prompter, CONFIRMATION_QUESTION) {
+    match confirm_default_no(
+        prompter,
+        CONFIRMATION_QUESTION,
+        mosaic::domain::language::Language::detect_from_environment(),
+    ) {
         Ok(answer) => Ok(answer),
         Err(PromptError::EndOfInput) => Ok(false),
         Err(error) => Err(error.into()),

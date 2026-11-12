@@ -41,7 +41,11 @@ fn kanban_runner(root: &Path) -> PluginRunner {
         inherit_env: None,
         timeout: std::time::Duration::from_secs(10),
     };
-    PluginRunner::new(command, root.to_path_buf())
+    PluginRunner::new(command, root.to_path_buf()).with_language(
+        mosaic::infrastructure::shared_language::SharedLanguage::new(
+            mosaic::domain::language::Language::BrazilianPortuguese,
+        ),
+    )
 }
 
 fn kanban_root(directory: &Path) -> PathBuf {
@@ -99,12 +103,26 @@ fn run_plan(
         Duration::from_secs(10),
     );
     let store = FileRecommendationStore::new(directory.join("rec.json"));
-    let mut result = execute_recommendation(&cli, &store, &plan, None, now());
+    let mut result = execute_recommendation(
+        &cli,
+        &store,
+        &plan,
+        None,
+        now(),
+        mosaic::domain::language::Language::BrazilianPortuguese,
+    );
     for _ in 0..FORK_RACE_RETRIES {
         match &result {
             Err(error) if error.to_string().contains("Text file busy") => {
                 std::thread::sleep(Duration::from_millis(20));
-                result = execute_recommendation(&cli, &store, &plan, None, now());
+                result = execute_recommendation(
+                    &cli,
+                    &store,
+                    &plan,
+                    None,
+                    now(),
+                    mosaic::domain::language::Language::BrazilianPortuguese,
+                );
             }
             _ => break,
         }
@@ -125,7 +143,10 @@ fn recommendation_is_generated_saved_and_shown_in_the_recommendation_box() {
     let stored = outcome.recommendation;
     assert_eq!(stored.text, "1. Corrigir login\nComece por: Corrigir login");
     assert_eq!(store.load(), Some(stored.clone()));
-    let snapshot = recommendation_snapshot(&stored);
+    let snapshot = recommendation_snapshot(
+        &stored,
+        mosaic::domain::language::Language::BrazilianPortuguese,
+    );
     assert_eq!(snapshot.summary.title, "IA");
     assert_eq!(common::summary_line_texts(&snapshot).len(), 2);
 }

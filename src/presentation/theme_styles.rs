@@ -1,11 +1,12 @@
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::domain::color_depth::ColorDepth;
+use crate::domain::language::Language;
 use crate::domain::theme::{Palette, Rgb, Theme};
 use crate::domain::widget_content::Tone;
 use crate::presentation::indexed_palette::nearest_indexed;
+use crate::presentation::messages;
 
-pub const BASIC_TERMINAL_WARNING: &str = "terminal sem 256 cores: usando o tema default";
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeStyles {
     foreground: Option<Color>,
@@ -16,6 +17,7 @@ pub struct ThemeStyles {
     danger: Color,
     accent: Color,
     on_accent: Color,
+    language: Language,
 }
 
 impl ThemeStyles {
@@ -29,7 +31,17 @@ impl ThemeStyles {
             danger: Color::Red,
             accent: Color::Cyan,
             on_accent: Color::Black,
+            language: Language::English,
         }
+    }
+
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
+    }
+
+    pub fn language(&self) -> Language {
+        self.language
     }
 
     pub fn new(theme: &Theme, depth: ColorDepth) -> Self {
@@ -68,6 +80,7 @@ impl ThemeStyles {
             danger: color(palette.danger),
             accent: color(palette.accent),
             on_accent: color(palette.on_accent),
+            language: Language::English,
         }
     }
 
@@ -127,12 +140,13 @@ pub struct ThemeResolution {
     pub warning: Option<String>,
 }
 
-pub fn resolve_theme(theme: &Theme, depth: ColorDepth) -> ThemeResolution {
+pub fn resolve_theme(theme: &Theme, depth: ColorDepth, language: Language) -> ThemeResolution {
     let is_colored_on_basic_terminal =
         matches!(theme, Theme::Colored { .. }) && depth == ColorDepth::Basic;
     ThemeResolution {
-        styles: ThemeStyles::new(theme, depth),
-        warning: is_colored_on_basic_terminal.then(|| BASIC_TERMINAL_WARNING.to_string()),
+        styles: ThemeStyles::new(theme, depth).with_language(language),
+        warning: is_colored_on_basic_terminal
+            .then(|| messages::basic_terminal_warning(language).to_string()),
     }
 }
 
@@ -363,15 +377,18 @@ mod tests {
 
     #[test]
     fn colored_theme_on_a_basic_terminal_falls_back_with_a_warning() {
-        let resolution = resolve_theme(&colored("dracula"), ColorDepth::Basic);
+        let resolution = resolve_theme(&colored("dracula"), ColorDepth::Basic, Language::English);
         assert_eq!(resolution.styles, ThemeStyles::ansi());
-        assert_eq!(resolution.warning.as_deref(), Some(BASIC_TERMINAL_WARNING));
+        assert_eq!(
+            resolution.warning.as_deref(),
+            Some(messages::basic_terminal_warning(Language::English))
+        );
     }
 
     #[test]
     fn colored_theme_on_truecolor_or_256_colors_has_no_warning() {
         for depth in [ColorDepth::TrueColor, ColorDepth::Indexed256] {
-            let resolution = resolve_theme(&colored("dracula"), depth);
+            let resolution = resolve_theme(&colored("dracula"), depth, Language::English);
             assert_eq!(resolution.warning, None);
             assert!(resolution.styles.paints_background());
         }
@@ -384,7 +401,7 @@ mod tests {
             ColorDepth::Indexed256,
             ColorDepth::Basic,
         ] {
-            let resolution = resolve_theme(&Theme::Ansi, depth);
+            let resolution = resolve_theme(&Theme::Ansi, depth, Language::English);
             assert_eq!(resolution.warning, None);
             assert_eq!(resolution.styles, ThemeStyles::ansi());
         }

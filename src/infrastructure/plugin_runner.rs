@@ -5,14 +5,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::application::launch_spec::ProviderCommand;
 use crate::application::ports::{ActionExecutor, SourceError, WidgetSource};
 use crate::domain::action::{ActionOutcome, ConfirmedAction, ACTION_ITEM_ID_KEY};
+use crate::domain::language::{Language, LocalizedMessage, LANGUAGE_VARIABLE};
 use crate::domain::widget::WidgetSnapshot;
 use crate::domain::widget_content::{clean_text_limited, MAXIMUM_TEXT_CHARACTERS};
 use crate::infrastructure::child_environment::restrict_inherited_environment;
 use crate::infrastructure::concurrency_gate::ConcurrencyGate;
-use crate::infrastructure::plugin_protocol::parse_snapshot;
+use crate::infrastructure::plugin_protocol::parse_snapshot_in;
 use crate::infrastructure::process::{
     run_process, CancelFlag, HasCancelFlag, ProcessError, ProcessLimits,
 };
+use crate::infrastructure::shared_language::SharedLanguage;
 
 pub const MAXIMUM_PLUGIN_OUTPUT_BYTES: usize = 1_048_576;
 pub const MAXIMUM_CONCURRENT_PARSES: usize = 3;
@@ -23,6 +25,7 @@ pub struct PluginRunner {
     cancel_flag: CancelFlag,
     invocation_lock: Mutex<()>,
     parse_gate: Arc<ConcurrencyGate>,
+    language: SharedLanguage,
 }
 
 impl PluginRunner {
@@ -33,7 +36,13 @@ impl PluginRunner {
             cancel_flag: CancelFlag::default(),
             invocation_lock: Mutex::new(()),
             parse_gate: Arc::new(ConcurrencyGate::new(MAXIMUM_CONCURRENT_PARSES)),
+            language: SharedLanguage::default(),
         }
+    }
+
+    pub fn with_language(mut self, language: SharedLanguage) -> Self {
+        self.language = language;
+        self
     }
 
     pub fn with_parse_gate(mut self, parse_gate: Arc<ConcurrencyGate>) -> Self {
@@ -52,12 +61,15 @@ impl PluginRunner {
             .args(extra_args)
             .current_dir(&self.working_directory);
         restrict_inherited_environment(&mut command, self.command.inherit_env.as_deref());
+        let language = self.language.get();
+        command.env(LANGUAGE_VARIABLE, language.code());
         command.envs(self.command.env.iter().map(|(key, value)| (key, value)));
         let limits = ProcessLimits {
             timeout: self.command.timeout,
             maximum_output_bytes: MAXIMUM_PLUGIN_OUTPUT_BYTES,
         };
-        run_process(command, stdin_text, &limits, &self.cancel_flag).map_err(SourceError::from)
+        run_process(command, stdin_text, &limits, &self.cancel_flag)
+            .map_err(|error| source_error(error, language))
     }
 
     pub fn raw_snapshot_output(&self) -> Result<String, SourceError> {
@@ -69,7 +81,9 @@ impl WidgetSource for PluginRunner {
     fn snapshot(&self) -> Result<WidgetSnapshot, SourceError> {
         let output = self.raw_snapshot_output()?;
         let _permit = self.parse_gate.acquire();
-        parse_snapshot(&output).map_err(|error| SourceError::InvalidSnapshot(error.to_string()))
+        let language = self.language.get();
+        parse_snapshot_in(&output, language)
+            .map_err(|error| SourceError::InvalidSnapshot(error.message(language)))
     }
 }
 
@@ -93,15 +107,13 @@ fn bounded_message(text: &str) -> String {
     clean_text_limited(text, MAXIMUM_TEXT_CHARACTERS)
 }
 
-impl From<ProcessError> for SourceError {
-    fn from(error: ProcessError) -> Self {
-        let message = bounded_message(&error.to_string());
-        match error {
-            ProcessError::TimedOut { .. } => Self::TimedOut(message),
-            ProcessError::OutputTooLarge { .. } => Self::OutputTooLarge(message),
-            ProcessError::Cancelled => Self::Cancelled,
-            _ => Self::Failed(message),
-        }
+fn source_error(error: ProcessError, language: Language) -> SourceError {
+    let message = bounded_message(&error.message(language));
+    match error {
+        ProcessError::TimedOut { .. } => SourceError::TimedOut(message),
+        ProcessError::OutputTooLarge { .. } => SourceError::OutputTooLarge(message),
+        ProcessError::Cancelled => SourceError::Cancelled,
+        _ => SourceError::Failed(message),
     }
 }
 
@@ -142,6 +154,7 @@ mod tests {
             timeout: Duration::from_secs(timeout_seconds),
         };
         PluginRunner::new(command, directory.to_path_buf())
+            .with_language(SharedLanguage::new(Language::BrazilianPortuguese))
     }
 
     fn snapshot_error(runner: &PluginRunner) -> String {
@@ -445,5 +458,58 @@ esac"#;
         snapshot_thread.join().unwrap();
 
         assert!(!directory.path().join("overlaps.txt").exists());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod language_tests {
+    use std::fs;
+    use std::time::Duration;
+
+    use super::*;
+
+    fn language_runner(script: &str, language: Language) -> (tempfile::TempDir, PluginRunner) {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("plugin.sh"), script).unwrap();
+        let command = ProviderCommand {
+            program: "sh".to_string(),
+            args: vec!["plugin.sh".to_string()],
+            env: vec![],
+            inherit_env: Some(vec![]),
+            timeout: Duration::from_secs(1),
+        };
+        let runner = PluginRunner::new(command, directory.path().to_path_buf())
+            .with_language(SharedLanguage::new(language));
+        (directory, runner)
+    }
+
+    #[test]
+    fn the_plugin_receives_the_language_code() {
+        for language in [Language::English, Language::BrazilianPortuguese] {
+            let script = r#"printf '{"summary":{"title":"%s"}}' "$MOSAIC_LANGUAGE""#;
+            let (_directory, runner) = language_runner(script, language);
+            assert_eq!(runner.snapshot().unwrap().summary.title, language.code());
+        }
+    }
+
+    #[test]
+    fn the_language_can_change_between_runs() {
+        let shared = SharedLanguage::new(Language::English);
+        let script = r#"printf '{"summary":{"title":"%s"}}' "$MOSAIC_LANGUAGE""#;
+        let (_directory, plain) = language_runner(script, Language::English);
+        let runner = plain.with_language(shared.clone());
+        assert_eq!(runner.snapshot().unwrap().summary.title, "en");
+        shared.set(Language::BrazilianPortuguese);
+        assert_eq!(runner.snapshot().unwrap().summary.title, "pt-BR");
+    }
+
+    #[test]
+    fn failures_are_described_in_the_selected_language() {
+        let (_directory, runner) = language_runner("exec sleep 30", Language::English);
+        let message = runner.snapshot().unwrap_err().to_string();
+        assert!(message.contains("time limit"), "{message}");
+        let (_directory, runner) = language_runner("printf 'not json'", Language::English);
+        let message = runner.snapshot().unwrap_err().to_string();
+        assert!(message.contains("not a valid snapshot JSON"), "{message}");
     }
 }

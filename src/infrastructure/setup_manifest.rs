@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::domain::language::Language;
 use crate::domain::plugin_package::{PackageMetadata, PluginVersion};
 use crate::domain::plugin_setup::{
     AnswerKind, Choice, Condition, InheritRule, Note, Preset, PresetInput, Question, Requirement,
@@ -65,6 +66,7 @@ struct RawCondition {
 struct RawChoice {
     value: String,
     description: String,
+    description_en: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +76,7 @@ struct RawStep {
     name: Option<String>,
     flag: Option<String>,
     prompt: String,
+    prompt_en: Option<String>,
     #[serde(rename = "type")]
     answer_type: Option<String>,
     min: Option<u64>,
@@ -106,6 +109,7 @@ struct RawInherit {
 #[serde(deny_unknown_fields)]
 struct RawNote {
     text: String,
+    text_en: Option<String>,
     when: Option<RawCondition>,
 }
 
@@ -114,6 +118,7 @@ struct RawNote {
 struct RawPresetInput {
     name: String,
     prompt: String,
+    prompt_en: Option<String>,
     #[serde(default)]
     quote_list: bool,
 }
@@ -123,6 +128,7 @@ struct RawPresetInput {
 struct RawPreset {
     name: String,
     description: String,
+    description_en: Option<String>,
     id: Option<String>,
     #[serde(default)]
     arguments: BTreeMap<String, String>,
@@ -130,18 +136,36 @@ struct RawPreset {
     inputs: Vec<RawPresetInput>,
 }
 
+fn localized(portuguese: String, english: Option<String>, language: Language) -> String {
+    match (language, english) {
+        (Language::English, Some(english)) => english,
+        _ => portuguese,
+    }
+}
+
 pub fn read_manifest(path: &Path) -> Result<SetupManifest, ManifestError> {
-    read_manifest_with_version(path).map(|(manifest, _)| manifest)
+    read_manifest_in(path, Language::BrazilianPortuguese)
+}
+
+pub fn read_manifest_in(path: &Path, language: Language) -> Result<SetupManifest, ManifestError> {
+    read_manifest_with_version_in(path, language).map(|(manifest, _)| manifest)
 }
 
 pub fn read_manifest_with_version(
     path: &Path,
 ) -> Result<(SetupManifest, Option<PluginVersion>), ManifestError> {
+    read_manifest_with_version_in(path, Language::BrazilianPortuguese)
+}
+
+pub fn read_manifest_with_version_in(
+    path: &Path,
+    language: Language,
+) -> Result<(SetupManifest, Option<PluginVersion>), ManifestError> {
     let text = fs::read_to_string(path).map_err(|error| ManifestError::Unreadable {
         path: path.display().to_string(),
         reason: error.to_string(),
     })?;
-    parse_document(&text)
+    parse_document(&text, language)
         .map(|(manifest, metadata)| (manifest, metadata.map(|metadata| metadata.version)))
         .map_err(|reason| ManifestError::Invalid {
             path: path.display().to_string(),
@@ -156,16 +180,30 @@ pub struct PackageManifest {
 }
 
 pub fn parse_manifest(text: &str) -> Result<SetupManifest, String> {
-    parse_document(text).map(|(setup, _)| setup)
+    parse_manifest_in(text, Language::BrazilianPortuguese)
+}
+
+pub fn parse_manifest_in(text: &str, language: Language) -> Result<SetupManifest, String> {
+    parse_document(text, language).map(|(setup, _)| setup)
 }
 
 pub fn parse_package_manifest(text: &str) -> Result<PackageManifest, String> {
-    let (setup, metadata) = parse_document(text)?;
+    parse_package_manifest_in(text, Language::BrazilianPortuguese)
+}
+
+pub fn parse_package_manifest_in(
+    text: &str,
+    language: Language,
+) -> Result<PackageManifest, String> {
+    let (setup, metadata) = parse_document(text, language)?;
     let metadata = metadata.ok_or("plugin remoto precisa de version e min_mosaic_version")?;
     Ok(PackageManifest { setup, metadata })
 }
 
-fn parse_document(text: &str) -> Result<(SetupManifest, Option<PackageMetadata>), String> {
+fn parse_document(
+    text: &str,
+    language: Language,
+) -> Result<(SetupManifest, Option<PackageMetadata>), String> {
     let raw: RawManifest = toml::from_str(text).map_err(|error| error.message().to_string())?;
     let metadata = match (&raw.version, &raw.min_mosaic_version) {
         (None, None) => None,
@@ -178,10 +216,14 @@ fn parse_document(text: &str) -> Result<(SetupManifest, Option<PackageMetadata>)
     let steps = raw
         .steps
         .into_iter()
-        .map(convert_step)
+        .map(|step| convert_step(step, language))
         .collect::<Result<Vec<_>, _>>()?;
     ensure_conditions_point_backwards(&steps)?;
-    let presets: Vec<Preset> = raw.presets.into_iter().map(convert_preset).collect();
+    let presets: Vec<Preset> = raw
+        .presets
+        .into_iter()
+        .map(|preset| convert_preset(preset, language))
+        .collect();
     ensure_preset_flags_exist(&presets, &steps)?;
     Ok((
         SetupManifest {
@@ -200,7 +242,7 @@ fn parse_document(text: &str) -> Result<(SetupManifest, Option<PackageMetadata>)
             notes: raw
                 .notes
                 .into_iter()
-                .map(convert_note)
+                .map(|note| convert_note(note, language))
                 .collect::<Result<Vec<_>, _>>()?,
         },
         metadata,
@@ -229,10 +271,10 @@ fn convert_optional_condition(raw: Option<RawCondition>) -> Result<Option<Condit
     raw.map(convert_condition).transpose()
 }
 
-fn convert_step(raw: RawStep) -> Result<Step, String> {
+fn convert_step(raw: RawStep, language: Language) -> Result<Step, String> {
     match raw.kind.as_str() {
-        KIND_SECRET => convert_secret(raw).map(Step::Secret),
-        KIND_VARIABLE | KIND_ARGUMENT => convert_question(raw).map(Step::Question),
+        KIND_SECRET => convert_secret(raw, language).map(Step::Secret),
+        KIND_VARIABLE | KIND_ARGUMENT => convert_question(raw, language).map(Step::Question),
         other => Err(format!("tipo de passo desconhecido: {other}")),
     }
 }
@@ -248,13 +290,13 @@ fn requirement_of(
     }
 }
 
-fn convert_secret(raw: RawStep) -> Result<SecretQuestion, String> {
+fn convert_secret(raw: RawStep, language: Language) -> Result<SecretQuestion, String> {
     let environment_key = raw
         .environment_key
         .ok_or("passo secret precisa de environment_key")?;
     let file_key = raw.file_key.ok_or("passo secret precisa de file_key")?;
     Ok(SecretQuestion {
-        prompt: raw.prompt,
+        prompt: localized(raw.prompt, raw.prompt_en, language),
         environment_key,
         file_key,
         names_are_list: raw.list,
@@ -264,7 +306,7 @@ fn convert_secret(raw: RawStep) -> Result<SecretQuestion, String> {
     })
 }
 
-fn convert_question(raw: RawStep) -> Result<Question, String> {
+fn convert_question(raw: RawStep, language: Language) -> Result<Question, String> {
     let target = match (raw.kind.as_str(), raw.name, raw.flag) {
         (KIND_VARIABLE, Some(name), None) => Target::Variable(name),
         (KIND_ARGUMENT, None, Some(flag)) => Target::Argument(flag),
@@ -277,10 +319,11 @@ fn convert_question(raw: RawStep) -> Result<Question, String> {
         raw.max,
         raw.choices,
         target.key(),
+        language,
     )?;
     Ok(Question {
         target,
-        prompt: raw.prompt,
+        prompt: localized(raw.prompt, raw.prompt_en, language),
         kind,
         requirement: requirement_of(raw.required, raw.required_when)?,
         default: raw.default,
@@ -295,6 +338,7 @@ fn convert_kind(
     maximum: Option<u64>,
     choices: Vec<RawChoice>,
     key: &str,
+    language: Language,
 ) -> Result<AnswerKind, String> {
     match answer_type.unwrap_or(TYPE_TEXT) {
         TYPE_TEXT => Ok(AnswerKind::Text),
@@ -310,7 +354,7 @@ fn convert_kind(
                 .into_iter()
                 .map(|choice| Choice {
                     value: choice.value,
-                    description: choice.description,
+                    description: localized(choice.description, choice.description_en, language),
                 })
                 .collect(),
         )),
@@ -326,17 +370,17 @@ fn convert_inherit(raw: RawInherit) -> Result<InheritRule, String> {
     })
 }
 
-fn convert_note(raw: RawNote) -> Result<Note, String> {
+fn convert_note(raw: RawNote, language: Language) -> Result<Note, String> {
     Ok(Note {
-        text: raw.text,
+        text: localized(raw.text, raw.text_en, language),
         condition: convert_optional_condition(raw.when)?,
     })
 }
 
-fn convert_preset(raw: RawPreset) -> Preset {
+fn convert_preset(raw: RawPreset, language: Language) -> Preset {
     Preset {
         name: raw.name,
-        description: raw.description,
+        description: localized(raw.description, raw.description_en, language),
         widget_id: raw.id,
         arguments: raw.arguments.into_iter().collect(),
         inputs: raw
@@ -344,7 +388,7 @@ fn convert_preset(raw: RawPreset) -> Preset {
             .into_iter()
             .map(|input| PresetInput {
                 name: input.name,
-                prompt: input.prompt,
+                prompt: localized(input.prompt, input.prompt_en, language),
                 quote_list: input.quote_list,
             })
             .collect(),
@@ -628,5 +672,85 @@ prompt = "b"
         let error = read_manifest(Path::new("/nao/existe/setup.toml")).unwrap_err();
         assert!(matches!(error, ManifestError::Unreadable { .. }));
         assert!(error.to_string().contains("/nao/existe/setup.toml"));
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+
+    const BILINGUAL: &str = r#"
+plugin = "demo"
+script = "plugins/demo/demo.py"
+default_id = "demo"
+interval_seconds = 60
+timeout_seconds = 5
+
+[[steps]]
+kind = "variable"
+name = "DEMO_MODE"
+prompt = "Modo"
+prompt_en = "Mode"
+type = "choice"
+choices = [
+  { value = "a", description = "Primeiro", description_en = "First" },
+  { value = "b", description = "Segundo" },
+]
+
+[[notes]]
+text = "Aviso"
+text_en = "Notice"
+
+[[presets]]
+name = "quick"
+description = "Rápido"
+description_en = "Quick"
+"#;
+
+    fn first_prompt(manifest: &SetupManifest) -> &str {
+        match &manifest.steps[0] {
+            Step::Question(question) => &question.prompt,
+            Step::Secret(secret) => &secret.prompt,
+        }
+    }
+
+    #[test]
+    fn english_uses_the_english_fields() {
+        let manifest = parse_manifest_in(BILINGUAL, Language::English).unwrap();
+        assert_eq!(first_prompt(&manifest), "Mode");
+        assert_eq!(manifest.notes[0].text, "Notice");
+        assert_eq!(manifest.presets[0].description, "Quick");
+        match &manifest.steps[0] {
+            Step::Question(question) => match &question.kind {
+                AnswerKind::Choice(choices) => {
+                    assert_eq!(choices[0].description, "First");
+                    assert_eq!(choices[1].description, "Segundo");
+                }
+                other => panic!("{other:?}"),
+            },
+            Step::Secret(_) => panic!("expected a question"),
+        }
+    }
+
+    #[test]
+    fn portuguese_keeps_the_original_fields() {
+        let manifest = parse_manifest_in(BILINGUAL, Language::BrazilianPortuguese).unwrap();
+        assert_eq!(first_prompt(&manifest), "Modo");
+        assert_eq!(manifest.notes[0].text, "Aviso");
+        assert_eq!(manifest.presets[0].description, "Rápido");
+    }
+
+    #[test]
+    fn a_manifest_with_only_the_old_fields_works_in_both_languages() {
+        let old = BILINGUAL
+            .replace("prompt_en = \"Mode\"\n", "")
+            .replace(", description_en = \"First\"", "")
+            .replace("text_en = \"Notice\"\n", "")
+            .replace("description_en = \"Quick\"\n", "");
+        for language in [Language::English, Language::BrazilianPortuguese] {
+            let manifest = parse_manifest_in(&old, language).unwrap();
+            assert_eq!(first_prompt(&manifest), "Modo");
+            assert_eq!(manifest.notes[0].text, "Aviso");
+        }
     }
 }

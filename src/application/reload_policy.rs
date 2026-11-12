@@ -1,5 +1,8 @@
+use crate::domain::language::Language;
+
 const LLM_SECTION_LABEL: &str = "[llm]";
-const POMODORO_SECTION_LABEL: &str = "[pomodoro]/notificações";
+const POMODORO_SECTION_ENGLISH_LABEL: &str = "[pomodoro]/notifications";
+const POMODORO_SECTION_PORTUGUESE_LABEL: &str = "[pomodoro]/notificações";
 const UPDATE_SECTION_LABEL: &str = "[update]";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -10,13 +13,16 @@ pub struct RestartSections {
 }
 
 impl RestartSections {
-    pub fn labels(&self) -> Vec<&'static str> {
+    pub fn labels(&self, language: Language) -> Vec<&'static str> {
         let mut labels = Vec::new();
         if self.llm_changed {
             labels.push(LLM_SECTION_LABEL);
         }
         if self.pomodoro_changed {
-            labels.push(POMODORO_SECTION_LABEL);
+            labels.push(match language {
+                Language::English => POMODORO_SECTION_ENGLISH_LABEL,
+                Language::BrazilianPortuguese => POMODORO_SECTION_PORTUGUESE_LABEL,
+            });
         }
         if self.update_changed {
             labels.push(UPDATE_SECTION_LABEL);
@@ -31,7 +37,9 @@ mod tests {
 
     #[test]
     fn no_change_has_no_labels() {
-        assert!(RestartSections::default().labels().is_empty());
+        assert!(RestartSections::default()
+            .labels(Language::BrazilianPortuguese)
+            .is_empty());
     }
 
     #[test]
@@ -42,8 +50,12 @@ mod tests {
             update_changed: true,
         };
         assert_eq!(
-            all.labels(),
+            all.labels(Language::BrazilianPortuguese),
             vec!["[llm]", "[pomodoro]/notificações", "[update]"]
+        );
+        assert_eq!(
+            all.labels(Language::English),
+            vec!["[llm]", "[pomodoro]/notifications", "[update]"]
         );
     }
 }
