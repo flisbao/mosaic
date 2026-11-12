@@ -1,4 +1,4 @@
-version = "0.0.4"
+version = "0.0.5"
 min_mosaic_version = "0.0.10"
 plugin = "azure-devops"
 script = "plugins/azure-devops/azure_devops.py"
@@ -11,31 +11,35 @@ testing_only = ["AZDO_BASE_URL", "AZDO_LOGIN_URL", "AZDO_IMDS_URL"]
 kind = "variable"
 name = "AZDO_ORGANIZATION"
 prompt = "Nome da organização do Azure DevOps (só o nome, sem URL)"
+prompt_en = "Azure DevOps organization name (just the name, no URL)"
 required = true
 
 [[steps]]
 kind = "variable"
 name = "AZDO_PROJECTS"
 prompt = "Projetos, sem diferenciar maiúsculas de minúsculas (Enter = todos os projetos da organização)"
+prompt_en = "Projects, case-insensitive (Enter = every project of the organization)"
 type = "list"
 
 [[steps]]
 kind = "variable"
 name = "AZDO_AUTH_METHOD"
 prompt = "Como o widget se autentica no Entra"
+prompt_en = "How the widget authenticates with Entra"
 type = "choice"
 default = "azure-cli"
 choices = [
-  { value = "azure-cli", description = "usa o az login da sua máquina (padrão)" },
-  { value = "device-code", description = "login uma vez no terminal, com um app registrado no Entra" },
-  { value = "service-principal", description = "automação fora do Azure, com o segredo de um app" },
-  { value = "managed-identity", description = "Mosaic rodando numa VM do Azure" },
+  { value = "azure-cli", description = "usa o az login da sua máquina (padrão)", description_en = "uses the az login of your machine (default)" },
+  { value = "device-code", description = "login uma vez no terminal, com um app registrado no Entra", description_en = "log in once in the terminal, with an app registered in Entra" },
+  { value = "service-principal", description = "automação fora do Azure, com o segredo de um app", description_en = "automation outside Azure, with an app secret" },
+  { value = "managed-identity", description = "Mosaic rodando numa VM do Azure", description_en = "Mosaic running on an Azure VM" },
 ]
 
 [[steps]]
 kind = "variable"
 name = "AZDO_TENANT_ID"
 prompt = "Directory (tenant) ID (padrão: organizations)"
+prompt_en = "Directory (tenant) ID (default: organizations)"
 when = { variable = "AZDO_AUTH_METHOD", in = ["azure-cli", "device-code", "service-principal"] }
 required_when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
 
@@ -43,12 +47,14 @@ required_when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
 kind = "variable"
 name = "AZDO_CLIENT_ID"
 prompt = "Application (client) ID do app registrado no Entra (na managed-identity, só para identidade atribuída pelo usuário)"
+prompt_en = "Application (client) ID of the app registered in Entra (with managed-identity, only for a user-assigned identity)"
 when = { variable = "AZDO_AUTH_METHOD", in = ["device-code", "service-principal", "managed-identity"] }
 required_when = { variable = "AZDO_AUTH_METHOD", in = ["device-code", "service-principal"] }
 
 [[steps]]
 kind = "secret"
 prompt = "Segredo do app registrado no Entra"
+prompt_en = "Secret of the app registered in Entra"
 environment_key = "AZDO_CLIENT_SECRET_ENV"
 file_key = "AZDO_CLIENT_SECRET_FILE"
 required = true
@@ -58,12 +64,14 @@ when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
 kind = "variable"
 name = "AZDO_TITLE"
 prompt = "Título do widget"
+prompt_en = "Widget title"
 default = "Azure DevOps"
 
 [[steps]]
 kind = "variable"
 name = "AZDO_CREDENTIALS_DIR"
 prompt = "Pasta (0700) do refresh token do device-code"
+prompt_en = "Folder (0700) of the device-code refresh token"
 default = "~/.local/state/mosaic/azure-devops-credentials"
 advanced = true
 when = { variable = "AZDO_AUTH_METHOD", in = ["device-code"] }
@@ -72,21 +80,26 @@ when = { variable = "AZDO_AUTH_METHOD", in = ["device-code"] }
 kind = "variable"
 name = "AZDO_STATE_DIR"
 prompt = "Pasta do estado do widget (memória de revisões e cache offline)"
+prompt_en = "Widget state folder (review memory and offline cache)"
 default = "~/.local/state/mosaic/azure-devops"
 advanced = true
 
 [[notes]]
 text = "azure-cli: o mosaic precisa achar o az no PATH e ler ~/.azure; se você usa AZURE_CONFIG_DIR, liste-a em inherit_env."
+text_en = "azure-cli: mosaic must find az in PATH and read ~/.azure; if you use AZURE_CONFIG_DIR, list it in inherit_env."
 when = { variable = "AZDO_AUTH_METHOD", in = ["azure-cli"] }
 
 [[notes]]
 text = "device-code: rode o login uma vez, no terminal, com as mesmas variáveis do widget: python3 ~/.config/mosaic/plugins/azure-devops/azure_devops.py login"
+text_en = "device-code: run the login once, in the terminal, with the same variables as the widget: python3 ~/.config/mosaic/plugins/azure-devops/azure_devops.py login"
 when = { variable = "AZDO_AUTH_METHOD", in = ["device-code"] }
 
 [[notes]]
 text = "service-principal: exporte a variável do segredo antes de abrir o mosaic; o valor nunca vai para o mosaic.toml."
+text_en = "service-principal: export the secret variable before opening mosaic; the value never goes into mosaic.toml."
 when = { variable = "AZDO_AUTH_METHOD", in = ["service-principal"] }
 
 [[notes]]
 text = "managed-identity só funciona numa VM do Azure (IMDS)."
+text_en = "managed-identity only works on an Azure VM (IMDS)."
 when = { variable = "AZDO_AUTH_METHOD", in = ["managed-identity"] }

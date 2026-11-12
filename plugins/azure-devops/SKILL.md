@@ -11,6 +11,8 @@ description: Use quando for configurar, depurar ou alterar o widget de pull requ
 
 > Instalada por `mosaic plugins install` (junto com o plugin, em `~/.config/mosaic/plugins/azure-devops/`), os caminhos `plugins/...` são os de `~/.config/mosaic/`. A pasta `plugins/tests/` (servidores falsos e testes) e a seção "Mexendo no código" só valem com o repositório clonado.
 
+O idioma do texto fixo do widget segue `MOSAIC_LANGUAGE` (`en` por padrão ou `pt-BR`), que o Mosaic repassa a cada execução; dados do serviço não são traduzidos.
+
 ## Instalar e configurar com o mosaic plugins
 
 Passos que a pessoa roda no terminal dela (agente: não rode o `setup` por ela, ele é interativo):

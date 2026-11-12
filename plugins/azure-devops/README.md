@@ -178,3 +178,7 @@ Com a sua conta, em um projeto de teste:
 2. Peça mudança (vote para esperar pelo autor) e faça o autor enviar um push: aparece `push novo`.
 3. Aprove o PR: ele some da lista.
 4. Abra um PR seu: aparece `aguardando` em **Meus PRs**.
+
+## Idioma
+
+O texto fixo do widget segue a variável `MOSAIC_LANGUAGE`, que o Mosaic passa a cada execução: `en` (o padrão, também usado quando a variável falta) ou `pt-BR`. Dados que vêm do serviço nunca são traduzidos.

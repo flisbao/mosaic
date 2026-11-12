@@ -2,6 +2,8 @@ import io
 import json
 import os
 import subprocess
+import re
+import string
 import sys
 import tempfile
 import types
@@ -24,8 +26,12 @@ MINE = azure_devops.MINE_SECTION
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 
+PORTUGUESE = "pt-BR"
+azure_devops.use_language({"MOSAIC_LANGUAGE": PORTUGUESE})
+
+
 def base_environment(**overrides):
-    environment = {"AZDO_ORGANIZATION": ORGANIZATION}
+    environment = {"AZDO_ORGANIZATION": ORGANIZATION, "MOSAIC_LANGUAGE": PORTUGUESE}
     environment.update(overrides)
     return {key: value for key, value in environment.items() if value is not None}
 
@@ -689,6 +695,57 @@ class FakeServersTests(unittest.TestCase):
         self.assertEqual(self.stdout.getvalue(), "")
         self.assertTrue(self.stderr.getvalue().startswith("erro: "))
         self.assertNotIn("segredo-errado", self.stderr.getvalue())
+
+
+class LanguageTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(azure_devops.use_language, {"MOSAIC_LANGUAGE": PORTUGUESE})
+
+    def test_portuguese_is_chosen_by_any_value_starting_with_pt(self):
+        for value in ("pt-BR", "pt", "PT_br", " pt_BR.UTF-8 "):
+            self.assertEqual(azure_devops.use_language({"MOSAIC_LANGUAGE": value}), "pt-BR", value)
+            self.assertEqual(azure_devops.tr(azure_devops.EMPTY_TEXT), "nada pendente")
+
+    def test_english_is_the_default_and_the_system_locale_is_ignored(self):
+        for environment in ({}, {"MOSAIC_LANGUAGE": ""}, {"MOSAIC_LANGUAGE": "fr"}, {"LANG": "pt_BR.UTF-8"}):
+            self.assertEqual(azure_devops.use_language(environment), "en", environment)
+            self.assertEqual(azure_devops.tr(azure_devops.EMPTY_TEXT), "nothing pending")
+
+    def test_every_translation_keeps_its_placeholders_and_differs(self):
+        formatter = string.Formatter()
+
+        def placeholders(template):
+            return {name for _, name, _, _ in formatter.parse(template) if name is not None}
+
+        for portuguese, english in azure_devops.TRANSLATIONS.items():
+            self.assertTrue(english.strip(), portuguese)
+            self.assertEqual(placeholders(portuguese), placeholders(english), portuguese)
+            self.assertNotEqual(portuguese, english)
+
+    def test_every_translated_literal_of_the_source_has_an_entry(self):
+        source = Path(azure_devops.__file__).read_text(encoding="utf-8")
+        for literal in re.findall(r'tr\(\s*"((?:[^"\\]|\\.)*)"', source):
+            self.assertIn(literal, azure_devops.TRANSLATIONS, literal)
+
+    def test_the_english_snapshot_uses_english_headings_and_tags(self):
+        azure_devops.use_language({})
+        pull = azure_devops.PullRequest(
+            item_id="1", repository="r", reference="#1", title="Fix", author="ana",
+            created_at=NOW, url="https://x", target_branch="main", head_commit="h",
+            section=azure_devops.REVIEW_SECTION, state=azure_devops.STATE_NEW,
+        )
+        snapshot = azure_devops.build_snapshot([pull], "Azure DevOps", NOW)
+        self.assertEqual([item["heading"] for item in snapshot["detail"]], ["Awaiting my review", "My PRs"])
+        self.assertEqual(snapshot["summary"]["blocks"][1]["rows"][0]["tags"][0]["text"], "new")
+        self.assertEqual(snapshot["alerts"][0]["title"], "Review requested: r #1")
+
+    def test_usage_and_errors_are_in_english_without_the_variable(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        self.assertEqual(azure_devops.main(["bogus"], environ={}, stdout=stdout, stderr=stderr), 2)
+        self.assertEqual(stderr.getvalue(), "usage: azure_devops.py snapshot|login\n")
+        stderr = io.StringIO()
+        self.assertEqual(azure_devops.main(["snapshot"], environ={}, stdout=stdout, stderr=stderr), 1)
+        self.assertTrue(stderr.getvalue().startswith("error: "), stderr.getvalue())
 
 
 if __name__ == "__main__":

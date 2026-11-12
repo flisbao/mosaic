@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPException
@@ -503,7 +504,7 @@ class EntraAuthError(AuthError):
 
 class AuthorizationPendingError(UnexpectedResponseError):
     def __init__(self, slow_down: bool):
-        super().__init__("a autorização do dispositivo ainda está pendente")
+        super().__init__(tr("a autorização do dispositivo ainda está pendente"))
         self.slow_down = slow_down
 
 
@@ -539,13 +540,13 @@ def load_entra_config(environ: Mapping[str, str]) -> EntraConfig:
 
 def _reject_legacy_token(environ: Mapping[str, str]) -> None:
     if any(environ.get(variable, "").strip() for variable in LEGACY_TOKEN_VARIABLES):
-        raise ConfigError(LEGACY_TOKEN_MESSAGE)
+        raise ConfigError(tr(LEGACY_TOKEN_MESSAGE))
 
 
 def _read_identifier(environ: Mapping[str, str], variable: str, default: str) -> str:
     value = environ.get(variable, "").strip() or default
     if value and IDENTIFIER_PATTERN.fullmatch(value) is None:
-        raise ConfigError(f"{variable} contém caracteres inválidos")
+        raise ConfigError(tr("{variable} contém caracteres inválidos", variable=variable))
     return value
 
 
@@ -553,14 +554,20 @@ def _complete_for_method(config: EntraConfig, environ: Mapping[str, str]) -> Ent
     needs_client = config.method in (AUTH_METHOD_DEVICE_CODE, AUTH_METHOD_SERVICE_PRINCIPAL)
     if needs_client and not config.client_id:
         raise ConfigError(
-            f"defina {CLIENT_ID_VARIABLE} com o Application (client) ID do app registrado no Entra"
+            tr(
+                "defina {variable} com o Application (client) ID do app registrado no Entra",
+                variable=CLIENT_ID_VARIABLE,
+            )
         )
     if config.method != AUTH_METHOD_SERVICE_PRINCIPAL:
         return config
     if config.tenant in UNSPECIFIC_TENANTS:
         raise ConfigError(
-            f"defina {TENANT_VARIABLE} com o Directory (tenant) ID; "
-            f"'{DEFAULT_TENANT}' e 'common' não servem ao service principal"
+            tr(
+                "defina {variable} com o Directory (tenant) ID; '{default}' e 'common' não servem ao service principal",
+                variable=TENANT_VARIABLE,
+                default=DEFAULT_TENANT,
+            )
         )
     secret = read_secret(environ, CLIENT_SECRET_VARIABLE_KEY, CLIENT_SECRET_FILE_KEY)
     return replace(config, client_secret=secret)
@@ -569,7 +576,9 @@ def _complete_for_method(config: EntraConfig, environ: Mapping[str, str]) -> Ent
 def read_secret(environ: Mapping[str, str], variable_key: str, file_key: str) -> str:
     value = _read_secret_source(environ, variable_key, file_key)
     if _has_unsafe_characters(value):
-        raise ConfigError(f"o segredo de {variable_key}/{file_key} contém caracteres inválidos")
+        raise ConfigError(
+            tr("o segredo de {variable_key}/{file_key} contém caracteres inválidos", variable_key=variable_key, file_key=file_key)
+        )
     return value
 
 
@@ -578,21 +587,25 @@ def _read_secret_source(environ: Mapping[str, str], variable_key: str, file_key:
     if variable:
         value = environ.get(variable, "").strip()
         if not value:
-            raise ConfigError(f"a variável {variable} ({variable_key}) está vazia ou ausente")
+            raise ConfigError(
+                tr("a variável {variable} ({variable_key}) está vazia ou ausente", variable=variable, variable_key=variable_key)
+            )
         return value
     path = environ.get(file_key, "").strip()
     if path:
         return _read_secret_file(path, file_key)
-    raise ConfigError(f"defina {variable_key} (nome da variável com o segredo) ou {file_key}")
+    raise ConfigError(
+        tr("defina {variable_key} (nome da variável com o segredo) ou {file_key}", variable_key=variable_key, file_key=file_key)
+    )
 
 
 def _read_secret_file(path: str, file_key: str) -> str:
     try:
         value = Path(path).expanduser().read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
-        raise ConfigError(f"não foi possível ler o arquivo de {file_key}") from None
+        raise ConfigError(tr("não foi possível ler o arquivo de {file_key}", file_key=file_key)) from None
     if not value:
-        raise ConfigError(f"o arquivo de {file_key} está vazio")
+        raise ConfigError(tr("o arquivo de {file_key} está vazio", file_key=file_key))
     return value
 
 
@@ -608,19 +621,19 @@ def _has_unsafe_characters(value: str) -> bool:
 
 def bearer_authorization(token: str) -> str:
     if _has_unsafe_characters(token):
-        raise ConfigError("o token de acesso recebido contém caracteres inválidos")
+        raise ConfigError(tr("o token de acesso recebido contém caracteres inválidos"))
     return BEARER_PREFIX + token
 
 
 def decode_entra_response(status: int, body: bytes) -> dict:
     if status == HTTP_TOO_MANY_REQUESTS:
-        raise RateLimitError("limite de requisições do Entra; tento de novo na próxima leitura")
+        raise RateLimitError(tr("limite de requisições do Entra; tento de novo na próxima leitura"))
     if status >= HTTP_SERVER_ERROR_FLOOR:
-        raise NetworkError(f"o Entra está indisponível (HTTP {status})")
+        raise NetworkError(tr("o Entra está indisponível (HTTP {status})", status=status))
     payload = _parse_json_object(body)
     if status == HTTP_OK:
         if payload is None:
-            raise UnexpectedResponseError("a resposta do Entra não é um objeto JSON")
+            raise UnexpectedResponseError(tr("a resposta do Entra não é um objeto JSON"))
         return payload
     _raise_for_entra_error(status, payload or {})
 
@@ -638,17 +651,17 @@ def _raise_for_entra_error(status: int, payload: dict) -> None:
     if code in (PENDING_ERROR_CODE, SLOW_DOWN_ERROR_CODE):
         raise AuthorizationPendingError(slow_down=code == SLOW_DOWN_ERROR_CODE)
     if isinstance(code, str) and code in ENTRA_ERROR_MESSAGES:
-        raise EntraAuthError(ENTRA_ERROR_MESSAGES[code], code)
+        raise EntraAuthError(tr(ENTRA_ERROR_MESSAGES[code]), code)
     if ENTRA_CLIENT_ERROR_FLOOR <= status < HTTP_SERVER_ERROR_FLOOR:
-        raise EntraAuthError(ENTRA_REQUEST_REFUSED_MESSAGE, code="")
-    raise UnexpectedResponseError(f"resposta inesperada do Entra (HTTP {status})")
+        raise EntraAuthError(tr(ENTRA_REQUEST_REFUSED_MESSAGE), code="")
+    raise UnexpectedResponseError(tr("resposta inesperada do Entra (HTTP {status})", status=status))
 
 
 def _send_to_entra(http, url: str, method: str, headers: dict, body: bytes | None, timeout: int) -> dict:
     try:
         status, payload = http(url, method, headers, body, timeout)
     except (OSError, HTTPException):
-        raise NetworkError("falha de rede ao falar com o Entra") from None
+        raise NetworkError(tr("falha de rede ao falar com o Entra")) from None
     return decode_entra_response(status, payload)
 
 
@@ -669,7 +682,7 @@ def _device_code_url(config: EntraConfig) -> str:
 def _read_access_token(payload: dict) -> str:
     token = payload.get(ACCESS_TOKEN_KEY)
     if not isinstance(token, str) or not token:
-        raise UnexpectedResponseError("a resposta do Entra não traz o token de acesso")
+        raise UnexpectedResponseError(tr("a resposta do Entra não traz o token de acesso"))
     return token
 
 
@@ -681,13 +694,13 @@ class AzureCliTokenProvider:
     def access_token(self) -> str:
         completed = self._run_azure_cli()
         if completed.returncode != 0:
-            raise AuthError("o az não tem sessão válida; rode az login")
+            raise AuthError(tr("o az não tem sessão válida; rode az login"))
         try:
             token = json.loads(completed.stdout).get("accessToken")
         except (ValueError, TypeError, AttributeError):
             token = None
         if not isinstance(token, str) or not token:
-            raise UnexpectedResponseError("resposta inesperada do az")
+            raise UnexpectedResponseError(tr("resposta inesperada do az"))
         return token
 
     def _run_azure_cli(self):
@@ -702,13 +715,18 @@ class AzureCliTokenProvider:
             )
         except FileNotFoundError:
             raise ConfigError(
-                f"Azure CLI ({AZURE_CLI_EXECUTABLE}) não encontrado; "
-                f"instale-o ou escolha outro {AUTH_METHOD_VARIABLE}"
+                tr(
+                    "Azure CLI ({executable}) não encontrado; instale-o ou escolha outro {variable}",
+                    executable=AZURE_CLI_EXECUTABLE,
+                    variable=AUTH_METHOD_VARIABLE,
+                )
             ) from None
         except subprocess.TimeoutExpired:
-            raise NetworkError("o az demorou demais para responder") from None
+            raise NetworkError(tr("o az demorou demais para responder")) from None
         except OSError:
-            raise ConfigError(f"não foi possível executar o Azure CLI ({AZURE_CLI_EXECUTABLE})") from None
+            raise ConfigError(
+                tr("não foi possível executar o Azure CLI ({executable})", executable=AZURE_CLI_EXECUTABLE)
+            ) from None
 
     def _command(self) -> list[str]:
         command = [
@@ -753,7 +771,7 @@ class ManagedIdentityTokenProvider:
             )
         except NetworkError:
             raise NetworkError(
-                "IMDS indisponível; managed-identity só funciona numa VM do Azure"
+                tr("IMDS indisponível; managed-identity só funciona numa VM do Azure")
             ) from None
         return _read_access_token(payload)
 
@@ -774,8 +792,8 @@ class CredentialStore:
     def load_refresh_token(self) -> str | None:
         if not self._path.exists():
             return None
-        self._require_private(self._directory, DIRECTORY_NOT_PRIVATE_MESSAGE)
-        self._require_private(self._path, FILE_NOT_PRIVATE_MESSAGE)
+        self._require_private(self._directory, tr(DIRECTORY_NOT_PRIVATE_MESSAGE))
+        self._require_private(self._path, tr(FILE_NOT_PRIVATE_MESSAGE))
         try:
             document = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -788,13 +806,13 @@ class CredentialStore:
         try:
             self._write_private(json.dumps({REFRESH_TOKEN_KEY: token}))
         except OSError:
-            raise ConfigError(CREDENTIAL_WRITE_FAILED_MESSAGE) from None
+            raise ConfigError(tr(CREDENTIAL_WRITE_FAILED_MESSAGE)) from None
 
     def delete(self) -> None:
         try:
             self._path.unlink(missing_ok=True)
         except OSError:
-            raise ConfigError(CREDENTIAL_DELETE_FAILED_MESSAGE) from None
+            raise ConfigError(tr(CREDENTIAL_DELETE_FAILED_MESSAGE)) from None
 
     def ensure_private_directory(self) -> None:
         try:
@@ -831,7 +849,7 @@ class DeviceCodeTokenProvider:
     def access_token(self) -> str:
         refresh_token = self._store.load_refresh_token()
         if refresh_token is None:
-            raise AuthError(LOGIN_REQUIRED_MESSAGE)
+            raise AuthError(tr(LOGIN_REQUIRED_MESSAGE))
         payload = self._refresh(refresh_token)
         self._remember_rotated_token(payload)
         return _read_access_token(payload)
@@ -849,7 +867,7 @@ class DeviceCodeTokenProvider:
             if error.code != INVALID_GRANT_ERROR_CODE:
                 raise
             self._store.delete()
-            raise AuthError(LOGIN_REQUIRED_MESSAGE) from None
+            raise AuthError(tr(LOGIN_REQUIRED_MESSAGE)) from None
 
     def _remember_rotated_token(self, payload: dict) -> None:
         rotated = payload.get(REFRESH_TOKEN_KEY)
@@ -859,7 +877,7 @@ class DeviceCodeTokenProvider:
 
 def run_device_code_login(config: EntraConfig, http, sleep, stderr) -> None:
     if config.method != AUTH_METHOD_DEVICE_CODE:
-        raise ConfigError(LOGIN_ONLY_FOR_DEVICE_CODE_MESSAGE)
+        raise ConfigError(tr(LOGIN_ONLY_FOR_DEVICE_CODE_MESSAGE))
     store = CredentialStore(config)
     store.ensure_private_directory()
     grant = _post_form(
@@ -871,9 +889,9 @@ def run_device_code_login(config: EntraConfig, http, sleep, stderr) -> None:
     payload = _poll_for_authorization(config, http, sleep, grant)
     refresh_token = payload.get(REFRESH_TOKEN_KEY)
     if not isinstance(refresh_token, str) or not refresh_token:
-        raise UnexpectedResponseError("o Entra não devolveu o refresh token do login")
+        raise UnexpectedResponseError(tr("o Entra não devolveu o refresh token do login"))
     store.save_refresh_token(refresh_token)
-    print(LOGIN_DONE_MESSAGE, file=stderr)
+    print(tr(LOGIN_DONE_MESSAGE), file=stderr)
 
 
 def _printable(value: object) -> str:
@@ -884,7 +902,7 @@ def _printable(value: object) -> str:
 def _poll_for_authorization(config: EntraConfig, http, sleep, grant: dict) -> dict:
     device_code = grant.get("device_code")
     if not isinstance(device_code, str) or not device_code:
-        raise UnexpectedResponseError("a resposta do Entra não traz o código do dispositivo")
+        raise UnexpectedResponseError(tr("a resposta do Entra não traz o código do dispositivo"))
     interval = _bounded_seconds(grant.get("interval"), DEFAULT_POLL_INTERVAL_SECONDS, MAXIMUM_POLL_INTERVAL_SECONDS)
     lifetime = _bounded_seconds(
         grant.get("expires_in"), DEFAULT_DEVICE_CODE_LIFETIME_SECONDS, MAXIMUM_DEVICE_CODE_LIFETIME_SECONDS
@@ -924,6 +942,122 @@ def token_provider_for(config: EntraConfig, http, run_command) -> TokenProvider:
 
 
 # --- entra-auth: fim ---
+
+
+LANGUAGE_VARIABLE = "MOSAIC_LANGUAGE"
+LANGUAGE_ENGLISH = "en"
+LANGUAGE_PORTUGUESE = "pt-BR"
+PORTUGUESE_LANGUAGE_PREFIX = "pt"
+TRANSLATIONS = {
+    IDENTITY_NOT_IN_ORGANIZATION_MESSAGE: "the identity was not added to the organization in Azure DevOps (Organization settings > Users)",
+    ORGANIZATION_NOT_FOUND_MESSAGE: "organization not found in Azure DevOps; check AZDO_ORGANIZATION",
+    "erro: ": "error: ",
+    LOGIN_REQUIRED_MESSAGE: f"no Entra login; run: {LOGIN_INSTRUCTION}",
+    LOGIN_DONE_MESSAGE: "login completed",
+    ENTRA_REQUEST_REFUSED_MESSAGE: "Entra refused the token request",
+    DIRECTORY_NOT_PRIVATE_MESSAGE: f"the folder of {CREDENTIALS_DIRECTORY_VARIABLE} must be private (chmod 700)",
+    FILE_NOT_PRIVATE_MESSAGE: "the Entra credential file must be private (chmod 600)",
+    CREDENTIAL_WRITE_FAILED_MESSAGE: "could not write the Entra login credential",
+    CREDENTIAL_DELETE_FAILED_MESSAGE: "could not remove the Entra login credential",
+    LOGIN_ONLY_FOR_DEVICE_CODE_MESSAGE: f"login is only used with {AUTH_METHOD_VARIABLE}={AUTH_METHOD_DEVICE_CODE}",
+    LEGACY_TOKEN_MESSAGE: (
+        "PAT is no longer supported in Azure DevOps; set "
+        f"{AUTH_METHOD_VARIABLE} ({', '.join(AUTH_METHODS[:-1])} or {AUTH_METHODS[-1]}), "
+        "see plugins/azure-devops/README.md"
+    ),
+    "o Entra recusou o client id ou o segredo do app": "Entra refused the app client id or secret",
+    "o app não tem permissão para esse fluxo no Entra": "the app is not allowed to use this flow in Entra",
+    "o login do Entra venceu ou foi revogado": "the Entra login expired or was revoked",
+    "o app não tem o escopo do Azure DevOps no Entra": "the app does not have the Azure DevOps scope in Entra",
+    "o Entra exige consentimento ou login interativo": "Entra requires consent or an interactive login",
+    "o Entra exige consentimento do administrador para o app": "Entra requires administrator consent for the app",
+    "o código do dispositivo venceu antes da autorização": "the device code expired before authorization",
+    "a autorização do dispositivo foi recusada": "the device authorization was declined",
+    "o código do dispositivo é inválido": "the device code is invalid",
+    "a autorização do dispositivo ainda está pendente": "the device authorization is still pending",
+    "{variable} precisa ser https ou um endereço local de teste": "{variable} must be https or a local test address",
+    "a resposta do {service} excede o tamanho máximo permitido": "the {service} response exceeds the maximum allowed size",
+    "{variable} contém caracteres inválidos": "{variable} contains invalid characters",
+    "defina {variable} com o Application (client) ID do app registrado no Entra": "set {variable} to the Application (client) ID of the app registered in Entra",
+    "defina {variable} com o Directory (tenant) ID; '{default}' e 'common' não servem ao service principal": "set {variable} to the Directory (tenant) ID; '{default}' and 'common' do not work for the service principal",
+    "o segredo de {variable_key}/{file_key} contém caracteres inválidos": "the secret from {variable_key}/{file_key} contains invalid characters",
+    "a variável {variable} ({variable_key}) está vazia ou ausente": "the variable {variable} ({variable_key}) is empty or missing",
+    "defina {variable_key} (nome da variável com o segredo) ou {file_key}": "set {variable_key} (name of the variable holding the secret) or {file_key}",
+    "não foi possível ler o arquivo de {file_key}": "could not read the file from {file_key}",
+    "o arquivo de {file_key} está vazio": "the file from {file_key} is empty",
+    "o token de acesso recebido contém caracteres inválidos": "the received access token contains invalid characters",
+    "limite de requisições do Entra; tento de novo na próxima leitura": "Entra rate limit reached; will try again on the next refresh",
+    "o Entra está indisponível (HTTP {status})": "Entra is unavailable (HTTP {status})",
+    "a resposta do Entra não é um objeto JSON": "the Entra response is not a JSON object",
+    "resposta inesperada do Entra (HTTP {status})": "unexpected response from Entra (HTTP {status})",
+    "falha de rede ao falar com o Entra": "network failure while talking to Entra",
+    "a resposta do Entra não traz o token de acesso": "the Entra response has no access token",
+    "o az não tem sessão válida; rode az login": "az has no valid session; run az login",
+    "resposta inesperada do az": "unexpected response from az",
+    "Azure CLI ({executable}) não encontrado; instale-o ou escolha outro {variable}": "Azure CLI ({executable}) not found; install it or choose another {variable}",
+    "o az demorou demais para responder": "az took too long to answer",
+    "não foi possível executar o Azure CLI ({executable})": "could not run the Azure CLI ({executable})",
+    "IMDS indisponível; managed-identity só funciona numa VM do Azure": "IMDS unavailable; managed-identity only works on an Azure VM",
+    "o Entra não devolveu o refresh token do login": "Entra did not return the login refresh token",
+    "a resposta do Entra não traz o código do dispositivo": "the Entra response has no device code",
+    "resposta inesperada do {service} (HTTP {status})": "unexpected response from {service} (HTTP {status})",
+    "a resposta do {service} não é JSON": "the {service} response is not JSON",
+    "token inválido ou sem permissão para {service}": "invalid token or missing permission for {service}",
+    "limite de requisições do {service}; tento de novo na próxima leitura": "{service} rate limit reached; will try again on the next refresh",
+    "o {service} recusou a requisição (HTTP {status}); confira a configuração do widget": "{service} rejected the request (HTTP {status}); check the widget configuration",
+    "falha de rede ao falar com {service} ({error_type})": "network failure while talking to {service} ({error_type})",
+    "resposta inesperada do {service}": "unexpected response from {service}",
+}
+_ENGLISH_ACTIVE: ContextVar[bool] = ContextVar("azure_devops_english", default=True)
+
+
+def use_language(environ: Mapping[str, str]) -> str:
+    requested = environ.get(LANGUAGE_VARIABLE, "").strip().lower()
+    is_portuguese = requested.startswith(PORTUGUESE_LANGUAGE_PREFIX)
+    _ENGLISH_ACTIVE.set(not is_portuguese)
+    return LANGUAGE_PORTUGUESE if is_portuguese else LANGUAGE_ENGLISH
+
+
+def tr(portuguese: str, **parameters: object) -> str:
+    text = TRANSLATIONS[portuguese] if _ENGLISH_ACTIVE.get() else portuguese
+    return text.format(**parameters) if parameters else text
+
+
+
+def decode_response(status: int, body: bytes, service: str) -> object:
+    if status == HTTP_UNAUTHORIZED:
+        raise AuthError(_auth_message(service))
+    if status == HTTP_FORBIDDEN:
+        if RATE_LIMIT_MARKER in body.lower():
+            raise RateLimitError(_rate_limit_message(service))
+        raise AuthError(_auth_message(service))
+    if status == HTTP_TOO_MANY_REQUESTS:
+        raise RateLimitError(_rate_limit_message(service))
+    if status in REJECTED_STATUSES:
+        raise RequestRejectedError(_rejected_message(service, status))
+    if status >= HTTP_REDIRECT_FLOOR:
+        raise UnexpectedResponseError(tr("resposta inesperada do {service} (HTTP {status})", service=service, status=status))
+    try:
+        return json.loads(body)
+    except ValueError:
+        raise UnexpectedResponseError(tr("a resposta do {service} não é JSON", service=service)) from None
+
+
+def _auth_message(service: str) -> str:
+    return tr("token inválido ou sem permissão para {service}", service=service)
+
+
+def _rate_limit_message(service: str) -> str:
+    return tr("limite de requisições do {service}; tento de novo na próxima leitura", service=service)
+
+
+def _rejected_message(service: str, status: int) -> str:
+    return tr(
+        "o {service} recusou a requisição (HTTP {status}); confira a configuração do widget",
+        service=service,
+        status=status,
+    )
+
 
 
 def decode_response(status: int, body: bytes, service: str) -> object:

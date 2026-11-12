@@ -44,6 +44,8 @@ def load_module(name):
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    if hasattr(module, "use_language"):
+        module.use_language({"MOSAIC_LANGUAGE": "pt-BR"})
     return module
 
 
