@@ -15,4 +15,5 @@ pub mod reload;
 pub mod reload_plan;
 pub mod reload_policy;
 pub mod shutdown;
+pub mod update;
 pub mod widget_notices;

@@ -2,6 +2,7 @@ use chrono::NaiveDateTime;
 use thiserror::Error;
 
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
+use crate::domain::release::ReleaseVersion;
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 
 #[derive(Debug, Clone, Error, PartialEq)]
@@ -134,4 +135,73 @@ pub trait PluginFetcher {
         source: &crate::domain::plugin_package::GitHubSource,
         destination: &std::path::Path,
     ) -> Result<(), PluginFetchError>;
+}
+
+#[derive(Debug, Clone, Error, PartialEq)]
+pub enum ReleaseError {
+    #[error("{0}")]
+    ToolMissing(String),
+    #[error("{0}")]
+    Failed(String),
+    #[error("{0}")]
+    NotWritable(String),
+    #[error("operação cancelada")]
+    Cancelled,
+}
+
+pub trait ReleaseSource: Send + Sync {
+    fn latest_version(&self) -> Result<ReleaseVersion, ReleaseError>;
+    fn download_text(
+        &self,
+        version: &ReleaseVersion,
+        file_name: &str,
+    ) -> Result<String, ReleaseError>;
+    fn download_file(
+        &self,
+        version: &ReleaseVersion,
+        file_name: &str,
+        destination: &std::path::Path,
+    ) -> Result<(), ReleaseError>;
+}
+
+pub trait CancellableReleaseSource: ReleaseSource + Cancellable {}
+
+impl<T: ReleaseSource + Cancellable> CancellableReleaseSource for T {}
+
+pub trait ChecksumCalculator {
+    fn sha256(&self, file: &std::path::Path) -> Result<String, ReleaseError>;
+}
+
+pub trait ArchiveExtractor {
+    fn extract(
+        &self,
+        archive: &std::path::Path,
+        destination: &std::path::Path,
+    ) -> Result<(), ReleaseError>;
+}
+
+pub trait ExecutableReplacer {
+    fn replace(
+        &self,
+        new_executable: &std::path::Path,
+        current_executable: &std::path::Path,
+    ) -> Result<(), ReleaseError>;
+}
+
+pub trait InstallationProbe {
+    fn executable_path(&self) -> Result<std::path::PathBuf, ReleaseError>;
+    fn owned_by_debian_package(&self, executable: &std::path::Path) -> bool;
+    fn homebrew_prefix(&self) -> Option<std::path::PathBuf>;
+    fn cargo_home(&self) -> Option<std::path::PathBuf>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdateCheckRecord {
+    pub checked_at: NaiveDateTime,
+    pub latest: ReleaseVersion,
+}
+
+pub trait UpdateCheckStore: Send + Sync {
+    fn load(&self) -> Option<UpdateCheckRecord>;
+    fn save(&self, record: &UpdateCheckRecord) -> Result<(), StoreError>;
 }
