@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "azure-pipelines
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import azure_pipelines as pipelines  # noqa: E402
+
+pipelines.use_language({"MOSAIC_LANGUAGE": "pt-BR"})
 from test_azure_pipelines import (  # noqa: E402
     NOW,
     FixtureHttp,

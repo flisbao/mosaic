@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import string
 import sys
 import tempfile
 import types
@@ -23,8 +24,16 @@ NOW = fixtures.FIXTURE_NOW
 UTC = timezone.utc
 
 
+PORTUGUESE = "pt-BR"
+pipelines.use_language({"MOSAIC_LANGUAGE": PORTUGUESE})
+
+
 def base_environment(**overrides):
-    environment = {"AZDO_ORGANIZATION": fixtures.ORGANIZATION, "AZDO_PROJECTS": "Alpha,Beta"}
+    environment = {
+        "AZDO_ORGANIZATION": fixtures.ORGANIZATION,
+        "AZDO_PROJECTS": "Alpha,Beta",
+        "MOSAIC_LANGUAGE": PORTUGUESE,
+    }
     environment.update(overrides)
     return {key: value for key, value in environment.items() if value is not None}
 
@@ -965,6 +974,57 @@ class FakeServersTests(unittest.TestCase):
         self.assertEqual(self.snapshot(secret="segredo-errado"), 1)
         self.assertEqual(self.stdout.getvalue(), "")
         self.assertNotIn("segredo-errado", self.stderr.getvalue())
+
+
+class LanguageTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(pipelines.use_language, {"MOSAIC_LANGUAGE": PORTUGUESE})
+
+    def test_portuguese_is_chosen_by_any_value_starting_with_pt(self):
+        for value in ("pt-BR", "pt", "PT_br", " pt_BR.UTF-8 "):
+            self.assertEqual(pipelines.use_language({"MOSAIC_LANGUAGE": value}), "pt-BR", value)
+            self.assertEqual(pipelines.tr(pipelines.MINI_TEXT), "pipeline mais lenta")
+
+    def test_english_is_the_default_and_the_system_locale_is_ignored(self):
+        for environment in ({}, {"MOSAIC_LANGUAGE": ""}, {"MOSAIC_LANGUAGE": "fr"}, {"LANG": "pt_BR.UTF-8"}):
+            self.assertEqual(pipelines.use_language(environment), "en", environment)
+            self.assertEqual(pipelines.tr(pipelines.MINI_TEXT), "slowest pipeline")
+
+    def test_every_translation_keeps_its_placeholders_and_differs(self):
+        formatter = string.Formatter()
+        identical_in_both = {"pipelines"}
+
+        def placeholders(template):
+            return {name for _, name, _, _ in formatter.parse(template) if name is not None}
+
+        for portuguese, english in pipelines.TRANSLATIONS.items():
+            self.assertTrue(english.strip(), portuguese)
+            self.assertEqual(placeholders(portuguese), placeholders(english), portuguese)
+            if portuguese not in identical_in_both:
+                self.assertNotEqual(portuguese, english)
+
+    def test_every_translated_literal_of_the_source_has_an_entry(self):
+        source = Path(pipelines.__file__).read_text(encoding="utf-8")
+        for literal in re.findall(r'tr\(\s*"((?:[^"\\]|\\.)*)"', source):
+            self.assertIn(literal, pipelines.TRANSLATIONS, literal)
+
+    def test_durations_and_counts_follow_the_language(self):
+        pipelines.use_language({})
+        self.assertEqual(pipelines._window_text(1), "1 day")
+        self.assertEqual(pipelines._window_text(7), "7 days")
+        self.assertEqual(pipelines._run_count_text(1), "1 run")
+        self.assertEqual(pipelines._run_count_text(3), "3 runs")
+        pipelines.use_language({"MOSAIC_LANGUAGE": PORTUGUESE})
+        self.assertEqual(pipelines._window_text(7), "7 dias")
+        self.assertEqual(pipelines._run_count_text(3), "3 execuções")
+
+    def test_usage_and_errors_are_in_english_without_the_variable(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        self.assertEqual(pipelines.main(["bogus"], environ={}, stdout=stdout, stderr=stderr), 2)
+        self.assertEqual(stderr.getvalue(), "usage: azure_pipelines.py snapshot|login|pipelines\n")
+        stderr = io.StringIO()
+        self.assertEqual(pipelines.main(["snapshot"], environ={}, stdout=stdout, stderr=stderr), 1)
+        self.assertTrue(stderr.getvalue().startswith("error: "), stderr.getvalue())
 
 
 if __name__ == "__main__":

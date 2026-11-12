@@ -179,3 +179,7 @@ O widget guarda, em `AZDO_STATE_DIR`, o último resultado bom (cache offline) e 
 ## Quando a API não responde
 
 Se a rede falhar, a API responder com erro inesperado ou o limite de requisições estourar, o widget mostra o último resultado bom com o aviso `dados de HH:MM (offline)`. Sem nenhum resultado guardado, mostra o erro. Erros permanentes **não** usam o cache e aparecem como `erro: ...`: credencial inválida ou sem permissão, identidade que não foi adicionada à organização, `az` sem sessão, `login` pendente e requisição recusada (HTTP 400, 404 ou 410; um 404 indica `AZDO_ORGANIZATION` ou `AZDO_PROJECTS` errados). Um erro na timeline de **um** build só pula aquele build; falha de rede ou limite de requisições nas timelines interrompe só os pedidos de timeline, e o que já foi lido é guardado.
+
+## Idioma
+
+O texto fixo do widget segue a variável `MOSAIC_LANGUAGE`, que o Mosaic passa a cada execução: `en` (o padrão, também usado quando a variável falta) ou `pt-BR`. Dados que vêm do serviço nunca são traduzidos.

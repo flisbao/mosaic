@@ -184,7 +184,7 @@ def load_config(environ: Mapping[str, str]) -> PipelinesConfig:
         days=_read_bounded_integer(environ, DAYS_SETTING),
         top=_read_bounded_integer(environ, TOP_SETTING),
         sample=_read_bounded_integer(environ, SAMPLE_SETTING),
-        title=environ.get(TITLE_VARIABLE, "").strip() or DEFAULT_TITLE,
+        title=environ.get(TITLE_VARIABLE, "").strip() or tr(DEFAULT_TITLE),
         state_dir=read_state_dir(environ, STATE_DIRECTORY_VARIABLE, DEFAULT_STATE_DIRECTORY),
         auth=load_entra_config(environ),
         catalog=_read_catalog(environ, base_url, organization, projects),
@@ -201,7 +201,12 @@ def _read_bounded_integer(environ: Mapping[str, str], setting: BoundedSetting) -
         value = None
     if value is None or not setting.minimum <= value <= setting.maximum:
         raise ConfigError(
-            f"{setting.variable} precisa ser um número inteiro de {setting.minimum} a {setting.maximum}"
+            tr(
+                "{variable} precisa ser um número inteiro de {minimum} a {maximum}",
+                variable=setting.variable,
+                minimum=setting.minimum,
+                maximum=setting.maximum,
+            )
         )
     return value
 
@@ -209,9 +214,11 @@ def _read_bounded_integer(environ: Mapping[str, str], setting: BoundedSetting) -
 def _read_organization(environ: Mapping[str, str]) -> str:
     organization = environ.get(ORGANIZATION_VARIABLE, "").strip()
     if not organization:
-        raise ConfigError(f"defina {ORGANIZATION_VARIABLE} com o nome da organização do Azure DevOps")
+        raise ConfigError(
+            tr("defina {variable} com o nome da organização do Azure DevOps", variable=ORGANIZATION_VARIABLE)
+        )
     if ORGANIZATION_PATTERN.fullmatch(organization) is None:
-        raise ConfigError(f"{ORGANIZATION_VARIABLE} precisa ser só o nome da organização")
+        raise ConfigError(tr("{variable} precisa ser só o nome da organização", variable=ORGANIZATION_VARIABLE))
     return organization
 
 
@@ -240,11 +247,15 @@ def _read_catalog(
     selectors = _split_names(environ.get(WATCH_VARIABLE, ""))
     if not path_text:
         if selectors:
-            raise ConfigError(f"{WATCH_VARIABLE} só vale com {CATALOG_FILE_VARIABLE}")
+            raise ConfigError(tr("{watch} só vale com {catalog}", watch=WATCH_VARIABLE, catalog=CATALOG_FILE_VARIABLE))
         return ()
     if projects:
         raise ConfigError(
-            f"use {CATALOG_FILE_VARIABLE} ou {PROJECTS_VARIABLE}, não os dois: com o catálogo os projetos vêm das URLs"
+            tr(
+                "use {catalog} ou {projects}, não os dois: com o catálogo os projetos vêm das URLs",
+                catalog=CATALOG_FILE_VARIABLE,
+                projects=PROJECTS_VARIABLE,
+            )
         )
     entries = load_catalog(Path(path_text).expanduser(), base_url, organization)
     return select_pipelines(entries, selectors)
@@ -255,17 +266,23 @@ def load_catalog(path: Path, base_url: str, organization: str) -> tuple[CatalogP
     try:
         parser.read_string(path.read_text(encoding="utf-8"))
     except OSError as error:
-        raise ConfigError(f"não consegui ler o catálogo {path}: {error.strerror}") from None
+        raise ConfigError(
+            tr("não consegui ler o catálogo {path}: {reason}", path=path, reason=error.strerror)
+        ) from None
     except configparser.DuplicateSectionError as error:
-        raise ConfigError(f"[{error.section}] aparece duas vezes no catálogo {path.name}") from None
+        raise ConfigError(
+            tr("[{section}] aparece duas vezes no catálogo {name}", section=error.section, name=path.name)
+        ) from None
     except configparser.Error as error:
         reason = str(error.message).splitlines()[0]
-        raise ConfigError(f"catálogo {path.name} inválido: {reason}") from None
+        raise ConfigError(tr("catálogo {name} inválido: {reason}", name=path.name, reason=reason)) from None
     entries = tuple(
         _catalog_entry(name, parser[name], base_url, organization) for name in parser.sections()
     )
     if not entries:
-        raise ConfigError(f"nenhuma pipeline no catálogo {path.name}: crie uma seção [nome] com a url")
+        raise ConfigError(
+            tr("nenhuma pipeline no catálogo {name}: crie uma seção [nome] com a url", name=path.name)
+        )
     return entries
 
 
@@ -273,13 +290,22 @@ def _catalog_entry(
     name: str, section: Mapping[str, str], base_url: str, organization: str
 ) -> CatalogPipeline:
     if SELECTOR_SEPARATOR in name:
-        raise ConfigError(f"[{name}]: o nome não pode ter '{SELECTOR_SEPARATOR}'")
+        raise ConfigError(
+            tr("[{name}]: o nome não pode ter '{separator}'", name=name, separator=SELECTOR_SEPARATOR)
+        )
     unknown = sorted(key for key in section if key not in CATALOG_KEYS)
     if unknown:
-        raise ConfigError(f"[{name}]: chave desconhecida '{unknown[0]}' (use {' e '.join(CATALOG_KEYS)})")
+        raise ConfigError(
+            tr(
+                "[{name}]: chave desconhecida '{key}' (use {keys})",
+                name=name,
+                key=unknown[0],
+                keys=tr(" e ").join(CATALOG_KEYS),
+            )
+        )
     url = section.get(CATALOG_URL_KEY, "").strip()
     if not url:
-        raise ConfigError(f"[{name}]: falta {CATALOG_URL_KEY}")
+        raise ConfigError(tr("[{name}]: falta {key}", name=name, key=CATALOG_URL_KEY))
     project, definition_id = _parse_pipeline_url(name, url, base_url, organization)
     return CatalogPipeline(
         name=name,
@@ -294,17 +320,29 @@ def _parse_pipeline_url(name: str, url: str, base_url: str, organization: str) -
     parsed = urllib.parse.urlparse(url)
     base = urllib.parse.urlparse(base_url)
     if (parsed.scheme, parsed.netloc.lower()) != (base.scheme, base.netloc.lower()):
-        raise ConfigError(f"[{name}]: a url precisa ser do Azure DevOps ({base_url})")
+        raise ConfigError(
+            tr("[{name}]: a url precisa ser do Azure DevOps ({base_url})", name=name, base_url=base_url)
+        )
     segments = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
     is_pipeline_page = len(segments) >= 3 and segments[2] == BUILD_PAGE_SEGMENT
     if not is_pipeline_page or segments[0].lower() != organization.lower():
         raise ConfigError(
-            f"[{name}]: a url precisa ser da pipeline da organização {organization}: {base_url}/{organization}/PROJETO/_build?{DEFINITION_ID_PARAMETER}=NÚMERO"
+            tr(
+                "[{name}]: a url precisa ser da pipeline da organização {organization}: {base_url}/{organization}/PROJETO/_build?{parameter}=NÚMERO",
+                name=name,
+                organization=organization,
+                base_url=base_url,
+                parameter=DEFINITION_ID_PARAMETER,
+            )
         )
     values = urllib.parse.parse_qs(parsed.query).get(DEFINITION_ID_PARAMETER, [])
     if len(values) != 1 or DEFINITION_ID_PATTERN.fullmatch(values[0]) is None:
         raise ConfigError(
-            f"[{name}]: a url precisa trazer {DEFINITION_ID_PARAMETER}=NÚMERO; abra a pipeline no Azure DevOps e copie o endereço dessa página"
+            tr(
+                "[{name}]: a url precisa trazer {parameter}=NÚMERO; abra a pipeline no Azure DevOps e copie o endereço dessa página",
+                name=name,
+                parameter=DEFINITION_ID_PARAMETER,
+            )
         )
     return segments[1], int(values[0])
 
@@ -338,7 +376,13 @@ def _unknown_selector_message(selector: str, entries: tuple[CatalogPipeline, ...
         {f"{entry.project}{SELECTOR_SEPARATOR}{entry.repository}" for entry in entries if entry.repository}
         | {f"{entry.project}{SELECTOR_SEPARATOR}{WHOLE_PROJECT}" for entry in entries}
     )
-    return f"{WATCH_VARIABLE}: '{selector}' não existe no catálogo. Nomes: {names}. Grupos: {', '.join(groups)}"
+    return tr(
+        "{variable}: '{selector}' não existe no catálogo. Nomes: {names}. Grupos: {groups}",
+        variable=WATCH_VARIABLE,
+        selector=selector,
+        names=names,
+        groups=", ".join(groups),
+    )
 
 
 def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> str:
@@ -349,7 +393,7 @@ def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> st
     is_secure = parsed.scheme == "https" and bool(parsed.hostname)
     is_local = parsed.scheme == "http" and parsed.hostname in LOCAL_HOSTS
     if not (is_secure or is_local) or any(character.isspace() for character in override):
-        raise ConfigError(f"{variable} precisa ser https ou um endereço local de teste")
+        raise ConfigError(tr("{variable} precisa ser https ou um endereço local de teste", variable=variable))
     return override.rstrip("/")
 
 
@@ -952,6 +996,55 @@ TRANSLATIONS = {
     IDENTITY_NOT_IN_ORGANIZATION_MESSAGE: "the identity was not added to the organization in Azure DevOps (Organization settings > Users)",
     ORGANIZATION_NOT_FOUND_MESSAGE: "organization not found in Azure DevOps; check AZDO_ORGANIZATION",
     "erro: ": "error: ",
+    DEFAULT_TITLE: "Slow pipelines",
+    NO_REPOSITORY_LABEL: "no repository",
+    PROJECT_NOT_FOUND_MESSAGE: "project or organization not found in Azure DevOps; check AZDO_ORGANIZATION and AZDO_PROJECTS",
+    MINI_TEXT: "slowest pipeline",
+    EMPTY_TEXT_FORMAT: "no run finished in the last {window}",
+    STEPS_UNAVAILABLE_TEXT: "steps unavailable for the recent runs",
+    OFFLINE_NOTICE_FORMAT: "data as of %H:%M (offline)",
+    OFFLINE_NOTICE_FORMAT_WITH_DATE: "data as of %Y-%m-%d %H:%M (offline)",
+    USAGE_MESSAGE: "usage: azure_pipelines.py snapshot|login|pipelines",
+    "{variable} precisa ser um número inteiro de {minimum} a {maximum}": "{variable} must be an integer from {minimum} to {maximum}",
+    "defina {variable} com o nome da organização do Azure DevOps": "set {variable} to the name of the Azure DevOps organization",
+    "{variable} precisa ser só o nome da organização": "{variable} must be only the organization name",
+    "{watch} só vale com {catalog}": "{watch} only works with {catalog}",
+    "use {catalog} ou {projects}, não os dois: com o catálogo os projetos vêm das URLs": "use {catalog} or {projects}, not both: with the catalog the projects come from the URLs",
+    "não consegui ler o catálogo {path}: {reason}": "could not read the catalog {path}: {reason}",
+    "[{section}] aparece duas vezes no catálogo {name}": "[{section}] appears twice in the catalog {name}",
+    "catálogo {name} inválido: {reason}": "invalid catalog {name}: {reason}",
+    "nenhuma pipeline no catálogo {name}: crie uma seção [nome] com a url": "no pipeline in the catalog {name}: create a [name] section with the url",
+    "[{name}]: o nome não pode ter '{separator}'": "[{name}]: the name cannot contain '{separator}'",
+    "[{name}]: chave desconhecida '{key}' (use {keys})": "[{name}]: unknown key '{key}' (use {keys})",
+    " e ": " and ",
+    "[{name}]: falta {key}": "[{name}]: missing {key}",
+    "[{name}]: a url precisa ser do Azure DevOps ({base_url})": "[{name}]: the url must belong to Azure DevOps ({base_url})",
+    "[{name}]: a url precisa ser da pipeline da organização {organization}: {base_url}/{organization}/PROJETO/_build?{parameter}=NÚMERO": "[{name}]: the url must be a pipeline of the organization {organization}: {base_url}/{organization}/PROJECT/_build?{parameter}=NUMBER",
+    "[{name}]: a url precisa trazer {parameter}=NÚMERO; abra a pipeline no Azure DevOps e copie o endereço dessa página": "[{name}]: the url must carry {parameter}=NUMBER; open the pipeline in Azure DevOps and copy the address of that page",
+    "{variable}: '{selector}' não existe no catálogo. Nomes: {names}. Grupos: {groups}": "{variable}: '{selector}' does not exist in the catalog. Names: {names}. Groups: {groups}",
+    "defina {variable} com o caminho do catálogo de pipelines": "set {variable} to the path of the pipeline catalog",
+    "{days} dia": "{days} day",
+    "{days} dias": "{days} days",
+    "{count} execução": "{count} run",
+    "{count} execuções": "{count} runs",
+    "pipelines": "pipelines",
+    "execuções": "runs",
+    "janela": "window",
+    "{percent}% falhas": "{percent}% failures",
+    "média de {runs} na janela; passos: amostra de {sampled}": "average of {runs} in the window; steps: sample of {sampled}",
+    "média": "average",
+    "máximo": "maximum",
+    "fila média": "average queue",
+    "falhas": "failures",
+    "(parcial)": "(partial)",
+    "Passo": "Step",
+    "Média": "Average",
+    "% do total": "% of total",
+    "Máximo": "Maximum",
+    "media": "average",
+    "gargalo": "bottleneck",
+    "{selected} de {total} pipelines selecionadas ({mark} = monitorada)": "{selected} of {total} pipelines selected ({mark} = watched)",
+    "definição": "definition",
     LOGIN_REQUIRED_MESSAGE: f"no Entra login; run: {LOGIN_INSTRUCTION}",
     LOGIN_DONE_MESSAGE: "login completed",
     ENTRA_REQUEST_REFUSED_MESSAGE: "Entra refused the token request",
@@ -1060,37 +1153,6 @@ def _rejected_message(service: str, status: int) -> str:
 
 
 
-def decode_response(status: int, body: bytes, service: str) -> object:
-    if status == HTTP_UNAUTHORIZED:
-        raise AuthError(_auth_message(service))
-    if status == HTTP_FORBIDDEN:
-        if RATE_LIMIT_MARKER in body.lower():
-            raise RateLimitError(_rate_limit_message(service))
-        raise AuthError(_auth_message(service))
-    if status == HTTP_TOO_MANY_REQUESTS:
-        raise RateLimitError(_rate_limit_message(service))
-    if status in REJECTED_STATUSES:
-        raise RequestRejectedError(_rejected_message(service, status))
-    if status >= HTTP_REDIRECT_FLOOR:
-        raise UnexpectedResponseError(f"resposta inesperada do {service} (HTTP {status})")
-    try:
-        return json.loads(body)
-    except ValueError:
-        raise UnexpectedResponseError(f"a resposta do {service} não é JSON") from None
-
-
-def _auth_message(service: str) -> str:
-    return f"token inválido ou sem permissão para {service}"
-
-
-def _rate_limit_message(service: str) -> str:
-    return f"limite de requisições do {service}; tento de novo na próxima leitura"
-
-
-def _rejected_message(service: str, status: int) -> str:
-    return f"o {service} recusou a requisição (HTTP {status}); confira a configuração do widget"
-
-
 class AzureClient:
     def __init__(self, config: PipelinesConfig, http, token_provider: TokenProvider):
         self._config = config
@@ -1107,17 +1169,21 @@ class AzureClient:
             status, body = self._http(url, "GET", headers, None, REQUEST_TIMEOUT_SECONDS)
         except (OSError, HTTPException) as error:
             raise NetworkError(
-                f"falha de rede ao falar com {SERVICE_NAME} ({type(error).__name__})"
+                tr(
+                    "falha de rede ao falar com {service} ({error_type})",
+                    service=SERVICE_NAME,
+                    error_type=type(error).__name__,
+                )
             ) from None
         if _signals_invalid_credentials(status):
             raise AuthError(_auth_message(SERVICE_NAME))
         if status == HTTP_UNAUTHORIZED and IDENTITY_NOT_IN_ORGANIZATION_MARKER in body:
-            raise AuthError(IDENTITY_NOT_IN_ORGANIZATION_MESSAGE)
+            raise AuthError(tr(IDENTITY_NOT_IN_ORGANIZATION_MESSAGE))
         if status == HTTP_NOT_FOUND:
             _raise_if_target_not_found(path)
         payload = decode_response(status, body, SERVICE_NAME)
         if not isinstance(payload, dict):
-            raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
+            raise UnexpectedResponseError(tr("resposta inesperada do {service}", service=SERVICE_NAME))
         return payload
 
     def _request_headers(self) -> dict:
@@ -1132,9 +1198,9 @@ class AzureClient:
 
 def _raise_if_target_not_found(path: str) -> None:
     if path == PROJECTS_PATH:
-        raise RequestRejectedError(ORGANIZATION_NOT_FOUND_MESSAGE)
+        raise RequestRejectedError(tr(ORGANIZATION_NOT_FOUND_MESSAGE))
     if path.endswith(BUILDS_PATH_SUFFIX):
-        raise RequestRejectedError(PROJECT_NOT_FOUND_MESSAGE)
+        raise RequestRejectedError(tr(PROJECT_NOT_FOUND_MESSAGE))
 
 
 @dataclass(frozen=True)
@@ -1250,7 +1316,7 @@ def _nested(node: object, *keys: str) -> object:
 def _value_list(payload: dict) -> list:
     value = payload.get(VALUE_KEY)
     if not isinstance(value, list):
-        raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
+        raise UnexpectedResponseError(tr("resposta inesperada do {service}", service=SERVICE_NAME))
     return value
 
 
@@ -1292,7 +1358,7 @@ def fetch_step_durations(client: AzureClient, run: BuildRun) -> list[StepDuratio
     path = TIMELINE_PATH_FORMAT.format(project=_quoted(run.project), build_id=run.build_id)
     payload = client.get_json(path, {API_VERSION_PARAMETER: API_VERSION})
     if not isinstance(payload.get(RECORDS_KEY), list):
-        raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
+        raise UnexpectedResponseError(tr("resposta inesperada do {service}", service=SERVICE_NAME))
     return parse_timeline(payload)
 
 
@@ -1654,11 +1720,13 @@ def _percent_text(fraction: float) -> str:
 
 
 def _window_text(days: int) -> str:
-    return f"{days} dia" if days == 1 else f"{days} dias"
+    return tr("{days} dia", days=days) if days == 1 else tr("{days} dias", days=days)
 
 
 def _run_count_text(run_count: int) -> str:
-    return f"{run_count} execução" if run_count == 1 else f"{run_count} execuções"
+    if run_count == 1:
+        return tr("{count} execução", count=run_count)
+    return tr("{count} execuções", count=run_count)
 
 
 def _bottleneck(pipeline: PipelineStatistic) -> StepStatistic | None:
@@ -1678,7 +1746,7 @@ def build_snapshot(overview: Overview, config: PipelinesConfig) -> dict:
 
 def _summary_blocks(overview: Overview, days: int) -> list[dict]:
     if not overview.ranked:
-        text = EMPTY_TEXT_FORMAT.format(window=_window_text(days))
+        text = tr(EMPTY_TEXT_FORMAT, window=_window_text(days))
         return [{"type": "lines", "lines": [{"text": text, "tone": TONE_MUTED}]}]
     return [_stat_block(overview, days), _rows_block(overview.ranked)]
 
@@ -1687,9 +1755,9 @@ def _stat_block(overview: Overview, days: int) -> dict:
     return {
         "type": "stat",
         "items": [
-            {"value": str(overview.pipeline_count), "label": "pipelines"},
-            {"value": str(overview.run_count), "label": "execuções"},
-            {"value": _window_text(days), "label": "janela"},
+            {"value": str(overview.pipeline_count), "label": tr("pipelines")},
+            {"value": str(overview.run_count), "label": tr("execuções")},
+            {"value": _window_text(days), "label": tr("janela")},
         ],
     }
 
@@ -1712,7 +1780,7 @@ def _row_tags(pipeline: PipelineStatistic) -> list[dict]:
     tags = [{"text": _run_count_text(pipeline.run_count), "tone": TONE_MUTED}]
     if pipeline.failure_rate > 0:
         percent = max(1, round(pipeline.failure_rate * PERCENT))
-        tags.append({"text": f"{percent}% falhas", "tone": TONE_DANGER})
+        tags.append({"text": tr("{percent}% falhas", percent=percent), "tone": TONE_DANGER})
     return tags
 
 
@@ -1725,33 +1793,34 @@ def _detail_section(pipeline: PipelineStatistic) -> dict:
 
 
 def _pipeline_stat_block(pipeline: PipelineStatistic) -> dict:
-    hint = (
-        f"média de {_run_count_text(pipeline.run_count)} na janela; "
-        f"passos: amostra de {_run_count_text(pipeline.sampled_runs)}"
+    hint = tr(
+        "média de {runs} na janela; passos: amostra de {sampled}",
+        runs=_run_count_text(pipeline.run_count),
+        sampled=_run_count_text(pipeline.sampled_runs),
     )
     return {
         "type": "stat",
         "items": [
-            {"value": format_duration(pipeline.average_seconds), "label": "média"},
-            {"value": format_duration(pipeline.maximum_seconds), "label": "máximo"},
-            {"value": format_duration(pipeline.average_queue_seconds), "label": "fila média"},
-            {"value": _percent_text(pipeline.failure_rate), "label": "falhas"},
+            {"value": format_duration(pipeline.average_seconds), "label": tr("média")},
+            {"value": format_duration(pipeline.maximum_seconds), "label": tr("máximo")},
+            {"value": format_duration(pipeline.average_queue_seconds), "label": tr("fila média")},
+            {"value": _percent_text(pipeline.failure_rate), "label": tr("falhas")},
         ],
-        "hint": f"{hint} (parcial)" if pipeline.partial else hint,
+        "hint": f"{hint} {tr('(parcial)')}" if pipeline.partial else hint,
     }
 
 
 def _steps_block(pipeline: PipelineStatistic) -> dict:
     if not pipeline.steps:
-        return {"type": "lines", "lines": [{"text": STEPS_UNAVAILABLE_TEXT, "tone": TONE_MUTED}]}
+        return {"type": "lines", "lines": [{"text": tr(STEPS_UNAVAILABLE_TEXT), "tone": TONE_MUTED}]}
     bottleneck = _bottleneck(pipeline)
     return {
         "type": "table",
         "columns": [
-            {"title": "Passo"},
-            {"title": "Média", "align": "right"},
-            {"title": "% do total", "align": "right"},
-            {"title": "Máximo", "align": "right"},
+            {"title": tr("Passo")},
+            {"title": tr("Média"), "align": "right"},
+            {"title": tr("% do total"), "align": "right"},
+            {"title": tr("Máximo"), "align": "right"},
         ],
         "rows": [_step_row(step, is_bottleneck=step is bottleneck) for step in pipeline.steps],
     }
@@ -1770,10 +1839,10 @@ def _step_row(step: StepStatistic, is_bottleneck: bool) -> list:
 
 
 def _detail_item(pipeline: PipelineStatistic) -> dict:
-    meta = {"media": format_duration(pipeline.average_seconds)}
+    meta = {tr("media"): format_duration(pipeline.average_seconds)}
     bottleneck = _bottleneck(pipeline)
     if bottleneck is not None:
-        meta["gargalo"] = bottleneck.name
+        meta[tr("gargalo")] = bottleneck.name
     return {
         "id": f"{pipeline.project}{ITEM_ID_SEPARATOR}{pipeline.pipeline_id}",
         "text": pipeline.url or pipeline.heading,
@@ -1785,7 +1854,7 @@ def _mini(slowest: PipelineStatistic) -> dict:
     value = format_duration(slowest.average_seconds)
     if len(value) > MINI_VALUE_LIMIT:
         value = MINI_OVERFLOW_TEXT
-    return {"value": value, "text": MINI_TEXT, "tone": TONE_WARN}
+    return {"value": value, "text": tr(MINI_TEXT), "tone": TONE_WARN}
 
 
 def flatten_text(text, limit: int) -> str:
@@ -1806,7 +1875,7 @@ def with_offline_notice(snapshot: dict, saved_at: datetime, now: datetime) -> di
 def _offline_notice_block(saved_at: datetime, now: datetime) -> dict:
     local_saved_at = saved_at.astimezone()
     is_same_day = local_saved_at.date() == now.astimezone().date()
-    notice_format = OFFLINE_NOTICE_FORMAT if is_same_day else OFFLINE_NOTICE_FORMAT_WITH_DATE
+    notice_format = tr(OFFLINE_NOTICE_FORMAT if is_same_day else OFFLINE_NOTICE_FORMAT_WITH_DATE)
     text = local_saved_at.strftime(notice_format)
     return {"type": "lines", "lines": [{"text": text, "tone": TONE_WARN}]}
 
@@ -1827,7 +1896,7 @@ def _print_json(stdout, document: dict) -> None:
 
 
 def _fail(stderr, error: Exception) -> int:
-    print(f"erro: {error}", file=stderr)
+    print(tr("erro: ") + str(error), file=stderr)
     return FAILURE_EXIT_CODE
 
 
@@ -1837,7 +1906,9 @@ def _run_pipelines(environ: Mapping[str, str], stdout, stderr) -> int:
         organization = _read_organization(environ)
         path_text = environ.get(CATALOG_FILE_VARIABLE, "").strip()
         if not path_text:
-            raise ConfigError(f"defina {CATALOG_FILE_VARIABLE} com o caminho do catálogo de pipelines")
+            raise ConfigError(
+                tr("defina {variable} com o caminho do catálogo de pipelines", variable=CATALOG_FILE_VARIABLE)
+            )
         entries = load_catalog(Path(path_text).expanduser(), base_url, organization)
         selected = select_pipelines(entries, _split_names(environ.get(WATCH_VARIABLE, "")))
     except ConfigError as error:
@@ -1847,15 +1918,24 @@ def _run_pipelines(environ: Mapping[str, str], stdout, stderr) -> int:
 
 
 def _catalog_listing(entries: tuple[CatalogPipeline, ...], selected: set[str]) -> str:
-    lines = [f"{len(selected)} de {len(entries)} pipelines selecionadas ({SELECTED_MARK} = monitorada)"]
+    lines = [
+        tr(
+            "{selected} de {total} pipelines selecionadas ({mark} = monitorada)",
+            selected=len(selected),
+            total=len(entries),
+            mark=SELECTED_MARK,
+        )
+    ]
     groups: dict[tuple[str, str], list[CatalogPipeline]] = {}
     for entry in entries:
         groups.setdefault((entry.project, entry.repository), []).append(entry)
     for (project, repository), members in groups.items():
-        lines.append(f"{project}{SELECTOR_SEPARATOR}{repository or NO_REPOSITORY_LABEL}")
+        lines.append(f"{project}{SELECTOR_SEPARATOR}{repository or tr(NO_REPOSITORY_LABEL)}")
         for entry in members:
             mark = SELECTED_MARK if entry.name in selected else UNSELECTED_MARK
-            lines.append(f"  {mark} {entry.name}   definição {entry.definition_id}   {entry.url}")
+            lines.append(
+                f"  {mark} {entry.name}   {tr('definição')} {entry.definition_id}   {entry.url}"
+            )
     return "\n".join(lines)
 
 
@@ -1969,11 +2049,12 @@ def main(
     stderr=None,
 ) -> int:
     environ = os.environ if environ is None else environ
+    use_language(environ)
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
     command = list(arguments)
     if command not in (SNAPSHOT_COMMAND, LOGIN_COMMAND, PIPELINES_COMMAND):
-        print(USAGE_MESSAGE, file=stderr)
+        print(tr(USAGE_MESSAGE), file=stderr)
         return ARGUMENT_ERROR_EXIT_CODE
     if command == LOGIN_COMMAND:
         return _run_login(environ, http, sleep, stderr)
