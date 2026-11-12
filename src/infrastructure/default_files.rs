@@ -80,6 +80,13 @@ priority_prompt = "prompts/prioridade.md"
 # # [theme.colors]             # sobrescreve papéis: foreground, background, muted, ok, warn, danger, accent, on_accent
 # # accent = "#ff9e64"
 
+# --- Aviso de versão nova (ligado por padrão) ---
+# Ao abrir o painel, no máximo uma vez a cada 24 horas, o Mosaic faz uma única requisição a
+# github.com (releases/latest) para saber se há versão nova, sem enviar nenhum dado seu, e avisa
+# na faixa de avisos. Para desligar, descomente abaixo ou exporte MOSAIC_NO_UPDATE_CHECK=1.
+# [update]
+# check = false
+
 # --- Plugins de serviço (Jira, GitHub, GitLab, Azure DevOps, Azure Pipelines, agenda) ---
 # Eles não vêm no binário: instale-os com `mosaic plugins install` (todos) ou
 # `mosaic plugins install jira github` (só alguns). `--force` atualiza os já instalados.
@@ -453,6 +460,17 @@ mod tests {
             .widgets
             .iter()
             .all(|widget| widget.id.as_str() != "azure-pipelines"));
+    }
+
+    #[test]
+    fn reference_config_documents_the_update_check_as_a_comment() {
+        let text = reference_config_text();
+        assert!(text.contains("# [update]"));
+        assert!(text.contains("# check = false"));
+        assert!(text.contains("MOSAIC_NO_UPDATE_CHECK"));
+        let config = parse_config(text).unwrap();
+        assert!(config.update.check);
+        assert!(config.warnings.is_empty());
     }
 
     #[test]

@@ -36,16 +36,25 @@ mod tests {
     fn names_each_section_that_needs_restart() {
         let llm = RestartSections {
             llm_changed: true,
-            pomodoro_changed: false,
+            ..RestartSections::default()
         };
         let pomodoro = RestartSections {
-            llm_changed: false,
             pomodoro_changed: true,
+            ..RestartSections::default()
         };
         let both = RestartSections {
             llm_changed: true,
             pomodoro_changed: true,
+            ..RestartSections::default()
         };
+        let update = RestartSections {
+            update_changed: true,
+            ..RestartSections::default()
+        };
+        assert_eq!(
+            reload_notice(&update, &[]),
+            "Configuração recarregada; [update] só valem após reiniciar"
+        );
         assert_eq!(
             reload_notice(&llm, &[]),
             "Configuração recarregada; [llm] só valem após reiniciar"

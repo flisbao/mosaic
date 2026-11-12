@@ -1,13 +1,13 @@
 use super::raw::{
-    RawLlm, RawNotifyCommand, RawPomodoro, RawTab, RawTabSection, RawTheme, RawWidget,
+    RawLlm, RawNotifyCommand, RawPomodoro, RawTab, RawTabSection, RawTheme, RawUpdate, RawWidget,
 };
 use super::{
-    ConfigError, Harness, LlmConfig, PomodoroConfig, SettingLocation, TabSettings, WidgetSettings,
-    DEFAULT_CYCLES_BEFORE_LONG_BREAK, DEFAULT_FOCUS_MINUTES, DEFAULT_INTERVAL_SECONDS,
-    DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM, DEFAULT_LLM_MAX_ITEMS, DEFAULT_LLM_TIMEOUT_SECONDS,
-    DEFAULT_LONG_BREAK_MINUTES, DEFAULT_PRIORITY_PROMPT, DEFAULT_SHORT_BREAK_MINUTES, DEFAULT_SPAN,
-    DEFAULT_SUGGESTIONS, DEFAULT_TIMEOUT_SECONDS, IMPLICIT_TAB_NAME, MAXIMUM_INTERVAL_SECONDS,
-    MAXIMUM_TIMEOUT_SECONDS, MINIMUM_INTERVAL_SECONDS,
+    ConfigError, Harness, LlmConfig, PomodoroConfig, SettingLocation, TabSettings, UpdateConfig,
+    WidgetSettings, DEFAULT_CYCLES_BEFORE_LONG_BREAK, DEFAULT_FOCUS_MINUTES,
+    DEFAULT_INTERVAL_SECONDS, DEFAULT_LLM_MAX_CHARACTERS_PER_ITEM, DEFAULT_LLM_MAX_ITEMS,
+    DEFAULT_LLM_TIMEOUT_SECONDS, DEFAULT_LONG_BREAK_MINUTES, DEFAULT_PRIORITY_PROMPT,
+    DEFAULT_SHORT_BREAK_MINUTES, DEFAULT_SPAN, DEFAULT_SUGGESTIONS, DEFAULT_TIMEOUT_SECONDS,
+    IMPLICIT_TAB_NAME, MAXIMUM_INTERVAL_SECONDS, MAXIMUM_TIMEOUT_SECONDS, MINIMUM_INTERVAL_SECONDS,
 };
 use crate::application::recommendation::LlmSelection;
 use crate::domain::theme::{Rgb, Theme, ThemeError, ThemeRole, DEFAULT_THEME_NAME};
@@ -19,6 +19,8 @@ const LEGACY_NOTIFY_COMMAND_WARNING: &str =
     "pomodoro.notify_command como texto é legado; use uma lista, ex.: [\"notify-send\"]";
 const LLM_SECTION: &str = "llm";
 const THEME_SECTION: &str = "theme";
+const UPDATE_SECTION: &str = "update";
+const UPDATE_CHECK_KEY: &str = "check";
 const THEME_NAME_KEY: &str = "name";
 const THEME_PAINT_BACKGROUND_KEY: &str = "paint_background";
 const UNKNOWN_THEME_HINT: &str = "; veja `mosaic themes`";
@@ -416,4 +418,18 @@ fn shortened(value: &str) -> String {
         .take(MAXIMUM_WARNING_VALUE_CHARACTERS - 1)
         .collect();
     format!("{kept}{ELLIPSIS}")
+}
+
+pub(super) fn convert_update(raw: RawUpdate, warnings: &mut Vec<String>) -> UpdateConfig {
+    let check = match raw.check {
+        None => true,
+        Some(toml::Value::Boolean(value)) => value,
+        Some(_) => {
+            warnings.push(format!(
+                "[{UPDATE_SECTION}] {UPDATE_CHECK_KEY}: use true ou false"
+            ));
+            true
+        }
+    };
+    UpdateConfig { check }
 }

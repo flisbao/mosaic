@@ -1,12 +1,15 @@
-use super::raw::{LLM_KEYS, POMODORO_KEYS, ROOT_KEYS, TAB_KEYS, THEME_KEYS, WIDGET_KEYS};
+use super::raw::{
+    LLM_KEYS, POMODORO_KEYS, ROOT_KEYS, TAB_KEYS, THEME_KEYS, UPDATE_KEYS, WIDGET_KEYS,
+};
 
 const TABS_KEY: &str = "tabs";
 const WIDGETS_KEY: &str = "widgets";
 const WIDGET_ID_KEY: &str = "id";
-const SECTIONS: [(&str, &[&str]); 3] = [
+const SECTIONS: [(&str, &[&str]); 4] = [
     ("pomodoro", &POMODORO_KEYS),
     ("llm", &LLM_KEYS),
     ("theme", &THEME_KEYS),
+    ("update", &UPDATE_KEYS),
 ];
 const MAXIMUM_KEY_CHARACTERS: usize = 40;
 const ELLIPSIS: char = '…';

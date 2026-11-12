@@ -13,8 +13,8 @@ pub use paths::{config_directory, config_file_path, read_config_file};
 use raw::RawConfig;
 use unknown_keys::unknown_key_warnings;
 use validation::{
-    build_tabs, build_theme, convert_llm, convert_pomodoro, convert_widget, named_tab,
-    TabAssignment,
+    build_tabs, build_theme, convert_llm, convert_pomodoro, convert_update, convert_widget,
+    named_tab, TabAssignment,
 };
 
 use crate::application::launch_spec::{ProviderCommand, WidgetLaunchSpec, WidgetSchedule};
@@ -175,6 +175,11 @@ pub struct LlmConfig {
     pub priority_prompt: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UpdateConfig {
+    pub check: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub widgets: Vec<WidgetSettings>,
@@ -182,6 +187,7 @@ pub struct AppConfig {
     pub pomodoro: PomodoroConfig,
     pub llm: LlmConfig,
     pub theme: Theme,
+    pub update: UpdateConfig,
     pub warnings: Vec<String>,
 }
 
@@ -278,6 +284,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
     let pomodoro = convert_pomodoro(raw.pomodoro, &mut warnings)?;
     let llm = convert_llm(raw.llm)?;
     let theme = build_theme(raw.theme, &mut warnings);
+    let update = convert_update(raw.update, &mut warnings);
     warnings.extend(unknown_key_warnings(&document));
     Ok(AppConfig {
         widgets,
@@ -285,6 +292,7 @@ pub fn parse_config(text: &str) -> Result<AppConfig, ConfigError> {
         pomodoro,
         llm,
         theme,
+        update,
         warnings,
     })
 }
@@ -303,12 +311,14 @@ pub fn restart_sections(current: &AppConfig, next: &AppConfig) -> RestartSection
     RestartSections {
         llm_changed: current.llm != next.llm,
         pomodoro_changed: current.pomodoro != next.pomodoro,
+        update_changed: current.update != next.update,
     }
 }
 
 pub fn retain_restart_sections(active: &AppConfig, mut next: AppConfig) -> AppConfig {
     next.llm = active.llm.clone();
     next.pomodoro = active.pomodoro.clone();
+    next.update = active.update;
     next
 }
 
@@ -1154,16 +1164,30 @@ command = "sh"
             restart_sections(&current, &llm),
             RestartSections {
                 llm_changed: true,
-                pomodoro_changed: false
+                ..RestartSections::default()
             }
         );
         assert_eq!(
             restart_sections(&current, &pomodoro),
             RestartSections {
-                llm_changed: false,
-                pomodoro_changed: true
+                pomodoro_changed: true,
+                ..RestartSections::default()
             }
         );
+    }
+
+    #[test]
+    fn restart_sections_flags_a_changed_update_section_and_it_is_retained() {
+        let current = parse_config(RELOAD_BASE).unwrap();
+        let next = parse_config(&format!("{RELOAD_BASE}\n[update]\ncheck = false\n")).unwrap();
+        assert_eq!(
+            restart_sections(&current, &next),
+            RestartSections {
+                update_changed: true,
+                ..RestartSections::default()
+            }
+        );
+        assert!(retain_restart_sections(&current, next).update.check);
     }
 
     #[test]
@@ -1395,12 +1419,49 @@ paint_background = true
 
 [theme.colors]
 accent = "#ff9e64"
+
+[update]
+check = true
 "##;
 
     #[test]
     fn every_known_key_parses_without_warnings() {
         let config = parse_config(EVERY_KNOWN_KEY).unwrap();
         assert_eq!(config.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_update_check_is_on_by_default_and_check_false_turns_it_off() {
+        assert!(parse_config("").unwrap().update.check);
+        assert!(parse_config("[update]\n").unwrap().update.check);
+        assert!(
+            parse_config("[update]\ncheck = true\n")
+                .unwrap()
+                .update
+                .check
+        );
+        let off = parse_config("[update]\ncheck = false\n").unwrap();
+        assert!(!off.update.check);
+        assert!(off.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_wrong_type_in_the_update_section_is_a_warning_and_keeps_the_check_on() {
+        let config = parse_config("[update]\ncheck = \"não\"\n").unwrap();
+        assert!(config.update.check);
+        assert_eq!(
+            config.warnings,
+            vec!["[update] check: use true ou false".to_string()]
+        );
+    }
+
+    #[test]
+    fn unknown_keys_in_the_update_section_are_warnings() {
+        let config = parse_config("[update]\nchek = false\n").unwrap();
+        assert_eq!(
+            config.warnings,
+            vec!["[update]: chave desconhecida 'chek' (ignorada)".to_string()]
+        );
     }
 
     #[test]

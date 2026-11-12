@@ -1,10 +1,12 @@
 const LLM_SECTION_LABEL: &str = "[llm]";
 const POMODORO_SECTION_LABEL: &str = "[pomodoro]/notificações";
+const UPDATE_SECTION_LABEL: &str = "[update]";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RestartSections {
     pub llm_changed: bool,
     pub pomodoro_changed: bool,
+    pub update_changed: bool,
 }
 
 impl RestartSections {
@@ -15,6 +17,9 @@ impl RestartSections {
         }
         if self.pomodoro_changed {
             labels.push(POMODORO_SECTION_LABEL);
+        }
+        if self.update_changed {
+            labels.push(UPDATE_SECTION_LABEL);
         }
         labels
     }
@@ -31,10 +36,14 @@ mod tests {
 
     #[test]
     fn labels_follow_llm_then_pomodoro_order() {
-        let both = RestartSections {
+        let all = RestartSections {
             llm_changed: true,
             pomodoro_changed: true,
+            update_changed: true,
         };
-        assert_eq!(both.labels(), vec!["[llm]", "[pomodoro]/notificações"]);
+        assert_eq!(
+            all.labels(),
+            vec!["[llm]", "[pomodoro]/notificações", "[update]"]
+        );
     }
 }
