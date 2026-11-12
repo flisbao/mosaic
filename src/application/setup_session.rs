@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
 use crate::application::plugin_setup::{SetupOptions, SetupResult, TabContext};
+use crate::application::setup_messages as messages;
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::plugin_setup::{
     ensure_environment_name, normalize_list, split_list, AnswerError, AnswerKind, Condition,
     Preset, Question, SecretQuestion, SetupManifest, Step, Target,
@@ -15,18 +17,6 @@ const MAXIMUM_TIMEOUT_SECONDS: u64 = 3_600;
 const SECRET_FROM_ENVIRONMENT: &str = "1";
 const SECRET_FROM_FILE: &str = "2";
 const SECRET_FROM_BOTH: &str = "3";
-const REQUIRED_ANSWER_MESSAGE: &str = "Esta resposta é obrigatória.";
-const UNKNOWN_NUMBER_MESSAGE: &str = "Responda com um dos números listados.";
-const UNKNOWN_PRESET_MESSAGE: &str = "Modelo desconhecido; responda com um dos números listados.";
-const INVALID_WIDGET_ID_MESSAGE: &str = "Use só letras minúsculas, números, '-' e '_'.";
-const SECRET_EXPLANATION: &str =
-    "O valor nunca é pedido aqui: o plugin lê de uma variável de ambiente ou de um arquivo.";
-const SKIP_LABEL: &str = "pular";
-const FROM_SCRATCH_LABEL: &str = "montar do zero";
-const NEW_TAB_LABEL: &str = "criar uma aba nova";
-const INTERVAL_TITLE: &str = "Intervalo entre atualizações, em segundos";
-const TIMEOUT_TITLE: &str = "Tempo máximo de cada execução, em segundos";
-const LIST_HINT: &str = "separados por vírgula";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChoiceOption {
@@ -150,13 +140,18 @@ pub struct SetupSession {
     tab_choice: TabChoice,
     interval_seconds: u64,
     interview: Interview,
+    language: Language,
 }
 
 impl SetupSession {
     pub fn new(manifest: SetupManifest, options: SetupOptions) -> Self {
+        Self::new_in(manifest, options, Language::BrazilianPortuguese)
+    }
+
+    pub fn new_in(manifest: SetupManifest, options: SetupOptions, language: Language) -> Self {
         let interview = Interview::new(&manifest);
         let interval_seconds = manifest.interval_seconds;
-        let (phase, prompt) = first_prompt(&manifest);
+        let (phase, prompt) = first_prompt(&manifest, language);
         Self {
             manifest,
             options,
@@ -168,6 +163,7 @@ impl SetupSession {
             tab_choice: TabChoice::Keep,
             interval_seconds,
             interview,
+            language,
         }
     }
 
@@ -217,7 +213,7 @@ impl SetupSession {
             .or_else(|| presets.iter().find(|preset| preset.name == line))
             .cloned();
         let Some(preset) = chosen else {
-            return Answered::Rejected(UNKNOWN_PRESET_MESSAGE.to_string());
+            return Answered::Rejected(messages::unknown_preset(self.language).to_string());
         };
         self.preset = Some(preset);
         self.begin_preset_input(0);
@@ -243,7 +239,7 @@ impl SetupSession {
 
     fn answer_preset_input(&mut self, index: usize, line: &str) -> Answered {
         if line.is_empty() {
-            return Answered::Rejected(REQUIRED_ANSWER_MESSAGE.to_string());
+            return Answered::Rejected(messages::required_answer(self.language).to_string());
         }
         let Some(input) = self
             .preset
@@ -294,7 +290,7 @@ impl SetupSession {
     }
 
     fn begin_widget_id(&mut self) {
-        let prompt = widget_id_prompt(&self.default_widget_id());
+        let prompt = widget_id_prompt(&self.default_widget_id(), self.language);
         self.ask(Phase::WidgetId, prompt);
     }
 
@@ -305,10 +301,10 @@ impl SetupSession {
             line.to_string()
         };
         if !is_valid_widget_id(&id) {
-            return Answered::Rejected(INVALID_WIDGET_ID_MESSAGE.to_string());
+            return Answered::Rejected(messages::invalid_widget_id(self.language).to_string());
         }
         if self.options.existing_ids.contains(&id) {
-            return Answered::Rejected(format!("Já existe um widget com o id \"{id}\"."));
+            return Answered::Rejected(messages::widget_id_taken(self.language, &id));
         }
         self.widget_id = id;
         self.begin_tab();
@@ -322,11 +318,11 @@ impl SetupSession {
         };
         match context.declared.first() {
             Some(first) => {
-                let prompt = declared_tab_prompt(first, &context);
+                let prompt = declared_tab_prompt(first, &context, self.language);
                 self.ask(Phase::DeclaredTab, prompt);
             }
             None => {
-                self.ask(Phase::FirstTab, first_tab_prompt(&context));
+                self.ask(Phase::FirstTab, first_tab_prompt(&context, self.language));
             }
         }
     }
@@ -361,15 +357,18 @@ impl SetupSession {
         if line == (context.declared.len() + 1).to_string() {
             return self.ask(
                 Phase::NewTabName,
-                Prompt::required_text("Nome da aba nova", "Nome da aba nova: ".to_string()),
+                Prompt::required_text(
+                    messages::new_tab_name_title(self.language),
+                    messages::new_tab_name_label(self.language).to_string(),
+                ),
             );
         }
-        Answered::Rejected(UNKNOWN_NUMBER_MESSAGE.to_string())
+        Answered::Rejected(messages::unknown_number(self.language).to_string())
     }
 
     fn answer_new_tab_name(&mut self, line: &str) -> Answered {
         if line.is_empty() {
-            return Answered::Rejected(REQUIRED_ANSWER_MESSAGE.to_string());
+            return Answered::Rejected(messages::required_answer(self.language).to_string());
         }
         let taken = self
             .options
@@ -377,7 +376,7 @@ impl SetupSession {
             .as_ref()
             .is_some_and(|context| context.declared.iter().any(|name| name == line));
         if taken {
-            return Answered::Rejected(format!("Já existe uma aba chamada \"{line}\"."));
+            return Answered::Rejected(messages::tab_name_taken(self.language, line));
         }
         self.tab_choice = TabChoice::New(line.to_string());
         self.begin_steps(0);
@@ -403,6 +402,7 @@ impl SetupSession {
                     secret_source_prompt(
                         secret,
                         secret.requirement.applies(&self.interview.values),
+                        self.language,
                     ),
                 ),
             };
@@ -437,7 +437,7 @@ impl SetupSession {
     fn question_prompt(&self, question: &Question) -> Prompt {
         let default = self.question_default(question);
         let required = question.requirement.applies(&self.interview.values);
-        question_prompt(question, default, required)
+        question_prompt(question, default, required, self.language)
     }
 
     fn answer_question(&mut self, step: usize, line: &str) -> Answered {
@@ -451,7 +451,9 @@ impl SetupSession {
         let (value, typed) = if line.is_empty() {
             match default {
                 Some(default) => (default, false),
-                None if required => return Answered::Rejected(REQUIRED_ANSWER_MESSAGE.to_string()),
+                None if required => {
+                    return Answered::Rejected(messages::required_answer(self.language).to_string())
+                }
                 None => {
                     self.begin_steps(step + 1);
                     return Answered::Advanced;
@@ -460,7 +462,7 @@ impl SetupSession {
         } else {
             match question.kind.normalize(line) {
                 Ok(value) => (value, true),
-                Err(error) => return Answered::Rejected(error.to_string()),
+                Err(error) => return Answered::Rejected(error.message(self.language)),
             }
         };
         self.interview.record_answer(
@@ -486,13 +488,13 @@ impl SetupSession {
             SECRET_FROM_ENVIRONMENT => SecretSource::Environment,
             SECRET_FROM_FILE => SecretSource::File,
             SECRET_FROM_BOTH if secret.allow_both => SecretSource::Both,
-            _ => return Answered::Rejected(UNKNOWN_NUMBER_MESSAGE.to_string()),
+            _ => return Answered::Rejected(messages::unknown_number(self.language).to_string()),
         };
         match source {
             SecretSource::File => self.begin_secret_file(step, &secret),
             SecretSource::Environment | SecretSource::Both => self.ask(
                 Phase::SecretNames { step, source },
-                secret_names_prompt(&secret),
+                secret_names_prompt(&secret, self.language),
             ),
         }
     }
@@ -503,8 +505,8 @@ impl SetupSession {
             Prompt {
                 explanation: Some(secret.prompt.clone()),
                 ..Prompt::required_text(
-                    "Caminho do arquivo",
-                    format!("Caminho do arquivo ({}): ", secret.prompt),
+                    messages::file_path_title(self.language),
+                    messages::file_path_label(self.language, &secret.prompt),
                 )
             },
         )
@@ -515,7 +517,7 @@ impl SetupSession {
             return Answered::Advanced;
         };
         if line.is_empty() {
-            return Answered::Rejected(REQUIRED_ANSWER_MESSAGE.to_string());
+            return Answered::Rejected(messages::required_answer(self.language).to_string());
         }
         let names = if secret.names_are_list {
             normalize_list(line)
@@ -530,7 +532,7 @@ impl SetupSession {
         });
         let names = match checked {
             Ok(names) => names,
-            Err(error) => return Answered::Rejected(error.to_string()),
+            Err(error) => return Answered::Rejected(error.message(self.language)),
         };
         self.interview.record_secret_names(&secret, names);
         if source == SecretSource::Both {
@@ -546,7 +548,7 @@ impl SetupSession {
             return Answered::Advanced;
         };
         if line.is_empty() {
-            return Answered::Rejected(REQUIRED_ANSWER_MESSAGE.to_string());
+            return Answered::Rejected(messages::required_answer(self.language).to_string());
         }
         self.interview.record_secret_file(&secret, line.to_string());
         self.begin_steps(step + 1);
@@ -555,9 +557,10 @@ impl SetupSession {
 
     fn begin_interval(&mut self) {
         let prompt = seconds_prompt(
-            INTERVAL_TITLE,
+            messages::interval_title(self.language),
             self.manifest.interval_seconds,
             MINIMUM_INTERVAL_SECONDS..=MAXIMUM_INTERVAL_SECONDS,
+            self.language,
         );
         self.ask(Phase::Interval, prompt);
     }
@@ -567,13 +570,15 @@ impl SetupSession {
             line,
             self.manifest.interval_seconds,
             MINIMUM_INTERVAL_SECONDS..=MAXIMUM_INTERVAL_SECONDS,
+            self.language,
         ) {
             Ok(seconds) => {
                 self.interval_seconds = seconds;
                 let prompt = seconds_prompt(
-                    TIMEOUT_TITLE,
+                    messages::timeout_title(self.language),
                     self.manifest.timeout_seconds,
                     MINIMUM_TIMEOUT_SECONDS..=MAXIMUM_TIMEOUT_SECONDS,
+                    self.language,
                 );
                 self.ask(Phase::Timeout, prompt)
             }
@@ -586,6 +591,7 @@ impl SetupSession {
             line,
             self.manifest.timeout_seconds,
             MINIMUM_TIMEOUT_SECONDS..=MAXIMUM_TIMEOUT_SECONDS,
+            self.language,
         ) {
             Ok(seconds) => {
                 self.finish(seconds);
@@ -606,6 +612,7 @@ impl SetupSession {
             &mut result,
             self.tab_choice.clone(),
             self.options.tab_context.as_ref(),
+            self.language,
         );
         self.phase = Phase::Finished;
         self.progress = Progress::Finished(result);
@@ -717,7 +724,12 @@ fn holds(condition: Option<&Condition>, values: &BTreeMap<String, String>) -> bo
     condition.is_none_or(|condition| condition.holds(values))
 }
 
-fn apply_tab_choice(result: &mut SetupResult, choice: TabChoice, context: Option<&TabContext>) {
+fn apply_tab_choice(
+    result: &mut SetupResult,
+    choice: TabChoice,
+    context: Option<&TabContext>,
+    language: Language,
+) {
     match choice {
         TabChoice::Keep => {}
         TabChoice::Existing(name) => result.draft.tab = Some(name),
@@ -727,10 +739,9 @@ fn apply_tab_choice(result: &mut SetupResult, choice: TabChoice, context: Option
             if let Some(context) = context
                 .filter(|context| context.declared.is_empty() && context.existing_widgets > 0)
             {
-                result.notes.push(format!(
-                    "ao declarar a primeira aba, os {} widgets que já existem sem 'tab' passam a ficar nela (a primeira aba declarada)",
-                    context.existing_widgets
-                ));
+                result
+                    .notes
+                    .push(messages::first_tab_note(language, context.existing_widgets));
             }
         }
     }
@@ -759,9 +770,12 @@ fn plain_option(answer: &str, label: &str) -> ChoiceOption {
     }
 }
 
-fn first_prompt(manifest: &SetupManifest) -> (Phase, Prompt) {
+fn first_prompt(manifest: &SetupManifest, language: Language) -> (Phase, Prompt) {
     if manifest.presets.is_empty() {
-        return (Phase::WidgetId, widget_id_prompt(&manifest.default_id));
+        return (
+            Phase::WidgetId,
+            widget_id_prompt(&manifest.default_id, language),
+        );
     }
     let options = manifest
         .presets
@@ -772,50 +786,46 @@ fn first_prompt(manifest: &SetupManifest) -> (Phase, Prompt) {
             description: preset.description.clone(),
         })
         .collect();
-    (Phase::Preset, preset_prompt(options))
+    (Phase::Preset, preset_prompt(options, language))
 }
 
-fn widget_id_prompt(default: &str) -> Prompt {
+fn widget_id_prompt(default: &str, language: Language) -> Prompt {
     Prompt {
         default: Some(default.to_string()),
-        hint: Some("letras minúsculas, números, - e _".to_string()),
-        ..Prompt::new("Id do widget", format!("Id do widget [{default}]: "))
+        hint: Some(messages::widget_id_hint(language).to_string()),
+        ..Prompt::new(
+            messages::widget_id_title(language),
+            messages::widget_id_label(language, default),
+        )
     }
 }
 
-fn preset_prompt(options: Vec<ChoiceOption>) -> Prompt {
-    let introduction = format!("Modelos prontos:\n{}", option_listing(&options));
+fn preset_prompt(options: Vec<ChoiceOption>, language: Language) -> Prompt {
+    let introduction = messages::presets_introduction(language, &option_listing(&options));
     Prompt {
-        blank: Some(FROM_SCRATCH_LABEL.to_string()),
+        blank: Some(messages::from_scratch_label(language).to_string()),
         ..Prompt::choice(
-            "Modelo pronto",
-            "Modelo (Enter para montar do zero): ".to_string(),
+            messages::preset_title(language),
+            messages::preset_label(language).to_string(),
             options,
         )
     }
     .introduced_by(introduction)
 }
 
-fn first_tab_prompt(context: &TabContext) -> Prompt {
-    let explanation = format!(
-        "O mosaic.toml ainda não declara abas: todos os widgets ficam numa aba única. Digitar um nome cria a primeira aba declarada{}.",
-        if context.existing_widgets > 0 {
-            " e move para ela os widgets que já existem"
-        } else {
-            ""
-        }
-    );
+fn first_tab_prompt(context: &TabContext, language: Language) -> Prompt {
+    let explanation = messages::first_tab_explanation(language, context.existing_widgets > 0);
     Prompt {
         explanation: Some(explanation.clone()),
         ..Prompt::new(
-            "Aba do widget",
-            "Aba nova para este widget (Enter = manter a aba única): ".to_string(),
+            messages::widget_tab_title(language),
+            messages::first_tab_label(language).to_string(),
         )
     }
     .introduced_by(explanation)
 }
 
-fn declared_tab_prompt(first: &str, context: &TabContext) -> Prompt {
+fn declared_tab_prompt(first: &str, context: &TabContext, language: Language) -> Prompt {
     let mut options: Vec<ChoiceOption> = context
         .declared
         .iter()
@@ -823,27 +833,34 @@ fn declared_tab_prompt(first: &str, context: &TabContext) -> Prompt {
         .collect();
     options.push(plain_option(
         &(context.declared.len() + 1).to_string(),
-        NEW_TAB_LABEL,
+        messages::new_tab_label(language),
     ));
-    let introduction = format!("Abas do painel:\n{}", option_listing(&options));
+    let introduction = messages::panel_tabs_introduction(language, &option_listing(&options));
     Prompt {
-        blank: Some(format!("{first} (a primeira aba)")),
+        blank: Some(messages::first_tab_default_label(language, first)),
         ..Prompt::choice(
-            "Aba do widget",
-            format!("Aba [Enter = {first}, a primeira]: "),
+            messages::widget_tab_title(language),
+            messages::declared_tab_label(language, first),
             options,
         )
     }
     .introduced_by(introduction)
 }
 
-fn question_prompt(question: &Question, default: Option<String>, required: bool) -> Prompt {
+fn question_prompt(
+    question: &Question,
+    default: Option<String>,
+    required: bool,
+    language: Language,
+) -> Prompt {
     let hint = match &question.kind {
-        AnswerKind::List => Some(LIST_HINT.to_string()),
-        AnswerKind::Integer { minimum, maximum } => Some(format!("de {minimum} a {maximum}")),
+        AnswerKind::List => Some(messages::list_hint(language).to_string()),
+        AnswerKind::Integer { minimum, maximum } => {
+            Some(messages::integer_hint(language, *minimum, *maximum))
+        }
         AnswerKind::Choice(_) | AnswerKind::Text => None,
     };
-    let label = question_label(question, default.as_deref(), required);
+    let label = question_label(question, default.as_deref(), required, language);
     let mut prompt = match &question.kind {
         AnswerKind::Choice(choices) => {
             let options: Vec<ChoiceOption> = choices
@@ -860,8 +877,10 @@ fn question_prompt(question: &Question, default: Option<String>, required: bool)
         _ => Prompt::new(&question.prompt, label),
     };
     prompt.blank = match (&question.kind, &default) {
-        (AnswerKind::Choice(_), Some(default)) => Some(format!("{default} (padrão)")),
-        (AnswerKind::Choice(_), None) if !required => Some(SKIP_LABEL.to_string()),
+        (AnswerKind::Choice(_), Some(default)) => Some(messages::default_marker(language, default)),
+        (AnswerKind::Choice(_), None) if !required => {
+            Some(messages::skip_label(language).to_string())
+        }
         _ => None,
     };
     prompt.default = default;
@@ -870,60 +889,82 @@ fn question_prompt(question: &Question, default: Option<String>, required: bool)
     prompt
 }
 
-fn question_label(question: &Question, default: Option<&str>, required: bool) -> String {
+fn question_label(
+    question: &Question,
+    default: Option<&str>,
+    required: bool,
+    language: Language,
+) -> String {
     let hint = match &question.kind {
-        AnswerKind::List => format!(" ({LIST_HINT})"),
-        AnswerKind::Integer { minimum, maximum } => format!(" ({minimum} a {maximum})"),
+        AnswerKind::List => format!(" ({})", messages::list_hint(language)),
+        AnswerKind::Integer { minimum, maximum } => {
+            messages::integer_label_hint(language, *minimum, *maximum)
+        }
         AnswerKind::Choice(_) | AnswerKind::Text => String::new(),
     };
     let prompt = match question.kind {
-        AnswerKind::Choice(_) => "Escolha",
+        AnswerKind::Choice(_) => messages::choose_label(language),
         _ => question.prompt.as_str(),
     };
     let suffix = match (default, required) {
         (Some(default), _) => format!(" [{default}]"),
-        (None, true) => " (obrigatório)".to_string(),
-        (None, false) => " (Enter para pular)".to_string(),
+        (None, true) => messages::required_suffix(language).to_string(),
+        (None, false) => messages::skip_suffix(language).to_string(),
     };
     format!("{prompt}{hint}{suffix}: ")
 }
 
-fn secret_source_prompt(secret: &SecretQuestion, required: bool) -> Prompt {
+fn secret_source_prompt(secret: &SecretQuestion, required: bool, language: Language) -> Prompt {
     let mut options = vec![
-        plain_option(SECRET_FROM_ENVIRONMENT, "nome de variável de ambiente"),
-        plain_option(SECRET_FROM_FILE, "caminho de um arquivo"),
+        plain_option(
+            SECRET_FROM_ENVIRONMENT,
+            messages::secret_from_environment(language),
+        ),
+        plain_option(SECRET_FROM_FILE, messages::secret_from_file(language)),
     ];
     if secret.allow_both {
-        options.push(plain_option(SECRET_FROM_BOTH, "os dois"));
+        options.push(plain_option(
+            SECRET_FROM_BOTH,
+            messages::secret_from_both(language),
+        ));
     }
+    let explanation = messages::secret_explanation(language);
     let introduction = format!(
-        "{}\n{SECRET_EXPLANATION}\n{}",
+        "{}\n{explanation}\n{}",
         secret.prompt,
         option_listing(&options)
     );
     let suffix = if required {
-        " (obrigatório)"
+        messages::required_suffix(language)
     } else {
-        " (Enter para pular)"
+        messages::skip_suffix(language)
     };
     Prompt {
-        explanation: Some(SECRET_EXPLANATION.to_string()),
-        blank: (!required).then(|| SKIP_LABEL.to_string()),
+        explanation: Some(explanation.to_string()),
+        blank: (!required).then(|| messages::skip_label(language).to_string()),
         required,
-        ..Prompt::choice(&secret.prompt, format!("Escolha{suffix}: "), options)
+        ..Prompt::choice(
+            &secret.prompt,
+            format!("{}{suffix}: ", messages::choose_label(language)),
+            options,
+        )
     }
     .introduced_by(introduction)
 }
 
-fn secret_names_prompt(secret: &SecretQuestion) -> Prompt {
+fn secret_names_prompt(secret: &SecretQuestion, language: Language) -> Prompt {
     let (title, label, hint) = if secret.names_are_list {
         (
-            "Nomes das variáveis",
-            "Nomes das variáveis (separados por vírgula)",
-            Some(LIST_HINT.to_string()),
+            messages::variable_names_title(language),
+            messages::variable_names_label(language),
+            Some(messages::list_hint(language).to_string()),
         )
     } else {
-        ("Nome da variável", "Nome da variável", None)
+        (
+            messages::variable_name_title(language),
+            messages::variable_name_title(language),
+            None,
+        )
     };
     Prompt {
         explanation: Some(secret.prompt.clone()),
@@ -932,15 +973,29 @@ fn secret_names_prompt(secret: &SecretQuestion) -> Prompt {
     }
 }
 
-fn seconds_prompt(title: &str, default: u64, allowed: RangeInclusive<u64>) -> Prompt {
+fn seconds_prompt(
+    title: &str,
+    default: u64,
+    allowed: RangeInclusive<u64>,
+    language: Language,
+) -> Prompt {
     Prompt {
         default: Some(default.to_string()),
-        hint: Some(format!("de {} a {}", allowed.start(), allowed.end())),
+        hint: Some(messages::seconds_hint(
+            language,
+            *allowed.start(),
+            *allowed.end(),
+        )),
         ..Prompt::new(title, format!("{title} [{default}]: "))
     }
 }
 
-fn seconds_answer(line: &str, default: u64, allowed: RangeInclusive<u64>) -> Result<u64, String> {
+fn seconds_answer(
+    line: &str,
+    default: u64,
+    allowed: RangeInclusive<u64>,
+    language: Language,
+) -> Result<u64, String> {
     if line.is_empty() {
         return Ok(default);
     }
@@ -948,13 +1003,15 @@ fn seconds_answer(line: &str, default: u64, allowed: RangeInclusive<u64>) -> Res
         minimum: *allowed.start(),
         maximum: *allowed.end(),
     };
-    let normalized = kind.normalize(line).map_err(|error| error.to_string())?;
+    let normalized = kind
+        .normalize(line)
+        .map_err(|error| error.message(language))?;
     normalized.parse().map_err(|_| {
         AnswerError::NotAnInteger {
             minimum: *allowed.start(),
             maximum: *allowed.end(),
         }
-        .to_string()
+        .message(language)
     })
 }
 
@@ -1280,5 +1337,75 @@ mod tests {
         let before = before.clone();
         assert_eq!(session.answer("qualquer"), Answered::Advanced);
         assert_eq!(session.state(), SetupState::Finished(&before));
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::infrastructure::setup_manifest::parse_manifest_in;
+
+    const MANIFEST: &str = r#"
+plugin = "demo"
+script = "plugins/demo/demo.py"
+default_id = "demo"
+interval_seconds = 60
+timeout_seconds = 5
+
+[[steps]]
+kind = "variable"
+name = "DEMO_COUNT"
+prompt = "Quantidade"
+prompt_en = "Count"
+type = "integer"
+min = 1
+max = 9
+required = true
+"#;
+
+    fn session(language: Language) -> SetupSession {
+        let manifest = parse_manifest_in(MANIFEST, language).unwrap();
+        SetupSession::new_in(manifest, SetupOptions::default(), language)
+    }
+
+    fn prompt_of(session: &SetupSession) -> Prompt {
+        match session.state() {
+            SetupState::Asking(prompt) => prompt.clone(),
+            SetupState::Finished(_) => panic!("finished"),
+        }
+    }
+
+    #[test]
+    fn the_english_interview_asks_in_english() {
+        let mut session = session(Language::English);
+        let first = prompt_of(&session);
+        assert_eq!(first.title, "Widget id");
+        assert_eq!(first.label, "Widget id [demo]: ");
+        assert_eq!(
+            session.answer("Bad Id"),
+            Answered::Rejected("Use only lowercase letters, numbers, '-' and '_'.".to_string())
+        );
+        session.answer("");
+        let count = prompt_of(&session);
+        assert_eq!(count.title, "Count");
+        assert_eq!(count.label, "Count (1 to 9) (required): ");
+        assert_eq!(
+            session.answer("12"),
+            Answered::Rejected("the value must be between 1 and 9".to_string())
+        );
+        session.answer("3");
+        let interval = prompt_of(&session);
+        assert_eq!(interval.title, "Interval between refreshes, in seconds");
+        assert_eq!(interval.hint.as_deref(), Some("30 to 86400"));
+    }
+
+    #[test]
+    fn the_portuguese_interview_keeps_the_original_texts() {
+        let mut session = session(Language::BrazilianPortuguese);
+        let first = prompt_of(&session);
+        assert_eq!(first.label, "Id do widget [demo]: ");
+        session.answer("");
+        let count = prompt_of(&session);
+        assert_eq!(count.label, "Quantidade (1 a 9) (obrigatório): ");
     }
 }

@@ -54,6 +54,7 @@ fn interview(plugin: &str, answers: &[&str]) -> SetupResult {
         &manifest_of(plugin),
         &SetupOptions::default(),
         &mut prompter,
+        mosaic::domain::language::Language::BrazilianPortuguese,
     )
     .unwrap();
     assert!(

@@ -214,7 +214,7 @@ impl AppState {
     }
 
     pub fn open_add_widget(&mut self, snapshot: SetupCatalogSnapshot) {
-        self.mode = Mode::AddingWidget(Box::new(AddWidgetFlow::open(snapshot)));
+        self.mode = Mode::AddingWidget(Box::new(AddWidgetFlow::open(snapshot, self.language())));
     }
 
     pub fn finish_adding_widget(&mut self) {

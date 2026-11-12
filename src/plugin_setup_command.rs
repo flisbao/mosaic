@@ -6,13 +6,14 @@ use mosaic::application::plugin_setup::{
     run_setup, SetupError, SetupOptions, SetupResult, TabContext,
 };
 use mosaic::application::ports::{PromptError, Prompter};
-use mosaic::domain::language::Language;
+use mosaic::display_in_portuguese;
+use mosaic::domain::language::{Language, LocalizedMessage};
 use mosaic::infrastructure::app_paths::config_directory;
 use mosaic::infrastructure::config::{config_file_path, PLUGINS_DIRECTORY_NAME};
 use mosaic::infrastructure::config_appender::{
     append_blocks, inspect_config, AppendError, ConfigOverview,
 };
-use mosaic::infrastructure::setup_manifest::{read_manifest, ManifestError, MANIFEST_FILE_NAME};
+use mosaic::infrastructure::setup_manifest::{read_manifest_in, ManifestError, MANIFEST_FILE_NAME};
 use mosaic::infrastructure::stream_prompter::StreamPrompter;
 use thiserror::Error;
 
@@ -20,42 +21,82 @@ use crate::confirmation::confirm;
 
 const EXIT_CODE_USAGE: u8 = 2;
 const EXIT_CODE_FAILURE: u8 = 1;
-pub const SETUP_USAGE: &str =
-    "uso: mosaic plugins setup NOME [--config-dir DIRETORIO] [--advanced] [--print]";
 const CONFIG_DIR_FLAG: &str = "--config-dir";
 const ADVANCED_FLAG: &str = "--advanced";
 const PRINT_FLAG: &str = "--print";
 const BLOCK_RULE: &str = "----------------------------------------";
 
+pub fn setup_usage(language: Language) -> &'static str {
+    language.pick(
+        "usage: mosaic plugins setup NAME [--config-dir DIRECTORY] [--advanced] [--print]",
+        "uso: mosaic plugins setup NOME [--config-dir DIRETORIO] [--advanced] [--print]",
+    )
+}
+
 #[derive(Debug, Error, PartialEq)]
 enum SetupUsageError {
-    #[error("{SETUP_USAGE}")]
     MissingName,
-    #[error("{CONFIG_DIR_FLAG} precisa de DIRETORIO\n{SETUP_USAGE}")]
     FlagWithoutValue,
-    #[error("argumento desconhecido: {0}\n{SETUP_USAGE}")]
     UnknownArgument(String),
-    #[error(
-        "não foi possível descobrir a pasta de configuração; use {CONFIG_DIR_FLAG}\n{SETUP_USAGE}"
-    )]
     NoConfigDirectory,
 }
 
+impl LocalizedMessage for SetupUsageError {
+    fn message(&self, language: Language) -> String {
+        let usage = setup_usage(language);
+        match self {
+            Self::MissingName => usage.to_string(),
+            Self::FlagWithoutValue => language.pick(
+                format!("{CONFIG_DIR_FLAG} needs DIRECTORY\n{usage}"),
+                format!("{CONFIG_DIR_FLAG} precisa de DIRETORIO\n{usage}"),
+            ),
+            Self::UnknownArgument(argument) => language.pick(
+                format!("unknown argument: {argument}\n{usage}"),
+                format!("argumento desconhecido: {argument}\n{usage}"),
+            ),
+            Self::NoConfigDirectory => language.pick(
+                format!("could not find the configuration folder; use {CONFIG_DIR_FLAG}\n{usage}"),
+                format!("não foi possível descobrir a pasta de configuração; use {CONFIG_DIR_FLAG}\n{usage}"),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(SetupUsageError);
+
 #[derive(Debug, Error)]
 enum SetupFailure {
-    #[error("o plugin '{0}' não está instalado; use mosaic plugins install {0} se for oficial, ou instale pela referência owner/repo[/subdir] ou --from DIR")]
     NotInstalled(String),
-    #[error("o plugin '{0}' não tem {MANIFEST_FILE_NAME}: reinstale com --force pela origem usada (referência owner/repo[/subdir], atalho oficial ou --from DIR)")]
     NoManifest(String),
-    #[error(transparent)]
     Manifest(#[from] ManifestError),
-    #[error(transparent)]
     Append(#[from] AppendError),
-    #[error(transparent)]
     Setup(#[from] SetupError),
-    #[error("não consegui escrever na saída: {0}")]
     Output(String),
 }
+
+impl LocalizedMessage for SetupFailure {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::NotInstalled(name) => language.pick(
+                format!("plugin '{name}' is not installed; use mosaic plugins install {name} if it is official, or install it by the owner/repo[/subdir] reference or --from DIR"),
+                format!("o plugin '{name}' não está instalado; use mosaic plugins install {name} se for oficial, ou instale pela referência owner/repo[/subdir] ou --from DIR"),
+            ),
+            Self::NoManifest(name) => language.pick(
+                format!("plugin '{name}' has no {MANIFEST_FILE_NAME}: reinstall with --force from the source you used (owner/repo[/subdir] reference, official shortcut or --from DIR)"),
+                format!("o plugin '{name}' não tem {MANIFEST_FILE_NAME}: reinstale com --force pela origem usada (referência owner/repo[/subdir], atalho oficial ou --from DIR)"),
+            ),
+            Self::Manifest(error) => error.to_string(),
+            Self::Append(error) => error.message(language),
+            Self::Setup(error) => error.to_string(),
+            Self::Output(reason) => language.pick(
+                format!("could not write to the output: {reason}"),
+                format!("não consegui escrever na saída: {reason}"),
+            ),
+        }
+    }
+}
+
+display_in_portuguese!(SetupFailure);
 
 #[derive(Debug, PartialEq)]
 struct SetupInvocation {
@@ -98,22 +139,29 @@ fn parse_arguments(arguments: &[String]) -> Result<SetupInvocation, SetupUsageEr
 }
 
 pub fn run(arguments: &[String]) -> ExitCode {
+    let language = Language::detect_from_environment();
     let invocation = match parse_arguments(arguments) {
         Ok(invocation) => invocation,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(language));
             return ExitCode::from(EXIT_CODE_USAGE);
         }
     };
     let mut prompter = StreamPrompter::new(io::stdin().lock(), io::stdout());
-    match execute(&invocation, &mut prompter, &mut io::stdout()) {
+    match execute(&invocation, &mut prompter, &mut io::stdout(), language) {
         Ok(()) => ExitCode::SUCCESS,
         Err(SetupFailure::Setup(SetupError::Prompt(PromptError::EndOfInput))) => {
-            eprintln!("mosaic: configuração cancelada (a entrada terminou); nada foi gravado");
+            eprintln!(
+                "{}",
+                language.pick(
+                    "mosaic: setup cancelled (the input ended); nothing was written",
+                    "mosaic: configuração cancelada (a entrada terminou); nada foi gravado",
+                )
+            );
             ExitCode::from(EXIT_CODE_FAILURE)
         }
         Err(error) => {
-            eprintln!("mosaic: {error}");
+            eprintln!("mosaic: {}", error.message(language));
             ExitCode::from(EXIT_CODE_FAILURE)
         }
     }
@@ -123,23 +171,26 @@ fn execute(
     invocation: &SetupInvocation,
     prompter: &mut impl Prompter,
     output: &mut impl Write,
+    language: Language,
 ) -> Result<(), SetupFailure> {
-    let language = Language::detect_from_environment();
-    let manifest = load_manifest(&invocation.config_directory, &invocation.name)?;
+    let manifest = load_manifest(&invocation.config_directory, &invocation.name, language)?;
     let overview = if invocation.print_only {
         inspect_config(&invocation.config_directory, language).ok()
     } else {
         Some(inspect_config(&invocation.config_directory, language)?)
     };
     let options = setup_options(invocation, overview);
-    let result = run_setup(&manifest, &options, prompter)?;
-    show_block(&result, output)?;
+    let result = run_setup(&manifest, &options, prompter, language)?;
+    show_block(&result, output, language)?;
     if invocation.print_only {
         return Ok(());
     }
     let config_path = config_file_path(&invocation.config_directory);
-    if !confirm_write(prompter, &config_path)? {
-        writeln_checked(output, "Nada foi gravado.")?;
+    if !confirm_write(prompter, &config_path, language)? {
+        writeln_checked(
+            output,
+            language.pick("Nothing was written.", "Nada foi gravado."),
+        )?;
         return Ok(());
     }
     append_blocks(
@@ -149,10 +200,17 @@ fn execute(
     )?;
     writeln_checked(
         output,
-        &format!(
-            "Widget \"{}\" gravado em {}. Aperte R no mosaic para recarregar; \"mosaic check --config\" valida o arquivo.",
-            result.draft.id,
-            config_path.display()
+        &language.pick(
+            format!(
+                "Widget \"{}\" written to {}. Press R in mosaic to reload; \"mosaic check --config\" validates the file.",
+                result.draft.id,
+                config_path.display()
+            ),
+            format!(
+                "Widget \"{}\" gravado em {}. Aperte R no mosaic para recarregar; \"mosaic check --config\" valida o arquivo.",
+                result.draft.id,
+                config_path.display()
+            ),
         ),
     )
 }
@@ -174,6 +232,7 @@ fn setup_options(invocation: &SetupInvocation, overview: Option<ConfigOverview>)
 fn load_manifest(
     config_directory: &Path,
     name: &str,
+    language: Language,
 ) -> Result<mosaic::domain::plugin_setup::SetupManifest, SetupFailure> {
     let plugin_directory = config_directory.join(PLUGINS_DIRECTORY_NAME).join(name);
     if !plugin_directory.is_dir() {
@@ -183,24 +242,38 @@ fn load_manifest(
     if !manifest_path.is_file() {
         return Err(SetupFailure::NoManifest(name.to_string()));
     }
-    Ok(read_manifest(&manifest_path)?)
+    Ok(read_manifest_in(&manifest_path, language)?)
 }
 
-fn show_block(result: &SetupResult, output: &mut impl Write) -> Result<(), SetupFailure> {
+fn show_block(
+    result: &SetupResult,
+    output: &mut impl Write,
+    language: Language,
+) -> Result<(), SetupFailure> {
     writeln_checked(output, &format!("\n{BLOCK_RULE}"))?;
     for block in result.toml_blocks() {
         writeln_checked(output, &block)?;
     }
     writeln_checked(output, BLOCK_RULE)?;
     for note in &result.notes {
-        writeln_checked(output, &format!("Atenção: {note}"))?;
+        writeln_checked(
+            output,
+            &format!("{}: {note}", language.pick("Note", "Atenção")),
+        )?;
     }
     Ok(())
 }
 
-fn confirm_write(prompter: &mut impl Prompter, config_path: &Path) -> Result<bool, SetupFailure> {
-    let question = format!("Gravar este widget em {}? [S/n]: ", config_path.display());
-    confirm(prompter, &question, Language::detect_from_environment())
+fn confirm_write(
+    prompter: &mut impl Prompter,
+    config_path: &Path,
+    language: Language,
+) -> Result<bool, SetupFailure> {
+    let question = language.pick(
+        format!("Write this widget to {}? [Y/n]: ", config_path.display()),
+        format!("Gravar este widget em {}? [S/n]: ", config_path.display()),
+    );
+    confirm(prompter, &question, language)
         .map_err(|error| SetupFailure::Setup(SetupError::Prompt(error)))
 }
 

@@ -3,6 +3,7 @@ use crate::application::ports::SetupCatalogSnapshot;
 use crate::application::setup_session::{
     Answered, ChoiceOption, Prompt, PromptInput, SetupSession, SetupState,
 };
+use crate::domain::language::Language;
 use crate::domain::plugin_setup::InstalledPlugin;
 use crate::presentation::app_state::text_field::TextField;
 use crate::presentation::key_input::KeyInput;
@@ -37,8 +38,13 @@ pub struct Answering {
 }
 
 impl Answering {
-    fn start(plugin: &InstalledPlugin, snapshot: &SetupCatalogSnapshot) -> Self {
-        let session = SetupSession::new(plugin.manifest.clone(), snapshot.setup_options());
+    fn start(
+        plugin: &InstalledPlugin,
+        snapshot: &SetupCatalogSnapshot,
+        language: Language,
+    ) -> Self {
+        let session =
+            SetupSession::new_in(plugin.manifest.clone(), snapshot.setup_options(), language);
         let mut answering = Self {
             plugin_name: plugin.name.clone(),
             session,
@@ -230,13 +236,15 @@ pub enum AddWidgetStep {
 pub struct AddWidgetFlow {
     snapshot: SetupCatalogSnapshot,
     step: AddWidgetStep,
+    language: Language,
 }
 
 impl AddWidgetFlow {
-    pub fn open(snapshot: SetupCatalogSnapshot) -> Self {
+    pub fn open(snapshot: SetupCatalogSnapshot, language: Language) -> Self {
         Self {
             snapshot,
             step: AddWidgetStep::ChoosingPlugin { selected: 0 },
+            language,
         }
     }
 
@@ -290,6 +298,7 @@ impl AddWidgetFlow {
                             self.step = AddWidgetStep::Answering(Box::new(Answering::start(
                                 &plugin,
                                 &self.snapshot,
+                                self.language,
                             )));
                         }
                         FlowOutcome::Stay
@@ -379,13 +388,16 @@ mod tests {
     }
 
     fn demo_flow() -> AddWidgetFlow {
-        AddWidgetFlow::open(snapshot(vec![
-            plugin("alfa", Vec::new()),
-            plugin(
-                "demo",
-                vec![question("DEMO_SITE", Requirement::Always, AnswerKind::Text)],
-            ),
-        ]))
+        AddWidgetFlow::open(
+            snapshot(vec![
+                plugin("alfa", Vec::new()),
+                plugin(
+                    "demo",
+                    vec![question("DEMO_SITE", Requirement::Always, AnswerKind::Text)],
+                ),
+            ]),
+            Language::BrazilianPortuguese,
+        )
     }
 
     fn press(flow: &mut AddWidgetFlow, keys: &[KeyInput]) -> FlowOutcome {
@@ -449,7 +461,7 @@ mod tests {
 
     #[test]
     fn without_installed_plugins_only_escape_leaves() {
-        let mut flow = AddWidgetFlow::open(snapshot(Vec::new()));
+        let mut flow = AddWidgetFlow::open(snapshot(Vec::new()), Language::BrazilianPortuguese);
         assert_eq!(press(&mut flow, &[KeyInput::Enter]), FlowOutcome::Stay);
         assert_eq!(press(&mut flow, &[KeyInput::Down]), FlowOutcome::Stay);
         assert_eq!(press(&mut flow, &[KeyInput::Escape]), FlowOutcome::Close);
@@ -498,7 +510,10 @@ mod tests {
         if let Step::Question(question) = &mut choice {
             question.default = Some("cli".to_string());
         }
-        let mut flow = AddWidgetFlow::open(snapshot(vec![plugin("demo", vec![choice])]));
+        let mut flow = AddWidgetFlow::open(
+            snapshot(vec![plugin("demo", vec![choice])]),
+            Language::BrazilianPortuguese,
+        );
         press(&mut flow, &[KeyInput::Enter; 3]);
         assert!(!flow.is_typing());
         let rows = answering(&flow).rows();
@@ -517,7 +532,10 @@ mod tests {
     #[test]
     fn a_required_choice_has_no_blank_row_and_vim_keys_move_the_selection() {
         let choice = question("DEMO_METHOD", Requirement::Always, method_choices());
-        let mut flow = AddWidgetFlow::open(snapshot(vec![plugin("demo", vec![choice])]));
+        let mut flow = AddWidgetFlow::open(
+            snapshot(vec![plugin("demo", vec![choice])]),
+            Language::BrazilianPortuguese,
+        );
         press(&mut flow, &[KeyInput::Enter; 3]);
         assert_eq!(answering(&flow).rows().len(), 2);
         press(&mut flow, &[KeyInput::Down]);
@@ -556,7 +574,10 @@ mod tests {
 
     #[test]
     fn a_save_error_is_shown_in_the_review_and_the_flow_stays_open() {
-        let mut flow = AddWidgetFlow::open(snapshot(vec![plugin("demo", Vec::new())]));
+        let mut flow = AddWidgetFlow::open(
+            snapshot(vec![plugin("demo", Vec::new())]),
+            Language::BrazilianPortuguese,
+        );
         press(&mut flow, &[KeyInput::Enter; 5]);
         assert!(matches!(
             flow.step(),
@@ -577,7 +598,10 @@ mod tests {
             let mut asking = demo_flow();
             press(&mut asking, &[KeyInput::Enter]);
             assert_eq!(press(&mut asking, &[cancel]), FlowOutcome::Close);
-            let mut reviewing = AddWidgetFlow::open(snapshot(vec![plugin("demo", Vec::new())]));
+            let mut reviewing = AddWidgetFlow::open(
+                snapshot(vec![plugin("demo", Vec::new())]),
+                Language::BrazilianPortuguese,
+            );
             press(&mut reviewing, &[KeyInput::Enter; 5]);
             assert!(matches!(reviewing.step(), AddWidgetStep::Reviewing(_)));
             assert_eq!(press(&mut reviewing, &[cancel]), FlowOutcome::Close);

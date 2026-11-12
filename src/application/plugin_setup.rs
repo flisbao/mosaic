@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::application::ports::{PromptError, Prompter};
 use crate::application::setup_session::{Answered, SetupSession, SetupState};
+use crate::domain::language::Language;
 use crate::domain::plugin_setup::SetupManifest;
 use crate::domain::widget_draft::{tab_toml_block, WidgetDraft};
 
@@ -45,8 +46,9 @@ pub fn run_setup(
     manifest: &SetupManifest,
     options: &SetupOptions,
     prompter: &mut dyn Prompter,
+    language: Language,
 ) -> Result<SetupResult, SetupError> {
-    let mut session = SetupSession::new(manifest.clone(), options.clone());
+    let mut session = SetupSession::new_in(manifest.clone(), options.clone(), language);
     let mut introduce = true;
     loop {
         let prompt = match session.state() {
@@ -157,7 +159,12 @@ mod tests {
         answers: &[&str],
     ) -> (Result<SetupResult, SetupError>, ScriptedPrompter) {
         let mut prompter = ScriptedPrompter::new(answers);
-        let result = run_setup(manifest, &SetupOptions::default(), &mut prompter);
+        let result = run_setup(
+            manifest,
+            &SetupOptions::default(),
+            &mut prompter,
+            Language::BrazilianPortuguese,
+        );
         (result, prompter)
     }
 
@@ -281,7 +288,13 @@ mod tests {
             include_advanced: true,
             ..SetupOptions::default()
         };
-        let result = run_setup(&manifest, &options, &mut prompter).unwrap();
+        let result = run_setup(
+            &manifest,
+            &options,
+            &mut prompter,
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         assert_eq!(
             result.draft.environment,
             vec![("DEMO_STATE_DIR".to_string(), "/tmp/estado".to_string())]
@@ -409,7 +422,13 @@ mod tests {
             ..SetupOptions::default()
         };
         let mut prompter = ScriptedPrompter::new(&["", "Meu Widget", "demo-dois", "", ""]);
-        let result = run_setup(&manifest, &options, &mut prompter).unwrap();
+        let result = run_setup(
+            &manifest,
+            &options,
+            &mut prompter,
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
         assert_eq!(result.draft.id, "demo-dois");
         assert!(prompter.told.iter().any(|text| text.contains("Já existe")));
         assert!(prompter
@@ -482,7 +501,12 @@ mod tests {
             tab_context: Some(context),
             ..SetupOptions::default()
         };
-        let result = run_setup(&manifest(Vec::new()), &options, &mut prompter);
+        let result = run_setup(
+            &manifest(Vec::new()),
+            &options,
+            &mut prompter,
+            Language::BrazilianPortuguese,
+        );
         (result, prompter)
     }
 
