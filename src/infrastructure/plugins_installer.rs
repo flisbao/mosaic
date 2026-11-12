@@ -20,6 +20,7 @@ pub enum PluginsError {
         destination: String,
         backup: String,
         reason: String,
+        restore_reason: String,
     },
     Io {
         path: String,
@@ -46,9 +47,10 @@ impl LocalizedMessage for PluginsError {
                 destination,
                 backup,
                 reason,
+                restore_reason,
             } => language.pick(
-                format!("could not restore {destination}: {reason}; backup kept at {backup}"),
-                format!("não foi possível restaurar {destination}: {reason}; backup preservado em {backup}"),
+                format!("could not restore {destination}: {reason}; restore: {restore_reason}; backup kept at {backup}"),
+                format!("não foi possível restaurar {destination}: {reason}; restauração: {restore_reason}; backup preservado em {backup}"),
             ),
             Self::Io { path, reason } => format!("{path}: {reason}"),
         }
@@ -252,7 +254,8 @@ fn swap_directories(
                 return Err(PluginsError::Restore {
                     destination: destination.display().to_string(),
                     backup: backup.display().to_string(),
-                    reason: format!("{error}; restauração: {restore_error}"),
+                    reason: error.to_string(),
+                    restore_reason: restore_error.to_string(),
                 });
             }
         }
@@ -604,6 +607,44 @@ mod tests {
         assert_eq!(
             available_plugins(&missing),
             Err(PluginsError::SourceMissing(missing.display().to_string()))
+        );
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_installer_error_is_translated() {
+        let errors = [
+            PluginsError::SourceMissing("/s".to_string()),
+            PluginsError::UnknownPlugin("p".to_string()),
+            PluginsError::InvalidName("p".to_string()),
+            PluginsError::Restore {
+                destination: "/d".to_string(),
+                backup: "/b".to_string(),
+                reason: "r".to_string(),
+                restore_reason: "x".to_string(),
+            },
+        ];
+        for error in errors {
+            assert_translated("installer error", |language| error.message(language));
+        }
+    }
+
+    #[test]
+    fn the_restore_error_keeps_the_portuguese_text_in_display() {
+        let error = PluginsError::Restore {
+            destination: "/d".to_string(),
+            backup: "/b".to_string(),
+            reason: "r".to_string(),
+            restore_reason: "x".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "não foi possível restaurar /d: r; restauração: x; backup preservado em /b"
         );
     }
 }
