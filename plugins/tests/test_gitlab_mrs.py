@@ -1,5 +1,7 @@
+import dataclasses
 import io
 import json
+import string
 import sys
 import tempfile
 import unittest
@@ -13,6 +15,8 @@ import gitlab_mrs  # noqa: E402
 import pull_request_fixtures as fixtures  # noqa: E402
 
 SECRET = "TOKEN-SECRETO-123"
+PORTUGUESE = "pt-BR"
+gitlab_mrs.use_language({"MOSAIC_LANGUAGE": PORTUGUESE})
 VIEWER = fixtures.VIEWER_LOGIN
 REVIEW = gitlab_mrs.REVIEW_SECTION
 MINE = gitlab_mrs.MINE_SECTION
@@ -23,6 +27,7 @@ def base_environment(**overrides):
     environment = {
         "GITLAB_TOKEN_ENV": "MEU_TOKEN",
         "MEU_TOKEN": SECRET,
+        "MOSAIC_LANGUAGE": PORTUGUESE,
     }
     environment.update(overrides)
     return {key: value for key, value in environment.items() if value is not None}
@@ -300,6 +305,63 @@ class MainTests(unittest.TestCase):
         key = gitlab_mrs.state_key(config, environment)
         self.assertNotIn(SECRET, key)
         self.assertIn("env:MEU_TOKEN", key)
+
+
+class LanguageTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(gitlab_mrs.use_language, {"MOSAIC_LANGUAGE": PORTUGUESE})
+
+    def test_portuguese_is_chosen_by_any_value_starting_with_pt(self):
+        for value in ("pt-BR", "pt", "PT_br", " pt_BR.UTF-8 "):
+            self.assertIs(gitlab_mrs.resolve_messages({"MOSAIC_LANGUAGE": value}), gitlab_mrs.PORTUGUESE_MESSAGES, value)
+
+    def test_english_is_the_default_and_the_system_locale_is_ignored(self):
+        for environment in ({}, {"MOSAIC_LANGUAGE": ""}, {"MOSAIC_LANGUAGE": "fr"}, {"LANG": "pt_BR.UTF-8"}):
+            self.assertIs(gitlab_mrs.resolve_messages(environment), gitlab_mrs.ENGLISH_MESSAGES, environment)
+
+    def test_every_message_exists_in_both_languages_with_the_same_placeholders(self):
+        formatter = string.Formatter()
+
+        def placeholders(template):
+            return {name for _, name, _, _ in formatter.parse(template) if name is not None}
+
+        english = dataclasses.asdict(gitlab_mrs.ENGLISH_MESSAGES)
+        portuguese = dataclasses.asdict(gitlab_mrs.PORTUGUESE_MESSAGES)
+        self.assertEqual(english.keys(), portuguese.keys())
+        self.assertEqual(english["states"].keys(), portuguese["states"].keys())
+        for key in english:
+            if key == "states":
+                for state, text in english[key].items():
+                    self.assertTrue(text.strip() and portuguese[key][state].strip(), state)
+                    self.assertNotEqual(text, portuguese[key][state], state)
+                continue
+            self.assertTrue(english[key].strip(), key)
+            self.assertTrue(portuguese[key].strip(), key)
+            self.assertEqual(placeholders(english[key]), placeholders(portuguese[key]), key)
+
+    def test_the_english_snapshot_uses_english_headings_and_tags(self):
+        gitlab_mrs.use_language({})
+        pulls = [
+            gitlab_mrs.PullRequest(
+                item_id="g/a!1", repository="g/a", reference="!1", title="Fix", author="ana",
+                created_at=NOW, url="https://x", target_branch="main", head_commit="h",
+                section=REVIEW, state=gitlab_mrs.STATE_NEW,
+            )
+        ]
+        snapshot = gitlab_mrs.build_snapshot(pulls, "GitLab", NOW)
+        self.assertEqual([section["heading"] for section in snapshot["detail"]], ["Awaiting my review", "My MRs"])
+        row = snapshot["summary"]["blocks"][1]["rows"][0]
+        self.assertEqual(row["tags"][0]["text"], "new")
+        self.assertEqual(snapshot["alerts"][0]["title"], "Review requested: g/a !1")
+        self.assertEqual(snapshot["mini"]["text"], "to review")
+
+    def test_usage_and_errors_are_in_english_without_the_variable(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        self.assertEqual(gitlab_mrs.main(["bogus"], environ={}, stdout=stdout, stderr=stderr), 2)
+        self.assertEqual(stderr.getvalue(), "usage: gitlab_mrs.py snapshot\n")
+        stderr = io.StringIO()
+        self.assertEqual(gitlab_mrs.main(["snapshot"], environ={}, stdout=stdout, stderr=stderr), 1)
+        self.assertTrue(stderr.getvalue().startswith("error: "), stderr.getvalue())
 
 
 if __name__ == "__main__":

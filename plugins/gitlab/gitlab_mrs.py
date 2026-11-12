@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -43,29 +44,23 @@ STATE_DIRECTORY_VARIABLE = "GITLAB_STATE_DIR"
 TIMESTAMP_FORMATS = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
 UTC_OFFSET_SUFFIX = "+0000"
 UTC_ZULU_SUFFIX = "Z"
-REVIEW_SECTION = "Aguardando minha revisão"
-MINE_SECTION = "Meus PRs"
+REVIEW_SECTION = "review"
+MINE_SECTION = "mine"
 UNREVIEWED = "unreviewed"
 REVIEWED = "reviewed"
 APPROVED = "approved"
-UNKNOWN_AUTHOR = "desconhecido"
-STATE_NEW = "novo"
-STATE_PUSHED = "push novo"
-STATE_CONFLICT = "conflito"
-STATE_CHANGES = "mudança pedida"
-STATE_APPROVED = "aprovado"
-STATE_WAITING = "aguardando"
+STATE_NEW = "new"
+STATE_PUSHED = "pushed"
+STATE_CONFLICT = "conflict"
+STATE_CHANGES = "changes"
+STATE_APPROVED = "approved"
+STATE_WAITING = "waiting"
 TITLE_TEXT_LIMIT = 80
 MAXIMUM_BLOCK_ROWS = 200
 PROTOCOL_VERSION = 1
 ITEM_SEPARATOR = " · "
-EMPTY_TEXT = "nada pendente"
-MINI_TEXT = "para revisar"
-REVIEW_LABEL = "revisar"
-MINE_LABEL = "meus PRs"
 ALERT_ID_PREFIX = "review-"
 MAXIMUM_ALERT_ID_LENGTH = 100
-ALERT_TITLE_PREFIX = "Revisão pedida: "
 ALERT_LEVEL = "info"
 UPDATED_FLAG = "updated"
 TONE_NORMAL = "normal"
@@ -82,8 +77,6 @@ TONE_BY_STATE = {
     STATE_APPROVED: TONE_OK,
     STATE_WAITING: TONE_MUTED,
 }
-OFFLINE_NOTICE_FORMAT = "dados de %H:%M (offline)"
-OFFLINE_NOTICE_FORMAT_WITH_DATE = "dados de %d/%m %H:%M (offline)"
 SECONDS_PER_MINUTE = 60
 MINUTES_PER_HOUR = 60
 HOURS_PER_DAY = 24
@@ -94,11 +87,144 @@ TEMPORARY_FILE_SUFFIX = ".tmp"
 STATE_DIRECTORY_MODE = 0o700
 ARGUMENT_ERROR_EXIT_CODE = 2
 FAILURE_EXIT_CODE = 1
-USAGE_MESSAGE = "uso: gitlab_mrs.py snapshot"
 SNAPSHOT_COMMAND = ["snapshot"]
 STATE_KEY_SEPARATOR = "\n"
 TOKEN_VARIABLE_KEY = f"{TOKEN_PREFIX}_TOKEN_ENV"
 TOKEN_FILE_KEY = f"{TOKEN_PREFIX}_TOKEN_FILE"
+
+
+LANGUAGE_VARIABLE = "MOSAIC_LANGUAGE"
+LANGUAGE_ENGLISH = "en"
+LANGUAGE_PORTUGUESE = "pt-BR"
+PORTUGUESE_LANGUAGE_PREFIX = "pt"
+
+
+@dataclass(frozen=True)
+class Messages:
+    review_section: str
+    mine_section: str
+    unknown_author: str
+    states: dict
+    empty_text: str
+    mini_text: str
+    review_label: str
+    mine_label: str
+    alert_title: str
+    offline_notice: str
+    offline_notice_with_date: str
+    usage: str
+    error_line: str
+    base_url_invalid: str
+    token_invalid_characters: str
+    token_not_configured: str
+    token_variable_empty: str
+    token_file_unreadable: str
+    token_file_empty: str
+    response_too_large: str
+    unexpected_status: str
+    response_not_json: str
+    unexpected_response: str
+    network_failure: str
+    auth_failed: str
+    rate_limited: str
+    request_rejected: str
+    query_rejected: str
+
+
+ENGLISH_MESSAGES = Messages(
+    review_section="Awaiting my review",
+    mine_section="My MRs",
+    unknown_author="unknown",
+    states={
+        "new": "new",
+        "pushed": "new push",
+        "conflict": "conflict",
+        "changes": "changes requested",
+        "approved": "approved",
+        "waiting": "waiting",
+    },
+    empty_text="nothing pending",
+    mini_text="to review",
+    review_label="to review",
+    mine_label="my MRs",
+    alert_title="Review requested: {repository} {reference}",
+    offline_notice="data as of %H:%M (offline)",
+    offline_notice_with_date="data as of %Y-%m-%d %H:%M (offline)",
+    usage="usage: gitlab_mrs.py snapshot",
+    error_line="error: {message}",
+    base_url_invalid="{variable} must be https or a local test address",
+    token_invalid_characters="the token from {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contains invalid characters",
+    token_not_configured="set {variable_key} (name of the variable holding the token) or {file_key}",
+    token_variable_empty="the variable {variable} ({variable_key}) is empty or missing",
+    token_file_unreadable="could not read the file from {file_key}",
+    token_file_empty="the file from {file_key} is empty",
+    response_too_large="the {service} response exceeds the maximum allowed size",
+    unexpected_status="unexpected response from {service} (HTTP {status})",
+    response_not_json="the {service} response is not JSON",
+    unexpected_response="unexpected response from {service}",
+    network_failure="network failure while talking to {service} ({error_type})",
+    auth_failed="invalid token or missing permission for {service}",
+    rate_limited="{service} rate limit reached; will try again on the next refresh",
+    request_rejected="{service} rejected the request (HTTP {status}); check the widget configuration",
+    query_rejected="{service} rejected the query; the plugin may be out of date",
+)
+
+PORTUGUESE_MESSAGES = Messages(
+    review_section="Aguardando minha revisão",
+    mine_section="Meus PRs",
+    unknown_author="desconhecido",
+    states={
+        "new": "novo",
+        "pushed": "push novo",
+        "conflict": "conflito",
+        "changes": "mudança pedida",
+        "approved": "aprovado",
+        "waiting": "aguardando",
+    },
+    empty_text="nada pendente",
+    mini_text="para revisar",
+    review_label="revisar",
+    mine_label="meus PRs",
+    alert_title="Revisão pedida: {repository} {reference}",
+    offline_notice="dados de %H:%M (offline)",
+    offline_notice_with_date="dados de %d/%m %H:%M (offline)",
+    usage="uso: gitlab_mrs.py snapshot",
+    error_line="erro: {message}",
+    base_url_invalid="{variable} precisa ser https ou um endereço local de teste",
+    token_invalid_characters="o token de {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contém caracteres inválidos",
+    token_not_configured="defina {variable_key} (nome da variável com o token) ou {file_key}",
+    token_variable_empty="a variável {variable} ({variable_key}) está vazia ou ausente",
+    token_file_unreadable="não foi possível ler o arquivo de {file_key}",
+    token_file_empty="o arquivo de {file_key} está vazio",
+    response_too_large="a resposta do {service} excede o tamanho máximo permitido",
+    unexpected_status="resposta inesperada do {service} (HTTP {status})",
+    response_not_json="a resposta do {service} não é JSON",
+    unexpected_response="resposta inesperada do {service}",
+    network_failure="falha de rede ao falar com {service} ({error_type})",
+    auth_failed="token inválido ou sem permissão para {service}",
+    rate_limited="limite de requisições do {service}; tento de novo na próxima leitura",
+    request_rejected="o {service} recusou a requisição (HTTP {status}); confira a configuração do widget",
+    query_rejected="o {service} recusou a consulta; o plugin pode estar desatualizado",
+)
+
+MESSAGES_BY_LANGUAGE = {LANGUAGE_ENGLISH: ENGLISH_MESSAGES, LANGUAGE_PORTUGUESE: PORTUGUESE_MESSAGES}
+_ACTIVE_MESSAGES: ContextVar[Messages] = ContextVar("gitlab_mrs_messages", default=ENGLISH_MESSAGES)
+
+
+def resolve_messages(environ: Mapping[str, str]) -> Messages:
+    requested = environ.get(LANGUAGE_VARIABLE, "").strip().lower()
+    is_portuguese = requested.startswith(PORTUGUESE_LANGUAGE_PREFIX)
+    return MESSAGES_BY_LANGUAGE[LANGUAGE_PORTUGUESE if is_portuguese else LANGUAGE_ENGLISH]
+
+
+def use_language(environ: Mapping[str, str]) -> Messages:
+    messages = resolve_messages(environ)
+    _ACTIVE_MESSAGES.set(messages)
+    return messages
+
+
+def messages() -> Messages:
+    return _ACTIVE_MESSAGES.get()
 
 
 class ConfigError(Exception):
@@ -130,7 +256,7 @@ def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> st
     is_secure = parsed.scheme == "https" and bool(parsed.hostname)
     is_local = parsed.scheme == "http" and parsed.hostname in LOCAL_HOSTS
     if not (is_secure or is_local) or any(character.isspace() for character in override):
-        raise ConfigError(f"{variable} precisa ser https ou um endereço local de teste")
+        raise ConfigError(messages().base_url_invalid.format(variable=variable))
     return override.rstrip("/")
 
 
@@ -145,9 +271,7 @@ def read_token(environ: Mapping[str, str], prefix: str) -> str:
 
 def _ensure_token_is_header_safe(value: str, prefix: str) -> str:
     if any(character.isspace() or not character.isprintable() for character in value) or not _is_latin1(value):
-        raise ConfigError(
-            f"o token de {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contém caracteres inválidos"
-        )
+        raise ConfigError(messages().token_invalid_characters.format(prefix=prefix))
     return value
 
 
@@ -168,13 +292,13 @@ def _read_token_source(environ: Mapping[str, str], prefix: str) -> str:
     path = environ.get(file_key, "").strip()
     if path:
         return _read_token_file(path, file_key)
-    raise ConfigError(f"defina {variable_key} (nome da variável com o token) ou {file_key}")
+    raise ConfigError(messages().token_not_configured.format(variable_key=variable_key, file_key=file_key))
 
 
 def _read_token_variable(environ: Mapping[str, str], variable: str, variable_key: str) -> str:
     value = environ.get(variable, "").strip()
     if not value:
-        raise ConfigError(f"a variável {variable} ({variable_key}) está vazia ou ausente")
+        raise ConfigError(messages().token_variable_empty.format(variable=variable, variable_key=variable_key))
     return value
 
 
@@ -182,9 +306,9 @@ def _read_token_file(path: str, file_key: str) -> str:
     try:
         value = Path(path).expanduser().read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
-        raise ConfigError(f"não foi possível ler o arquivo de {file_key}") from None
+        raise ConfigError(messages().token_file_unreadable.format(file_key=file_key)) from None
     if not value:
-        raise ConfigError(f"o arquivo de {file_key} está vazio")
+        raise ConfigError(messages().token_file_empty.format(file_key=file_key))
     return value
 
 
@@ -233,7 +357,7 @@ def urllib_http(url: str, method: str, headers: dict, body: bytes | None, timeou
 def _read_limited(stream, limit: int) -> bytes:
     body = stream.read(limit + 1)
     if len(body) > limit:
-        raise UnexpectedResponseError(f"a resposta do {SERVICE_NAME} excede o tamanho máximo permitido")
+        raise UnexpectedResponseError(messages().response_too_large.format(service=SERVICE_NAME))
     return body
 
 
@@ -249,23 +373,23 @@ def decode_response(status: int, body: bytes, service: str) -> object:
     if status in REJECTED_STATUSES:
         raise RequestRejectedError(_rejected_message(service, status))
     if status >= HTTP_REDIRECT_FLOOR:
-        raise UnexpectedResponseError(f"resposta inesperada do {service} (HTTP {status})")
+        raise UnexpectedResponseError(messages().unexpected_status.format(service=service, status=status))
     try:
         return json.loads(body)
     except ValueError:
-        raise UnexpectedResponseError(f"a resposta do {service} não é JSON") from None
+        raise UnexpectedResponseError(messages().response_not_json.format(service=service)) from None
 
 
 def _auth_message(service: str) -> str:
-    return f"token inválido ou sem permissão para {service}"
+    return messages().auth_failed.format(service=service)
 
 
 def _rate_limit_message(service: str) -> str:
-    return f"limite de requisições do {service}; tento de novo na próxima leitura"
+    return messages().rate_limited.format(service=service)
 
 
 def _rejected_message(service: str, status: int) -> str:
-    return f"o {service} recusou a requisição (HTTP {status}); confira a configuração do widget"
+    return messages().request_rejected.format(service=service, status=status)
 
 
 class GitLabClient:
@@ -283,7 +407,7 @@ class GitLabClient:
         _raise_on_graphql_errors(payload)
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
-            raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
+            raise UnexpectedResponseError(messages().unexpected_response.format(service=SERVICE_NAME))
         return data
 
     def _post_graphql(self, document: str, variables: dict) -> object:
@@ -293,7 +417,7 @@ class GitLabClient:
             status, response_body = self._http(url, "POST", self._headers, body, REQUEST_TIMEOUT_SECONDS)
         except (OSError, http.client.HTTPException) as error:
             raise NetworkError(
-                f"falha de rede ao falar com {SERVICE_NAME} ({type(error).__name__})"
+                messages().network_failure.format(service=SERVICE_NAME, error_type=type(error).__name__)
             ) from None
         return decode_response(status, response_body, SERVICE_NAME)
 
@@ -315,7 +439,7 @@ def _is_rate_limited(error: object) -> bool:
 
 
 def _query_rejected_message(service: str) -> str:
-    return f"o {service} recusou a consulta; o plugin pode estar desatualizado"
+    return messages().query_rejected.format(service=service)
 
 
 @dataclass(frozen=True)
@@ -453,7 +577,7 @@ def _base_merge_request(node: dict) -> PullRequest | None:
         repository=project,
         reference=f"!{number}",
         title=_text(node.get("title")),
-        author=_text(_nested(node, "author", "username")) or UNKNOWN_AUTHOR,
+        author=_text(_nested(node, "author", "username")) or messages().unknown_author,
         created_at=created_at,
         url=_text(node.get("webUrl")),
         target_branch=_text(node.get("targetBranch")),
@@ -561,8 +685,8 @@ def build_snapshot(pull_requests: list[PullRequest], title: str, now: datetime) 
         "protocol": PROTOCOL_VERSION,
         "summary": {"title": title, "blocks": _summary_blocks(review, mine, now)},
         "detail": [
-            {"heading": REVIEW_SECTION, "items": [_detail_item(pull, now) for pull in review]},
-            {"heading": MINE_SECTION, "items": [_detail_item(pull, now) for pull in mine]},
+            {"heading": messages().review_section, "items": [_detail_item(pull, now) for pull in review]},
+            {"heading": messages().mine_section, "items": [_detail_item(pull, now) for pull in mine]},
         ],
         "mini": _mini_block(review),
         "alerts": [_alert(pull) for pull in review if pull.state],
@@ -578,7 +702,7 @@ def _summary_blocks(review: list[PullRequest], mine: list[PullRequest], now: dat
     if review:
         blocks.append({"type": "rows", "rows": [_row(pull, now) for pull in review[:MAXIMUM_BLOCK_ROWS]]})
     elif not mine:
-        blocks.append({"type": "lines", "lines": [{"text": EMPTY_TEXT, "tone": TONE_MUTED}]})
+        blocks.append({"type": "lines", "lines": [{"text": messages().empty_text, "tone": TONE_MUTED}]})
     return blocks
 
 
@@ -586,8 +710,8 @@ def _stat_block(review: list[PullRequest], mine: list[PullRequest]) -> dict:
     return {
         "type": "stat",
         "items": [
-            {"value": str(len(review)), "label": REVIEW_LABEL},
-            {"value": str(len(mine)), "label": MINE_LABEL},
+            {"value": str(len(review)), "label": messages().review_label},
+            {"value": str(len(mine)), "label": messages().mine_label},
         ],
     }
 
@@ -595,8 +719,12 @@ def _stat_block(review: list[PullRequest], mine: list[PullRequest]) -> dict:
 def _row(pull: PullRequest, now: datetime) -> dict:
     row = {"text": _pull_heading(pull), "time": format_age(now - pull.created_at)}
     if pull.state:
-        row["tags"] = [{"text": pull.state, "tone": TONE_BY_STATE[pull.state]}]
+        row["tags"] = [{"text": _state_text(pull.state), "tone": TONE_BY_STATE[pull.state]}]
     return row
+
+
+def _state_text(state: str) -> str:
+    return messages().states.get(state, state)
 
 
 def _pull_heading(pull: PullRequest) -> str:
@@ -610,7 +738,7 @@ def _detail_item(pull: PullRequest, now: datetime) -> dict:
         "meta": {
             "url": pull.url,
             "target_branch": pull.target_branch,
-            "state": pull.state,
+            "state": _state_text(pull.state),
             "author": pull.author,
         },
     }
@@ -622,14 +750,14 @@ def _detail_item(pull: PullRequest, now: datetime) -> dict:
 def _detail_text(pull: PullRequest, now: datetime) -> str:
     text = ITEM_SEPARATOR.join((_pull_heading(pull), pull.author, format_age(now - pull.created_at)))
     if pull.state:
-        text += f" [{pull.state}]"
+        text += f" [{_state_text(pull.state)}]"
     return text
 
 
 def _mini_block(review: list[PullRequest]) -> dict:
     return {
         "value": str(len(review)),
-        "text": MINI_TEXT,
+        "text": messages().mini_text,
         "tone": TONE_WARN if review else TONE_NORMAL,
     }
 
@@ -637,7 +765,7 @@ def _mini_block(review: list[PullRequest]) -> dict:
 def _alert(pull: PullRequest) -> dict:
     return {
         "id": (ALERT_ID_PREFIX + pull.item_id)[:MAXIMUM_ALERT_ID_LENGTH],
-        "title": f"{ALERT_TITLE_PREFIX}{pull.repository} {pull.reference}",
+        "title": messages().alert_title.format(repository=pull.repository, reference=pull.reference),
         "body": flatten_text(pull.title, TITLE_TEXT_LIMIT),
         "level": ALERT_LEVEL,
     }
@@ -652,7 +780,8 @@ def with_offline_notice(snapshot: dict, saved_at: datetime, now: datetime) -> di
 def _offline_notice_block(saved_at: datetime, now: datetime) -> dict:
     local_saved_at = saved_at.astimezone()
     is_same_day = local_saved_at.date() == now.astimezone().date()
-    notice_format = OFFLINE_NOTICE_FORMAT if is_same_day else OFFLINE_NOTICE_FORMAT_WITH_DATE
+    active = messages()
+    notice_format = active.offline_notice if is_same_day else active.offline_notice_with_date
     text = local_saved_at.strftime(notice_format)
     return {"type": "lines", "lines": [{"text": text, "tone": TONE_WARN}]}
 
@@ -757,7 +886,7 @@ def _print_json(stdout, document: dict) -> None:
 
 
 def _fail(stderr, error: Exception) -> int:
-    print(f"erro: {error}", file=stderr)
+    print(messages().error_line.format(message=error), file=stderr)
     return FAILURE_EXIT_CODE
 
 
@@ -770,10 +899,11 @@ def main(
     stderr=None,
 ) -> int:
     environ = os.environ if environ is None else environ
+    use_language(environ)
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
     if list(arguments) != SNAPSHOT_COMMAND:
-        print(USAGE_MESSAGE, file=stderr)
+        print(messages().usage, file=stderr)
         return ARGUMENT_ERROR_EXIT_CODE
     try:
         config = load_config(environ)

@@ -1,4 +1,4 @@
-version = "0.0.4"
+version = "0.0.5"
 min_mosaic_version = "0.0.10"
 plugin = "gitlab"
 script = "plugins/gitlab/gitlab_mrs.py"
@@ -10,6 +10,7 @@ testing_only = ["GITLAB_URL"]
 [[steps]]
 kind = "secret"
 prompt = "Token pessoal do GitLab (PAT com o escopo read_api)"
+prompt_en = "GitLab personal token (PAT with the read_api scope)"
 environment_key = "GITLAB_TOKEN_ENV"
 file_key = "GITLAB_TOKEN_FILE"
 required = true
@@ -18,14 +19,17 @@ required = true
 kind = "variable"
 name = "GITLAB_TITLE"
 prompt = "Título do widget"
+prompt_en = "Widget title"
 default = "GitLab"
 
 [[steps]]
 kind = "variable"
 name = "GITLAB_STATE_DIR"
 prompt = "Pasta do estado do widget (memória de revisões e cache offline)"
+prompt_en = "Widget state folder (review memory and offline cache)"
 default = "~/.local/state/mosaic/gitlab"
 advanced = true
 
 [[notes]]
 text = "O valor do token fica fora do mosaic.toml: exporte a variável (ou grave o arquivo com chmod 600) antes de abrir o mosaic. O plugin é testado só com o GitLab.com."
+text_en = "The token value stays out of mosaic.toml: export the variable (or write the file with chmod 600) before opening mosaic. The plugin is only tested against GitLab.com."
