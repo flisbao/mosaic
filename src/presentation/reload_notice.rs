@@ -5,6 +5,14 @@ const RELOAD_DONE_NOTICE: &str = "Configuração recarregada";
 const RESTART_REQUIRED_NOTICE: &str = "só valem após reiniciar";
 const LABEL_SEPARATOR: &str = "/";
 
+pub fn added_widget_notice(widget_id: &str, reload_notice: Option<&str>) -> String {
+    let added = format!("Widget \"{widget_id}\" gravado no mosaic.toml");
+    match reload_notice {
+        Some(reload) => format!("{added}. {reload}"),
+        None => added,
+    }
+}
+
 pub fn reload_notice(restart: &RestartSections, warnings: &[String]) -> String {
     let mut notice = RELOAD_DONE_NOTICE.to_string();
     let labels = restart.labels();
@@ -23,6 +31,18 @@ pub fn reload_notice(restart: &RestartSections, warnings: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_added_widget_notice_names_the_widget_and_keeps_the_reload_result() {
+        assert_eq!(
+            added_widget_notice("jira", Some("Configuração recarregada")),
+            "Widget \"jira\" gravado no mosaic.toml. Configuração recarregada"
+        );
+        assert_eq!(
+            added_widget_notice("jira", None),
+            "Widget \"jira\" gravado no mosaic.toml"
+        );
+    }
 
     #[test]
     fn plain_notice_without_restart_sections_or_warnings() {

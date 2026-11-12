@@ -26,7 +26,8 @@ use mosaic::application::execute_action::execute_confirmed;
 use mosaic::application::launch_spec::WidgetLaunchSpec;
 use mosaic::application::llm::execute_recommendation;
 use mosaic::application::ports::{
-    Cancellable, Clock, LlmRunner, Notifier, RecommendationStore, WidgetRunner,
+    Cancellable, Clock, LlmRunner, Notifier, RecommendationStore, SetupCatalog, WidgetConfigWriter,
+    WidgetRunner,
 };
 use mosaic::application::recommendation::{LlmSelection, RecommendationPlan, WidgetContext};
 use mosaic::application::recommendation_request::{
@@ -62,6 +63,7 @@ use mosaic::infrastructure::priority_prompt::FilePriorityPrompt;
 use mosaic::infrastructure::recommendation_file::{
     FileRecommendationStore, NullRecommendationStore,
 };
+use mosaic::infrastructure::setup_catalog::{FileSetupCatalog, FileWidgetConfigWriter};
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
 use mosaic::infrastructure::update_check_file::FileUpdateCheckStore;
@@ -69,10 +71,10 @@ use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime};
 use mosaic::presentation::app_events::{
     apply_event, stored_recommendation_result, AppEvent, EventContext,
 };
-use mosaic::presentation::app_state::{AppState, Command};
+use mosaic::presentation::app_state::{AppState, Command, NewWidget};
 use mosaic::presentation::key_input::{from_crossterm, KeyInput};
 use mosaic::presentation::redraw_policy::{clock_changes_what_is_drawn, needs_time_redraw};
-use mosaic::presentation::reload_notice::reload_notice;
+use mosaic::presentation::reload_notice::{added_widget_notice, reload_notice};
 use mosaic::presentation::render::render;
 use mosaic::presentation::tab_layout::{
     build_tab_views, carry_over_records, startup_notice, TabLayout, TabPlacement, WidgetPlacement,
@@ -124,6 +126,8 @@ struct Services {
     config_directory: PathBuf,
     config: AppConfig,
     color_depth: ColorDepth,
+    setup_catalog: Box<dyn SetupCatalog>,
+    config_writer: Box<dyn WidgetConfigWriter>,
 }
 
 struct EventChannel {
@@ -355,6 +359,8 @@ fn build_services(
         config_directory: directory.to_path_buf(),
         config: config.clone(),
         color_depth,
+        setup_catalog: Box::new(FileSetupCatalog::new(directory.to_path_buf())),
+        config_writer: Box::new(FileWidgetConfigWriter::new(directory.to_path_buf())),
     }
 }
 
@@ -502,7 +508,13 @@ impl App {
                 &self.clock,
                 &self.events.sender,
             ),
-            Command::OpenAddWidget | Command::AppendWidget(_) => {}
+            Command::OpenAddWidget => open_add_widget(&mut self.state, &self.services),
+            Command::AppendWidget(widget) => append_widget(
+                &widget,
+                &mut self.state,
+                &mut self.services,
+                &mut self.spans,
+            ),
         }
         None
     }
@@ -558,6 +570,33 @@ fn reload_config(state: &mut AppState, services: &mut Services, spans: &mut Vec<
     match outcome {
         Ok((next, plan)) => apply_reloaded_config(state, services, spans, next, &plan),
         Err(error) => state.show_notice(error.to_string()),
+    }
+}
+
+fn open_add_widget(state: &mut AppState, services: &Services) {
+    match services.setup_catalog.load() {
+        Ok(snapshot) => state.open_add_widget(snapshot),
+        Err(error) => state.show_notice(format!("não foi possível adicionar um widget: {error}")),
+    }
+}
+
+fn append_widget(
+    widget: &NewWidget,
+    state: &mut AppState,
+    services: &mut Services,
+    spans: &mut Vec<u16>,
+) {
+    match services.config_writer.append(&widget.blocks) {
+        Ok(()) => {
+            state.finish_adding_widget();
+            reload_config(state, services, spans);
+            let reload_result = state.notice().map(str::to_string);
+            state.show_notice(added_widget_notice(
+                &widget.widget_id,
+                reload_result.as_deref(),
+            ));
+        }
+        Err(error) => state.fail_adding_widget(error.to_string()),
     }
 }
 
