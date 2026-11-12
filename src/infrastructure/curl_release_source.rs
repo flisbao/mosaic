@@ -17,6 +17,12 @@ const MAXIMUM_ARCHIVE_BYTES: usize = 104_857_600;
 const NO_OUTPUT_BYTES: usize = 1_048_576;
 const CURL_PROGRAM: &str = "curl";
 
+pub fn download_base_from_environment() -> Option<String> {
+    std::env::var(DOWNLOAD_BASE_VARIABLE)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
 pub struct CurlReleaseSource {
     program: OsString,
     base: String,

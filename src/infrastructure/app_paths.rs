@@ -5,6 +5,7 @@ pub const PRIORITY_PROMPT_RELATIVE_PATH: &str = "prompts/prioridade.md";
 
 const LLM_WORKING_DIRECTORY_NAME: &str = "llm";
 const RECOMMENDATION_FILE_NAME: &str = "recommendation.json";
+const UPDATE_CHECK_FILE_NAME: &str = "update-check.json";
 
 pub fn config_directory() -> Option<PathBuf> {
     dirs::config_dir().map(inside_app_directory)
@@ -22,6 +23,10 @@ pub fn llm_working_directory() -> Option<PathBuf> {
 
 pub fn recommendation_file() -> Option<PathBuf> {
     state_directory().map(|directory| directory.join(RECOMMENDATION_FILE_NAME))
+}
+
+pub fn update_check_file() -> Option<PathBuf> {
+    state_directory().map(|directory| directory.join(UPDATE_CHECK_FILE_NAME))
 }
 
 fn inside_app_directory(base: PathBuf) -> PathBuf {
@@ -50,6 +55,7 @@ mod tests {
             recommendation_file(),
             Some(state.join("recommendation.json"))
         );
+        assert_eq!(update_check_file(), Some(state.join("update-check.json")));
     }
 
     #[test]

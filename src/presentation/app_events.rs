@@ -8,6 +8,7 @@ use crate::application::ports::{
 };
 use crate::application::recommendation_view::{idle_snapshot, recommendation_snapshot};
 use crate::application::reload::{apply_if_current, WidgetGenerations, WidgetUpdate};
+use crate::domain::release::ReleaseVersion;
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 use crate::domain::widget_content::AlertLevel;
 use crate::presentation::app_state::AppState;
@@ -15,11 +16,13 @@ use crate::presentation::key_input::KeyInput;
 
 const ACTION_DONE_FALLBACK_MESSAGE: &str = "Ação concluída";
 const RECOMMENDATION_READY_MESSAGE: &str = "Recomendação atualizada";
+const NOTICE_SEPARATOR: &str = " | ";
 
 pub enum AppEvent {
     WidgetUpdated(WidgetUpdate),
     ActionFinished(WidgetId, ActionNotice),
     RecommendationFinished(Result<RecommendationOutcome, LlmError>),
+    UpdateAvailable(ReleaseVersion),
     Input(KeyInput),
     TerminalResized,
     TerminalReadFailed(String),
@@ -71,8 +74,22 @@ pub fn apply_event(
         AppEvent::RecommendationFinished(result) => {
             apply_recommendation_result(state, context, result, now)
         }
+        AppEvent::UpdateAvailable(version) => announce_update(state, &version),
         AppEvent::Input(_) | AppEvent::TerminalResized | AppEvent::TerminalReadFailed(_) => {}
     }
+}
+
+pub fn update_notice(version: &ReleaseVersion) -> String {
+    format!("versão {version} disponível; rode mosaic update")
+}
+
+fn announce_update(state: &mut AppState, version: &ReleaseVersion) {
+    let notice = update_notice(version);
+    let combined = match state.notice() {
+        Some(existing) => format!("{existing}{NOTICE_SEPARATOR}{notice}"),
+        None => notice,
+    };
+    state.show_notice(combined);
 }
 
 fn apply_widget_update(
@@ -154,6 +171,62 @@ fn describe_notice(notice: ActionNotice) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::app_state::TabView;
+    use crate::test_support::fixed_now;
+
+    struct SilentNotifier;
+    impl Notifier for SilentNotifier {
+        fn notify(&self, _: &AlertMessage) {}
+    }
+
+    fn empty_state() -> AppState {
+        AppState::new(
+            Vec::new(),
+            vec![TabView {
+                name: "Principal".to_string(),
+                entry_indexes: Vec::new(),
+            }],
+        )
+    }
+
+    fn announce(state: &mut AppState, version: &str) {
+        let generations = WidgetGenerations::default();
+        let context = EventContext {
+            generations: &generations,
+            notifier: &SilentNotifier,
+            recommendation_store: None,
+        };
+        apply_event(
+            state,
+            AppEvent::UpdateAvailable(ReleaseVersion::parse(version).unwrap()),
+            &context,
+            &mut AlertTracker::new(),
+            fixed_now(),
+        );
+    }
+
+    #[test]
+    fn a_new_version_shows_the_update_notice() {
+        let mut state = empty_state();
+        announce(&mut state, "0.0.11");
+        assert_eq!(
+            state.notice(),
+            Some("versão 0.0.11 disponível; rode mosaic update")
+        );
+    }
+
+    #[test]
+    fn a_new_version_keeps_the_notice_already_on_screen() {
+        let mut state = empty_state();
+        state.show_notice("chave desconhecida 'x' (ignorada)".to_string());
+        announce(&mut state, "0.0.11");
+        assert_eq!(
+            state.notice(),
+            Some(
+                "chave desconhecida 'x' (ignorada) | versão 0.0.11 disponível; rode mosaic update"
+            )
+        );
+    }
 
     #[test]
     fn describe_notice_falls_back_when_the_message_is_empty() {

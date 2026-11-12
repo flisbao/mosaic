@@ -13,6 +13,8 @@ use crate::domain::release::{
 };
 
 pub const UPDATE_CHECK_INTERVAL_HOURS: i64 = 24;
+pub const NO_UPDATE_CHECK_VARIABLE: &str = "MOSAIC_NO_UPDATE_CHECK";
+const DISABLING_VALUES: [&str; 3] = ["1", "true", "yes"];
 const EXTRACTION_DIRECTORY: &str = "extracted";
 
 #[derive(Debug, Clone, Error, PartialEq)]
@@ -122,6 +124,13 @@ pub fn install_update(
         current_executable,
     )?;
     Ok(())
+}
+
+pub fn update_check_enabled(configured: bool, environment_value: Option<&str>) -> bool {
+    let disabled_by_environment = environment_value.is_some_and(|value| {
+        DISABLING_VALUES.contains(&value.trim().to_ascii_lowercase().as_str())
+    });
+    configured && !disabled_by_environment
 }
 
 pub fn newer_version_for_notice(
@@ -642,6 +651,17 @@ mod tests {
             &version("0.0.10"),
         );
         assert_eq!(notice, Some(version("0.0.11")));
+    }
+
+    #[test]
+    fn the_check_is_on_unless_the_configuration_or_the_environment_turns_it_off() {
+        assert!(update_check_enabled(true, None));
+        assert!(update_check_enabled(true, Some("")));
+        assert!(update_check_enabled(true, Some("0")));
+        assert!(!update_check_enabled(false, None));
+        for value in ["1", "true", "TRUE", " yes "] {
+            assert!(!update_check_enabled(true, Some(value)), "{value}");
+        }
     }
 
     #[test]

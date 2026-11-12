@@ -1,18 +1,13 @@
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::{RecommendationStore, StoreError, StoredRecommendation};
-use crate::infrastructure::private_directory::prepare_private_directory;
+use crate::infrastructure::private_file::{read_regular_file, write_private_file_atomically};
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
-const RECOMMENDATION_FILE_MODE: u32 = 0o600;
 pub const MAXIMUM_RECOMMENDATION_FILE_BYTES: u64 = 1_048_576;
-const TEMPORARY_FILE_SUFFIX: &str = ".tmp";
-const NO_PARENT_DIRECTORY_MESSAGE: &str = "o caminho da recomendação não tem diretório pai";
 
 #[derive(Serialize, Deserialize)]
 struct StoredFile {
@@ -28,31 +23,6 @@ impl FileRecommendationStore {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
-
-    fn write_atomically(&self, content: &str) -> std::io::Result<()> {
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| std::io::Error::other(NO_PARENT_DIRECTORY_MESSAGE))?;
-        prepare_private_directory(parent)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let mut temporary_name = self.path.as_os_str().to_os_string();
-        temporary_name.push(TEMPORARY_FILE_SUFFIX);
-        let temporary = PathBuf::from(temporary_name);
-        let _ = fs::remove_file(&temporary);
-        let mut file = open_private_file(&temporary)?;
-        let written = file
-            .write_all(content.as_bytes())
-            .and_then(|()| file.sync_all())
-            .and_then(|()| {
-                drop(file);
-                fs::rename(&temporary, &self.path)
-            });
-        if written.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        written
-    }
 }
 
 pub struct NullRecommendationStore;
@@ -67,28 +37,9 @@ impl RecommendationStore for NullRecommendationStore {
     }
 }
 
-#[cfg(unix)]
-fn open_private_file(path: &Path) -> std::io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(RECOMMENDATION_FILE_MODE)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_private_file(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new().write(true).create_new(true).open(path)
-}
-
 impl RecommendationStore for FileRecommendationStore {
     fn load(&self) -> Option<StoredRecommendation> {
-        let metadata = fs::symlink_metadata(&self.path).ok()?;
-        if !metadata.file_type().is_file() || metadata.len() > MAXIMUM_RECOMMENDATION_FILE_BYTES {
-            return None;
-        }
-        let content = fs::read_to_string(&self.path).ok()?;
+        let content = read_regular_file(&self.path, MAXIMUM_RECOMMENDATION_FILE_BYTES)?;
         let stored: StoredFile = serde_json::from_str(&content).ok()?;
         if stored.text.trim().is_empty() {
             return None;
@@ -111,7 +62,7 @@ impl RecommendationStore for FileRecommendationStore {
         };
         let content = serde_json::to_string(&stored)
             .map_err(|error| StoreError::Failed(error.to_string()))?;
-        self.write_atomically(&content)
+        write_private_file_atomically(&self.path, &content)
             .map_err(|error| StoreError::Failed(error.to_string()))
     }
 }

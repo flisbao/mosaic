@@ -35,15 +35,24 @@ use mosaic::application::recommendation_request::{
 use mosaic::application::reload::{apply_plan, reload_widgets, WidgetGenerations};
 use mosaic::application::reload_plan::{ReloadPlan, WidgetChange};
 use mosaic::application::shutdown::{should_stop, ShutdownCoordinator};
+use mosaic::application::update::{
+    newer_version_for_notice, update_check_enabled, NO_UPDATE_CHECK_VARIABLE,
+};
 use mosaic::domain::action::ConfirmedAction;
 use mosaic::domain::color_depth::ColorDepth;
 use mosaic::domain::pomodoro::PomodoroTimer;
+use mosaic::domain::release::ReleaseVersion;
 use mosaic::domain::widget::{WidgetId, WidgetRecord};
-use mosaic::infrastructure::app_paths::{llm_working_directory, recommendation_file};
+use mosaic::infrastructure::app_paths::{
+    llm_working_directory, recommendation_file, update_check_file,
+};
 use mosaic::infrastructure::concurrency_gate::ConcurrencyGate;
 use mosaic::infrastructure::config::{
     config_directory, load_config, prepare_reload, read_installed_config, restart_sections,
     retain_restart_sections, AppConfig, ConfigError, LlmConfig, WidgetSettings,
+};
+use mosaic::infrastructure::curl_release_source::{
+    download_base_from_environment, CurlReleaseSource,
 };
 use mosaic::infrastructure::default_files::install_defaults_if_missing;
 use mosaic::infrastructure::llm_cli::build_llm_runner;
@@ -55,6 +64,7 @@ use mosaic::infrastructure::recommendation_file::{
 };
 use mosaic::infrastructure::shutdown::termination_requested;
 use mosaic::infrastructure::system_clock::SystemClock;
+use mosaic::infrastructure::update_check_file::FileUpdateCheckStore;
 use mosaic::infrastructure::widget_runtime::{RunnerFactory, WidgetRuntime};
 use mosaic::presentation::app_events::{
     apply_event, stored_recommendation_result, AppEvent, EventContext,
@@ -85,6 +95,7 @@ const TABS_SUBCOMMAND: &str = "tabs";
 const UPDATE_SUBCOMMAND: &str = "update";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
+const UPDATE_CHECK_SHUTDOWN_KEY: &str = "update-check";
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -174,6 +185,7 @@ fn run() -> Result<(), AppError> {
         Arc::clone(&termination),
         color_depth,
     );
+    start_update_check(&config, &services.shutdown, &sender);
     let (state, spans) = initial_state(&config, &services, &SystemClock);
     let mut app = App {
         state,
@@ -188,6 +200,37 @@ fn run() -> Result<(), AppError> {
     ratatui::restore();
     app.services.shutdown.shutdown();
     result
+}
+
+fn start_update_check(
+    config: &AppConfig,
+    shutdown: &ShutdownCoordinator,
+    sender: &SyncSender<AppEvent>,
+) {
+    let disabled_by_environment = std::env::var(NO_UPDATE_CHECK_VARIABLE).ok();
+    if !update_check_enabled(config.update.check, disabled_by_environment.as_deref()) {
+        return;
+    }
+    let (Some(path), Ok(current)) = (
+        update_check_file(),
+        ReleaseVersion::parse(env!("CARGO_PKG_VERSION")),
+    ) else {
+        return;
+    };
+    let source = Arc::new(CurlReleaseSource::new(download_base_from_environment()));
+    shutdown.register(
+        UPDATE_CHECK_SHUTDOWN_KEY,
+        Arc::clone(&source) as Arc<dyn Cancellable>,
+    );
+    let sender = sender.clone();
+    thread::spawn(move || {
+        let store = FileUpdateCheckStore::new(path);
+        if let Some(latest) =
+            newer_version_for_notice(source.as_ref(), &store, &SystemClock, &current)
+        {
+            let _ = sender.send(AppEvent::UpdateAvailable(latest));
+        }
+    });
 }
 
 fn initial_state(

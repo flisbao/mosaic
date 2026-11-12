@@ -16,6 +16,7 @@ pub mod plugin_runner;
 pub mod plugins_installer;
 pub mod priority_prompt;
 pub mod private_directory;
+pub mod private_file;
 pub mod process;
 pub mod protocol_blocks;
 pub mod protocol_report;
@@ -27,6 +28,7 @@ pub mod shutdown;
 pub mod skills_installer;
 pub mod stream_prompter;
 pub mod system_clock;
+pub mod update_check_file;
 pub mod widget_runtime;
 
 #[cfg(all(test, unix))]

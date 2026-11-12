@@ -18,7 +18,9 @@ use mosaic::domain::release::{
     debian_package_name, InstallMethod, ReleaseAssets, ReleaseTarget, ReleaseVersion, UpdateStatus,
 };
 use mosaic::infrastructure::archive_tools::{ShaSumChecksum, TarExtractor};
-use mosaic::infrastructure::curl_release_source::{CurlReleaseSource, DOWNLOAD_BASE_VARIABLE};
+use mosaic::infrastructure::curl_release_source::{
+    download_base_from_environment, CurlReleaseSource,
+};
 use mosaic::infrastructure::installation_probe::{
     AtomicExecutableReplacer, SystemInstallationProbe,
 };
@@ -248,10 +250,7 @@ pub fn run(arguments: &[String]) -> ExitCode {
 
 fn run_with_system_services(options: UpdateOptions) -> Result<(), UpdateCommandError> {
     let current = ReleaseVersion::parse(env!("CARGO_PKG_VERSION"))?;
-    let download_base = std::env::var(DOWNLOAD_BASE_VARIABLE)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let source = CurlReleaseSource::new(download_base);
+    let source = CurlReleaseSource::new(download_base_from_environment());
     let mut output = io::stdout();
     if options.check_only {
         return execute_check(&source, &current, &mut output);
