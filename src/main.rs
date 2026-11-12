@@ -744,7 +744,8 @@ fn request_recommendation(
         return;
     };
     let criteria =
-        FilePriorityPrompt::new(services.config_directory.join(&llm.config.priority_prompt));
+        FilePriorityPrompt::new(services.config_directory.join(&llm.config.priority_prompt))
+            .with_language(state.language());
     let policy = SendPolicy {
         confirm_before_send: llm.config.confirm_before_send,
         target_label: describe_target(&llm.config),
