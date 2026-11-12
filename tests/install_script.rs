@@ -13,6 +13,8 @@ use release_server::{fake_mosaic_script, write_executable, ReleaseServer};
 
 const INSTALL_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh");
 const SHELL: &str = "/bin/sh";
+const TEXT_FILE_BUSY_MESSAGE: &str = "Text file busy";
+const TEXT_FILE_BUSY_RETRIES: u32 = 20;
 const BASE_TOOLS: [&str; 13] = [
     "mktemp", "mkdir", "rm", "tar", "gzip", "install", "mv", "grep", "sed", "tr", "tail", "cut",
     "cat",
@@ -25,6 +27,7 @@ struct Environment {
     checksum_tools: Vec<&'static str>,
     system: &'static str,
     machine: &'static str,
+    extra_path: Option<PathBuf>,
 }
 
 impl Environment {
@@ -37,6 +40,7 @@ impl Environment {
             checksum_tools: vec!["sha256sum", "shasum"],
             system: "Linux",
             machine: "x86_64",
+            extra_path: None,
         }
     }
 
@@ -71,13 +75,31 @@ impl Environment {
         toolbox
     }
 
+    /// Executar um arquivo recém-gravado pode falhar com ETXTBSY se outra thread do teste fez
+    /// fork nesse instante; como a instalação é idempotente, repetir resolve.
     fn run(&self, extra_environment: &[(&str, &str)]) -> Output {
-        let toolbox = self.toolbox();
+        let mut output = self.run_once(extra_environment);
+        for _ in 0..TEXT_FILE_BUSY_RETRIES {
+            if !text(&output).contains(TEXT_FILE_BUSY_MESSAGE) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            output = self.run_once(extra_environment);
+        }
+        output
+    }
+
+    fn run_once(&self, extra_environment: &[(&str, &str)]) -> Output {
+        let mut search_path = self.toolbox().into_os_string();
+        if let Some(extra) = &self.extra_path {
+            search_path.push(":");
+            search_path.push(extra);
+        }
         let mut command = Command::new(SHELL);
         command
             .arg(INSTALL_SCRIPT)
             .env_clear()
-            .env("PATH", &toolbox)
+            .env("PATH", &search_path)
             .env("HOME", self.path("home"))
             .env("MOSAIC_DOWNLOAD_BASE", self.server.base());
         for (name, value) in extra_environment {
@@ -332,21 +354,9 @@ fn the_path_hint_appears_only_when_the_directory_is_outside_the_path() {
     );
     assert!(text(&output).contains(&expected_line), "{}", text(&output));
 
-    let toolbox = environment.toolbox();
-    let inside_path = format!(
-        "{}:{}",
-        toolbox.display(),
-        environment.install_directory().display()
-    );
-    let output = Command::new(SHELL)
-        .arg(INSTALL_SCRIPT)
-        .env_clear()
-        .env("PATH", inside_path)
-        .env("HOME", environment.path("home"))
-        .env("MOSAIC_DOWNLOAD_BASE", environment.server.base())
-        .env("MOSAIC_INSTALL_DIR", environment.install_directory())
-        .output()
-        .unwrap();
+    let mut environment = environment;
+    environment.extra_path = Some(environment.install_directory());
+    let output = environment.run_default();
     assert!(output.status.success(), "{}", text(&output));
     assert!(!text(&output).contains("export PATH"), "{}", text(&output));
 }

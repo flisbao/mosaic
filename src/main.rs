@@ -9,6 +9,7 @@ mod remote_plugins_command;
 mod skills_command;
 mod tabs_command;
 mod themes_command;
+mod update_command;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,7 @@ const SKILLS_SUBCOMMAND: &str = "skills";
 const PLUGINS_SUBCOMMAND: &str = "plugins";
 const THEMES_SUBCOMMAND: &str = "themes";
 const TABS_SUBCOMMAND: &str = "tabs";
+const UPDATE_SUBCOMMAND: &str = "update";
 const LLM_SHUTDOWN_KEY: &str = "llm";
 const NOTIFIER_SHUTDOWN_KEY: &str = "notifier";
 
@@ -142,6 +144,9 @@ fn main() -> ExitCode {
     }
     if arguments.first().map(String::as_str) == Some(THEMES_SUBCOMMAND) {
         return themes_command::run(&arguments[1..]);
+    }
+    if arguments.first().map(String::as_str) == Some(UPDATE_SUBCOMMAND) {
+        return update_command::run(&arguments[1..]);
     }
     if let Some(exit_code) = cli_info::run(&arguments) {
         return exit_code;
