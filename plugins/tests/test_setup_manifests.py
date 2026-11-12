@@ -113,6 +113,27 @@ class SetupManifestTests(unittest.TestCase):
                 for preset in manifest.get("presets", []):
                     self.assertLessEqual(set(preset["arguments"]), flags)
 
+    def test_every_visible_text_of_a_bilingual_manifest_has_its_english_field(self):
+        translated = []
+        for name in plugin_names():
+            manifest = load_manifest(name)
+            text = str(manifest)
+            if not any(f"'{key}'" in text for key in ("prompt_en", "description_en", "text_en")):
+                continue
+            translated.append(name)
+            with self.subTest(plugin=name):
+                for step in manifest["steps"]:
+                    self.assertIn("prompt_en", step, step.get("name") or step.get("flag"))
+                    for choice in step.get("choices", []):
+                        self.assertIn("description_en", choice, choice["value"])
+                for note in manifest.get("notes", []):
+                    self.assertIn("text_en", note)
+                for preset in manifest.get("presets", []):
+                    self.assertIn("description_en", preset, preset["name"])
+                    for field in preset.get("inputs", []):
+                        self.assertIn("prompt_en", field, field["name"])
+        self.assertGreaterEqual(len(translated), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

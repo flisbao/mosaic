@@ -157,3 +157,7 @@ Vão em `[widgets.env]` (o token, por `inherit_env` ou `JIRA_TOKEN_FILE`).
 - As variáveis antigas `JIRA_MODE`, `JIRA_PROJECT`, `JIRA_BOARD`, `JIRA_TEAM` e `JIRA_UNASSIGNED_HOURS` foram removidas e dão erro: use `--jql`.
 
 Próximos passos: um coletor com SQLite, relatórios sobre o histórico e uma ação de abrir no navegador.
+
+## Idioma
+
+O texto fixo do widget segue a variável `MOSAIC_LANGUAGE`, que o Mosaic passa a cada execução: `en` (o padrão, também usado quando a variável falta) ou `pt-BR`. Dados que vêm do serviço nunca são traduzidos.
