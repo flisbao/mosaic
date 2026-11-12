@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 pub const DEFAULT_THEME_NAME: &str = "default";
 const HEX_PREFIX: char = '#';
 const HEX_DIGIT_COUNT: usize = 6;
@@ -20,13 +23,35 @@ const CONTRAST_OFFSET: f64 = 0.05;
 
 #[derive(Debug, Clone, Error, PartialEq)]
 pub enum ThemeError {
-    #[error("tema desconhecido '{0}'")]
     UnknownTheme(String),
-    #[error("cor inválida '{0}': use #rrggbb")]
     InvalidHex(String),
-    #[error("papel de cor desconhecido '{0}'")]
     UnknownRole(String),
 }
+
+impl LocalizedMessage for ThemeError {
+    fn message(&self, language: Language) -> String {
+        match (self, language) {
+            (Self::UnknownTheme(name), Language::English) => format!("unknown theme '{name}'"),
+            (Self::UnknownTheme(name), Language::BrazilianPortuguese) => {
+                format!("tema desconhecido '{name}'")
+            }
+            (Self::InvalidHex(value), Language::English) => {
+                format!("invalid color '{value}': use #rrggbb")
+            }
+            (Self::InvalidHex(value), Language::BrazilianPortuguese) => {
+                format!("cor inválida '{value}': use #rrggbb")
+            }
+            (Self::UnknownRole(role), Language::English) => {
+                format!("unknown color role '{role}'")
+            }
+            (Self::UnknownRole(role), Language::BrazilianPortuguese) => {
+                format!("papel de cor desconhecido '{role}'")
+            }
+        }
+    }
+}
+
+display_in_portuguese!(ThemeError);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb {
@@ -600,5 +625,31 @@ mod tests {
             Theme::Ansi => panic!("deveria continuar colorido"),
         }
         assert_eq!(Theme::Ansi.without_background(), Theme::Ansi);
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_theme_error_is_translated() {
+        let errors = [
+            ThemeError::UnknownTheme("neon".to_string()),
+            ThemeError::InvalidHex("red".to_string()),
+            ThemeError::UnknownRole("fundo".to_string()),
+        ];
+        for error in errors {
+            assert_translated("theme error", |language| error.message(language));
+        }
+    }
+
+    #[test]
+    fn english_messages_name_the_problem() {
+        let message = ThemeError::UnknownTheme("neon".to_string()).message(Language::English);
+        assert_eq!(message, "unknown theme 'neon'");
+        let message = ThemeError::InvalidHex("red".to_string()).message(Language::English);
+        assert_eq!(message, "invalid color 'red': use #rrggbb");
     }
 }

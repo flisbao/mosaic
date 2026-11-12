@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 pub const LIST_SEPARATOR: char = ',';
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,17 +164,49 @@ pub struct Preset {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AnswerError {
-    #[error("responda um número de {minimum} a {maximum}")]
     NotAnInteger { minimum: u64, maximum: u64 },
-    #[error("o valor precisa estar entre {minimum} e {maximum}")]
     OutOfRange { minimum: u64, maximum: u64 },
-    #[error("escolha um número de 1 a {count} ou um dos valores listados")]
     UnknownChoice { count: usize },
-    #[error("informe pelo menos um item")]
     EmptyList,
-    #[error("\"{0}\" não é um nome de variável de ambiente válido")]
     InvalidEnvironmentName(String),
 }
+
+impl LocalizedMessage for AnswerError {
+    fn message(&self, language: Language) -> String {
+        match (self, language) {
+            (Self::NotAnInteger { minimum, maximum }, Language::English) => {
+                format!("answer with a number from {minimum} to {maximum}")
+            }
+            (Self::NotAnInteger { minimum, maximum }, Language::BrazilianPortuguese) => {
+                format!("responda um número de {minimum} a {maximum}")
+            }
+            (Self::OutOfRange { minimum, maximum }, Language::English) => {
+                format!("the value must be between {minimum} and {maximum}")
+            }
+            (Self::OutOfRange { minimum, maximum }, Language::BrazilianPortuguese) => {
+                format!("o valor precisa estar entre {minimum} e {maximum}")
+            }
+            (Self::UnknownChoice { count }, Language::English) => {
+                format!("choose a number from 1 to {count} or one of the listed values")
+            }
+            (Self::UnknownChoice { count }, Language::BrazilianPortuguese) => {
+                format!("escolha um número de 1 a {count} ou um dos valores listados")
+            }
+            (Self::EmptyList, Language::English) => "enter at least one item".to_string(),
+            (Self::EmptyList, Language::BrazilianPortuguese) => {
+                "informe pelo menos um item".to_string()
+            }
+            (Self::InvalidEnvironmentName(name), Language::English) => {
+                format!("\"{name}\" is not a valid environment variable name")
+            }
+            (Self::InvalidEnvironmentName(name), Language::BrazilianPortuguese) => {
+                format!("\"{name}\" não é um nome de variável de ambiente válido")
+            }
+        }
+    }
+}
+
+display_in_portuguese!(AnswerError);
 
 impl AnswerKind {
     pub fn normalize(&self, text: &str) -> Result<String, AnswerError> {
@@ -362,5 +397,41 @@ mod tests {
         assert!(ensure_environment_name("1abc").is_err());
         assert!(ensure_environment_name("A-B").is_err());
         assert!(ensure_environment_name("").is_err());
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_answer_error_is_translated() {
+        let errors = [
+            AnswerError::NotAnInteger {
+                minimum: 1,
+                maximum: 9,
+            },
+            AnswerError::OutOfRange {
+                minimum: 1,
+                maximum: 9,
+            },
+            AnswerError::UnknownChoice { count: 3 },
+            AnswerError::EmptyList,
+            AnswerError::InvalidEnvironmentName("1x".to_string()),
+        ];
+        for error in errors {
+            assert_translated("answer error", |language| error.message(language));
+        }
+    }
+
+    #[test]
+    fn english_range_message_is_natural() {
+        let message = AnswerError::OutOfRange {
+            minimum: 1,
+            maximum: 9,
+        }
+        .message(Language::English);
+        assert_eq!(message, "the value must be between 1 and 9");
     }
 }

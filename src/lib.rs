@@ -6,4 +6,6 @@ pub mod infrastructure;
 pub mod presentation;
 
 #[cfg(test)]
+pub(crate) mod language_assertions;
+#[cfg(test)]
 pub(crate) mod test_support;

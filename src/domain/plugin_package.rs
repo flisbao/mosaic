@@ -2,18 +2,45 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
+
 const VERSION_COMPONENTS: usize = 3;
 const MINIMUM_SOURCE_COMPONENTS: usize = 2;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum PluginPackageError {
-    #[error("fonte de plugin inválida: {0}")]
     InvalidSource(String),
-    #[error("versão inválida: {0}; use MAJOR.MINOR.PATCH")]
     InvalidVersion(String),
-    #[error("plugin exige Mosaic {required} ou mais recente; versão atual: {current}")]
     Incompatible { required: String, current: String },
 }
+
+impl LocalizedMessage for PluginPackageError {
+    fn message(&self, language: Language) -> String {
+        match (self, language) {
+            (Self::InvalidSource(source), Language::English) => {
+                format!("invalid plugin source: {source}")
+            }
+            (Self::InvalidSource(source), Language::BrazilianPortuguese) => {
+                format!("fonte de plugin inválida: {source}")
+            }
+            (Self::InvalidVersion(version), Language::English) => {
+                format!("invalid version: {version}; use MAJOR.MINOR.PATCH")
+            }
+            (Self::InvalidVersion(version), Language::BrazilianPortuguese) => {
+                format!("versão inválida: {version}; use MAJOR.MINOR.PATCH")
+            }
+            (Self::Incompatible { required, current }, Language::English) => {
+                format!("plugin requires Mosaic {required} or newer; current version: {current}")
+            }
+            (Self::Incompatible { required, current }, Language::BrazilianPortuguese) => {
+                format!("plugin exige Mosaic {required} ou mais recente; versão atual: {current}")
+            }
+        }
+    }
+}
+
+display_in_portuguese!(PluginPackageError);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PluginVersion([u64; VERSION_COMPONENTS]);
@@ -183,5 +210,39 @@ mod tests {
         ] {
             assert!(GitHubSource::parse(bad).is_err(), "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn every_package_error_is_translated() {
+        let errors = [
+            PluginPackageError::InvalidSource("x".to_string()),
+            PluginPackageError::InvalidVersion("1".to_string()),
+            PluginPackageError::Incompatible {
+                required: "0.2.0".to_string(),
+                current: "0.1.0".to_string(),
+            },
+        ];
+        for error in errors {
+            assert_translated("package error", |language| error.message(language));
+        }
+    }
+
+    #[test]
+    fn english_incompatibility_names_both_versions() {
+        let message = PluginPackageError::Incompatible {
+            required: "0.2.0".to_string(),
+            current: "0.1.0".to_string(),
+        }
+        .message(Language::English);
+        assert_eq!(
+            message,
+            "plugin requires Mosaic 0.2.0 or newer; current version: 0.1.0"
+        );
     }
 }
