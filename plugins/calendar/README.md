@@ -179,3 +179,7 @@ Conferência manual feita pelo dono da conta pessoal, antes de considerar o widg
 3. **GOA**: adicionar a conta em Configurações → Contas Online, rodar `mosaic check` com `CALENDAR_SOURCE=goa` e comparar a lista com a do ICS.
 4. **gcalcli**: instalar, seguir a seção gcalcli até o `gcalcli init`, rodar `gcalcli --nocolor agenda --tsv --details id --details calendar --details location` uma vez à mão para conferir as colunas, depois `mosaic check` com `CALENDAR_SOURCE=gcalcli`.
 5. Quebrar de propósito: link ICS errado (o widget mostra erro, sem o link) e `gcalcli` fora do `PATH` (o widget mostra a mensagem de não encontrado).
+
+## Idioma
+
+O texto fixo do widget segue a variável `MOSAIC_LANGUAGE`, que o Mosaic passa a cada execução: `en` (o padrão, também usado quando a variável falta) ou `pt-BR`. Dados que vêm do serviço nunca são traduzidos.

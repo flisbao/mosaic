@@ -14,15 +14,15 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PROTOCOL_VERSION = 1
-DEFAULT_TITLE = "Agenda"
 SNAPSHOT_COMMAND = "snapshot"
-USAGE_MESSAGE = "uso: calendar_widget.py snapshot\n"
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
 USAGE_EXIT_CODE = 2
@@ -48,18 +48,8 @@ ZONEINFO_MARKER = "zoneinfo/"
 DAYS_IN_WEEK = 7
 SECONDS_PER_MINUTE = 60
 UPCOMING_WARNING_MINUTES = 15
-WEEKDAY_ABBREVIATIONS = ("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
-EMPTY_TEXT = "nada até domingo"
-TODAY_HEADING = "Hoje"
-TOMORROW_HEADING = "Amanhã"
-ALL_DAY_LABEL = "dia todo"
-CURRENT_TAG = "agora"
-UPCOMING_TAG = "em {minutes} min"
-NEXT_EVENT_TEXT = "próx {time}"
-FREE_TODAY_TEXT = "hoje livre"
-NO_NEXT_EVENT_TEXT = "sem próximos"
 TIME_FORMAT = "%H:%M"
-DAY_FORMAT = "%d/%m"
+PORTUGUESE_DAY_FORMAT = "%d/%m"
 TIME_RANGE_SEPARATOR = "–"
 LOCATION_SEPARATOR = " · "
 
@@ -102,9 +92,6 @@ ICS_CALENDAR_BEGIN = "BEGIN:VCALENDAR"
 ICS_CALENDAR_NAME_FALLBACK = "ICS {number}"
 REQUEST_TIMEOUT_SECONDS = 15
 MAXIMUM_ICS_BYTES = 8 * 1024 * 1024
-LINK_UNAVAILABLE_WARNING = "agenda ICS {number} indisponível"
-ALL_LINKS_FAILED_MESSAGE = "nenhuma agenda ICS respondeu; confira o link (seção ICS do README)"
-OVERSIZED_RESPONSE_MESSAGE = "o calendário excede o tamanho máximo permitido"
 GOA_SERVICE = "org.gnome.OnlineAccounts"
 GOA_OBJECTS_PATH = "/org/gnome/OnlineAccounts"
 GOA_ACCOUNT_INTERFACE = "org.gnome.OnlineAccounts.Account"
@@ -130,19 +117,9 @@ GOOGLE_NEXT_PAGE_TOKEN = "nextPageToken"
 GOOGLE_PAGE_TOKEN = "pageToken"
 GOOGLE_CANCELLED_STATUS = "cancelled"
 GOOGLE_DECLINED_STATUS = "declined"
-GOOGLE_UNTITLED_TITLE = "sem título"
 HTTP_UNAUTHORIZED = 401
 AUTHORIZATION_HEADER = "Authorization"
 BEARER_TOKEN_FORMAT = "Bearer {token}"
-NO_GOOGLE_ACCOUNT_MESSAGE = "nenhuma conta Google com agenda no GNOME Online Accounts; veja a seção GOA do README"
-BUS_UNAVAILABLE_MESSAGE = (
-    "não foi possível consultar o GNOME Online Accounts pelo D-Bus; "
-    "adicione DBUS_SESSION_BUS_ADDRESS em inherit_env (seção GOA do README)"
-)
-GOOGLE_UNAVAILABLE_MESSAGE = "não foi possível consultar a API do Google Agenda"
-ALL_ACCOUNTS_FAILED_MESSAGE = "nenhuma conta Google respondeu; veja a seção GOA do README"
-ACCOUNT_UNAVAILABLE_WARNING = "conta {email} indisponível"
-ATTENTION_NEEDED_WARNING = "conta {email} precisa entrar de novo em Configurações → Contas Online"
 GCALCLI_COMMAND = "gcalcli"
 GCALCLI_TIMEOUT_SECONDS = 15
 GCALCLI_NO_COLOR_OPTION = "--nocolor"
@@ -165,13 +142,6 @@ GCALCLI_MIDNIGHT = "00:00"
 GCALCLI_ESCAPED_NEWLINE = "\\n"
 GCALCLI_ID_TEMPLATE = "{title}@{start}"
 GCALCLI_ERROR_LINE_LIMIT = 200
-GCALCLI_NO_ERROR_DETAIL = "sem detalhes"
-GCALCLI_FAILURE_MESSAGE = "gcalcli falhou: {detail}"
-GCALCLI_MISSING_BINARY_MESSAGE = "gcalcli não encontrado no PATH; veja a seção gcalcli do README"
-GCALCLI_NOT_RESPONDING_MESSAGE = "gcalcli não respondeu; rode `gcalcli init` no terminal (seção gcalcli do README)"
-GCALCLI_UNEXECUTABLE_MESSAGE = "gcalcli não pôde ser executado; veja a seção gcalcli do README"
-GCALCLI_MISSING_COLUMNS_MESSAGE ="saída do gcalcli sem as colunas: {columns}"
-GCALCLI_SKIPPED_ROW_WARNING = "linha do gcalcli ignorada"
 TSV_SEPARATOR = "\t"
 
 MAXIMUM_RECURRENCE_ITERATIONS = 100_000
@@ -179,7 +149,6 @@ MAXIMUM_ITEM_ID_LENGTH = 200
 ITEM_ID_DIGEST_LENGTH = 16
 ITEM_ID_DIGEST_SEPARATOR = "#"
 ITEM_ID_TEMPLATE = "{uid}@{start}"
-UNSUPPORTED_RULE_WARNING = "repetição não suportada em “{title}”"
 MONTHS_IN_YEAR = 12
 MAXIMUM_MONTH_DAY = 31
 RULE_FREQUENCY = "FREQ"
@@ -208,6 +177,180 @@ ICS_DURATION_PATTERN = re.compile(
     r"(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?"
     r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?"
 )
+
+
+LANGUAGE_VARIABLE = "MOSAIC_LANGUAGE"
+LANGUAGE_ENGLISH = "en"
+LANGUAGE_PORTUGUESE = "pt-BR"
+PORTUGUESE_LANGUAGE_PREFIX = "pt"
+ENGLISH_MONTH_ABBREVIATIONS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
+def _english_day_heading(weekday, day):
+    return f"{weekday}, {ENGLISH_MONTH_ABBREVIATIONS[day.month - 1]} {day.day}"
+
+
+def _portuguese_day_heading(weekday, day):
+    return f"{weekday} {day:{PORTUGUESE_DAY_FORMAT}}"
+
+
+@dataclass(frozen=True)
+class Messages:
+    language: str
+    default_title: str
+    usage: str
+    error_prefix: str
+    weekday_abbreviations: tuple[str, ...]
+    format_day_heading: Callable[[str, date], str]
+    empty_text: str
+    today_heading: str
+    tomorrow_heading: str
+    all_day_label: str
+    current_tag: str
+    upcoming_tag: str
+    next_event_text: str
+    free_today_text: str
+    no_next_event_text: str
+    invalid_source: str
+    missing_ics_link: str
+    empty_ics_variable: str
+    unreadable_ics_file: str
+    invalid_ics_link: str
+    variable_origin: str
+    file_line_origin: str
+    link_unavailable_warning: str
+    all_links_failed: str
+    oversized_response: str
+    unsupported_rule_warning: str
+    no_google_account: str
+    bus_unavailable: str
+    google_unavailable: str
+    all_accounts_failed: str
+    account_unavailable_warning: str
+    attention_needed_warning: str
+    untitled_event: str
+    gcalcli_failure: str
+    gcalcli_no_error_detail: str
+    gcalcli_missing_binary: str
+    gcalcli_not_responding: str
+    gcalcli_unexecutable: str
+    gcalcli_missing_columns: str
+    gcalcli_skipped_row_warning: str
+
+
+ENGLISH_MESSAGES = Messages(
+    language=LANGUAGE_ENGLISH,
+    default_title="Calendar",
+    usage="usage: calendar_widget.py snapshot\n",
+    error_prefix="error: ",
+    weekday_abbreviations=("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
+    format_day_heading=_english_day_heading,
+    empty_text="nothing until Sunday",
+    today_heading="Today",
+    tomorrow_heading="Tomorrow",
+    all_day_label="all day",
+    current_tag="now",
+    upcoming_tag="in {minutes} min",
+    next_event_text="next {time}",
+    free_today_text="free today",
+    no_next_event_text="no more events",
+    invalid_source="{variable} must be 'ics', 'goa' or 'gcalcli'",
+    missing_ics_link="set {environment_variable} or {file_variable} for the ics source",
+    empty_ics_variable="the variable '{name}' named in {variable} is empty or missing",
+    unreadable_ics_file="could not read the file from {variable}",
+    invalid_ics_link="{origin} does not contain a valid calendar link (http, https or webcal)",
+    variable_origin="the variable '{name}'",
+    file_line_origin="line {number} of {variable}",
+    link_unavailable_warning="ICS calendar {number} unavailable",
+    all_links_failed="no ICS calendar responded; check the link (ICS section of the README)",
+    oversized_response="the calendar exceeds the maximum allowed size",
+    unsupported_rule_warning="unsupported recurrence in “{title}”",
+    no_google_account="no Google account with a calendar in GNOME Online Accounts; see the GOA section of the README",
+    bus_unavailable=(
+        "could not query GNOME Online Accounts over D-Bus; "
+        "add DBUS_SESSION_BUS_ADDRESS to inherit_env (GOA section of the README)"
+    ),
+    google_unavailable="could not query the Google Calendar API",
+    all_accounts_failed="no Google account responded; see the GOA section of the README",
+    account_unavailable_warning="account {email} unavailable",
+    attention_needed_warning="account {email} needs to sign in again in Settings → Online Accounts",
+    untitled_event="untitled",
+    gcalcli_failure="gcalcli failed: {detail}",
+    gcalcli_no_error_detail="no details",
+    gcalcli_missing_binary="gcalcli not found in PATH; see the gcalcli section of the README",
+    gcalcli_not_responding="gcalcli did not respond; run `gcalcli init` in the terminal (gcalcli section of the README)",
+    gcalcli_unexecutable="gcalcli could not be run; see the gcalcli section of the README",
+    gcalcli_missing_columns="gcalcli output is missing the columns: {columns}",
+    gcalcli_skipped_row_warning="gcalcli row skipped",
+)
+
+PORTUGUESE_MESSAGES = Messages(
+    language=LANGUAGE_PORTUGUESE,
+    default_title="Agenda",
+    usage="uso: calendar_widget.py snapshot\n",
+    error_prefix="erro: ",
+    weekday_abbreviations=("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"),
+    format_day_heading=_portuguese_day_heading,
+    empty_text="nada até domingo",
+    today_heading="Hoje",
+    tomorrow_heading="Amanhã",
+    all_day_label="dia todo",
+    current_tag="agora",
+    upcoming_tag="em {minutes} min",
+    next_event_text="próx {time}",
+    free_today_text="hoje livre",
+    no_next_event_text="sem próximos",
+    invalid_source="{variable} precisa ser 'ics', 'goa' ou 'gcalcli'",
+    missing_ics_link="defina {environment_variable} ou {file_variable} para a fonte ics",
+    empty_ics_variable="a variável '{name}' indicada em {variable} está vazia ou ausente",
+    unreadable_ics_file="não foi possível ler o arquivo de {variable}",
+    invalid_ics_link="{origin} não contém um link de calendário válido (http, https ou webcal)",
+    variable_origin="a variável '{name}'",
+    file_line_origin="a linha {number} de {variable}",
+    link_unavailable_warning="agenda ICS {number} indisponível",
+    all_links_failed="nenhuma agenda ICS respondeu; confira o link (seção ICS do README)",
+    oversized_response="o calendário excede o tamanho máximo permitido",
+    unsupported_rule_warning="repetição não suportada em “{title}”",
+    no_google_account="nenhuma conta Google com agenda no GNOME Online Accounts; veja a seção GOA do README",
+    bus_unavailable=(
+        "não foi possível consultar o GNOME Online Accounts pelo D-Bus; "
+        "adicione DBUS_SESSION_BUS_ADDRESS em inherit_env (seção GOA do README)"
+    ),
+    google_unavailable="não foi possível consultar a API do Google Agenda",
+    all_accounts_failed="nenhuma conta Google respondeu; veja a seção GOA do README",
+    account_unavailable_warning="conta {email} indisponível",
+    attention_needed_warning="conta {email} precisa entrar de novo em Configurações → Contas Online",
+    untitled_event="sem título",
+    gcalcli_failure="gcalcli falhou: {detail}",
+    gcalcli_no_error_detail="sem detalhes",
+    gcalcli_missing_binary="gcalcli não encontrado no PATH; veja a seção gcalcli do README",
+    gcalcli_not_responding="gcalcli não respondeu; rode `gcalcli init` no terminal (seção gcalcli do README)",
+    gcalcli_unexecutable="gcalcli não pôde ser executado; veja a seção gcalcli do README",
+    gcalcli_missing_columns="saída do gcalcli sem as colunas: {columns}",
+    gcalcli_skipped_row_warning="linha do gcalcli ignorada",
+)
+
+MESSAGES_BY_LANGUAGE = {LANGUAGE_ENGLISH: ENGLISH_MESSAGES, LANGUAGE_PORTUGUESE: PORTUGUESE_MESSAGES}
+
+
+def messages_for(environ):
+    language = environ.get(LANGUAGE_VARIABLE, "").strip().lower()
+    if language.startswith(PORTUGUESE_LANGUAGE_PREFIX):
+        return PORTUGUESE_MESSAGES
+    return ENGLISH_MESSAGES
 
 
 class ConfigError(Exception):
@@ -248,23 +391,26 @@ class Config:
     ics_urls: list[str]
     goa_account: str | None
     calendars: list[str]
+    messages: Messages
 
 
 def load_config(environ):
-    source = _read_source(environ)
+    messages = messages_for(environ)
+    source = _read_source(environ, messages)
     return Config(
         source=source,
-        title=_read_optional(environ, TITLE_VARIABLE) or DEFAULT_TITLE,
-        ics_urls=_read_ics_urls(environ) if source == SOURCE_ICS else [],
+        title=_read_optional(environ, TITLE_VARIABLE) or messages.default_title,
+        ics_urls=_read_ics_urls(environ, messages) if source == SOURCE_ICS else [],
         goa_account=_read_optional(environ, GOA_ACCOUNT_VARIABLE),
         calendars=_read_list(environ, CALENDARS_VARIABLE),
+        messages=messages,
     )
 
 
-def _read_source(environ):
+def _read_source(environ, messages):
     source = environ.get(SOURCE_VARIABLE, "").strip()
     if source not in SOURCE_NAMES:
-        raise ConfigError(f"{SOURCE_VARIABLE} precisa ser 'ics', 'goa' ou 'gcalcli'")
+        raise ConfigError(messages.invalid_source.format(variable=SOURCE_VARIABLE))
     return source
 
 
@@ -276,45 +422,50 @@ def _read_list(environ, name):
     return [item.strip() for item in environ.get(name, "").split(",") if item.strip()]
 
 
-def _read_ics_urls(environ):
-    urls = _read_urls_from_variables(environ) + _read_urls_from_file(environ)
+def _read_ics_urls(environ, messages):
+    urls = _read_urls_from_variables(environ, messages) + _read_urls_from_file(environ, messages)
     if not urls:
-        raise ConfigError(f"defina {ICS_URL_ENV_VARIABLE} ou {ICS_URL_FILE_VARIABLE} para a fonte ics")
+        raise ConfigError(
+            messages.missing_ics_link.format(
+                environment_variable=ICS_URL_ENV_VARIABLE, file_variable=ICS_URL_FILE_VARIABLE
+            )
+        )
     return urls
 
 
-def _read_urls_from_variables(environ):
+def _read_urls_from_variables(environ, messages):
     urls = []
     for name in _read_list(environ, ICS_URL_ENV_VARIABLE):
         value = environ.get(name, "").strip()
         if not value:
-            raise ConfigError(f"a variável '{name}' indicada em {ICS_URL_ENV_VARIABLE} está vazia ou ausente")
-        urls.append(_normalize_ics_url(value, f"a variável '{name}'"))
+            raise ConfigError(messages.empty_ics_variable.format(name=name, variable=ICS_URL_ENV_VARIABLE))
+        urls.append(_normalize_ics_url(value, messages.variable_origin.format(name=name), messages))
     return urls
 
 
-def _read_urls_from_file(environ):
+def _read_urls_from_file(environ, messages):
     raw_path = environ.get(ICS_URL_FILE_VARIABLE, "").strip()
     if not raw_path:
         return []
     try:
         lines = Path(raw_path).expanduser().read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
-        raise ConfigError(f"não foi possível ler o arquivo de {ICS_URL_FILE_VARIABLE}") from None
+        raise ConfigError(messages.unreadable_ics_file.format(variable=ICS_URL_FILE_VARIABLE)) from None
     urls = []
     for number, line in enumerate(lines, start=1):
         value = line.strip()
         if value:
-            urls.append(_normalize_ics_url(value, f"a linha {number} de {ICS_URL_FILE_VARIABLE}"))
+            origin = messages.file_line_origin.format(number=number, variable=ICS_URL_FILE_VARIABLE)
+            urls.append(_normalize_ics_url(value, origin, messages))
     return urls
 
 
-def _normalize_ics_url(value, origin):
+def _normalize_ics_url(value, origin, messages):
     parsed = urllib.parse.urlparse(value)
     scheme = parsed.scheme.lower()
     is_valid = scheme in ICS_SCHEMES and bool(parsed.hostname) and not any(char.isspace() for char in value)
     if not is_valid:
-        raise ConfigError(f"{origin} não contém um link de calendário válido (http, https ou webcal)")
+        raise ConfigError(messages.invalid_ics_link.format(origin=origin))
     if scheme == WEBCAL_SCHEME:
         return urllib.parse.urlunparse(parsed._replace(scheme=SECURE_SCHEME))
     return value
@@ -366,41 +517,41 @@ def _is_visible(event, now, window_end):
     )
 
 
-def build_snapshot(result, now, title):
+def build_snapshot(result, now, title, messages):
     _, window_end = week_window(now)
     events = visible_events(result.events, now, window_end)
     return {
         "protocol": PROTOCOL_VERSION,
-        "summary": {"title": title, "blocks": _summary_blocks(events, now, result.warnings)},
-        "detail": _detail_sections(events, now),
-        "mini": _mini(events, now),
+        "summary": {"title": title, "blocks": _summary_blocks(events, now, result.warnings, messages)},
+        "detail": _detail_sections(events, now, messages),
+        "mini": _mini(events, now, messages),
     }
 
 
-def _summary_blocks(events, now, warnings):
+def _summary_blocks(events, now, warnings, messages):
     if events:
-        blocks = [{"type": "rows", "rows": _summary_rows(events, now)}]
+        blocks = [{"type": "rows", "rows": _summary_rows(events, now, messages)}]
     else:
-        blocks = [{"type": "lines", "lines": [{"text": EMPTY_TEXT, "tone": "muted"}]}]
+        blocks = [{"type": "lines", "lines": [{"text": messages.empty_text, "tone": "muted"}]}]
     if warnings:
         blocks.append({"type": "lines", "lines": [{"text": text, "tone": "warn"} for text in warnings]})
     return blocks
 
 
-def _summary_rows(events, now):
+def _summary_rows(events, now, messages):
     upcoming = _first_upcoming(events, now)
-    return [_summary_row(event, now, event is upcoming) for event in events]
+    return [_summary_row(event, now, event is upcoming, messages) for event in events]
 
 
-def _summary_row(event, now, is_upcoming):
+def _summary_row(event, now, is_upcoming, messages):
     current = _is_current(event, now)
     tags = []
     if current:
-        tags.append({"text": CURRENT_TAG, "tone": "ok"})
+        tags.append({"text": messages.current_tag, "tone": "ok"})
     elif is_upcoming:
-        tags.append({"text": UPCOMING_TAG.format(minutes=_minutes_until(event, now)), "tone": "warn"})
+        tags.append({"text": messages.upcoming_tag.format(minutes=_minutes_until(event, now)), "tone": "warn"})
     return {
-        "time": _time_label(event, now),
+        "time": _time_label(event, now, messages),
         "text": event.title,
         "tone": "current" if current else "normal",
         "tags": tags,
@@ -424,17 +575,17 @@ def _minutes_until(event, now):
     return math.ceil(seconds / SECONDS_PER_MINUTE)
 
 
-def _time_label(event, now):
-    prefix = _day_prefix(_display_day(event, now), now)
+def _time_label(event, now, messages):
+    prefix = _day_prefix(_display_day(event, now), now, messages)
     if event.all_day:
-        return f"{prefix}{ALL_DAY_LABEL}"
+        return f"{prefix}{messages.all_day_label}"
     return f"{prefix}{_local(event.start, now):{TIME_FORMAT}}"
 
 
-def _day_prefix(day, now):
+def _day_prefix(day, now, messages):
     if day == now.date():
         return ""
-    return f"{WEEKDAY_ABBREVIATIONS[day.weekday()]} "
+    return f"{messages.weekday_abbreviations[day.weekday()]} "
 
 
 def _display_day(event, now):
@@ -445,25 +596,25 @@ def _local(moment, now):
     return moment.astimezone(now.tzinfo)
 
 
-def _detail_sections(events, now):
+def _detail_sections(events, now, messages):
     sections = []
     for day, day_events in itertools.groupby(events, key=lambda event: _display_day(event, now)):
-        items = [{"id": event.id, "text": _item_text(event, now)} for event in day_events]
-        sections.append({"heading": _day_heading(day, now), "items": items})
+        items = [{"id": event.id, "text": _item_text(event, now, messages)} for event in day_events]
+        sections.append({"heading": _day_heading(day, now, messages), "items": items})
     return sections
 
 
-def _day_heading(day, now):
+def _day_heading(day, now, messages):
     if day == now.date():
-        return TODAY_HEADING
+        return messages.today_heading
     if day == now.date() + timedelta(days=1):
-        return TOMORROW_HEADING
-    return f"{WEEKDAY_ABBREVIATIONS[day.weekday()]} {day:{DAY_FORMAT}}"
+        return messages.tomorrow_heading
+    return messages.format_day_heading(messages.weekday_abbreviations[day.weekday()], day)
 
 
-def _item_text(event, now):
+def _item_text(event, now, messages):
     if event.all_day:
-        body = f"{ALL_DAY_LABEL} {event.title}"
+        body = f"{messages.all_day_label} {event.title}"
     else:
         start = _local(event.start, now).strftime(TIME_FORMAT)
         end = _local(event.end, now).strftime(TIME_FORMAT)
@@ -473,17 +624,17 @@ def _item_text(event, now):
     return body
 
 
-def _mini(events, now):
+def _mini(events, now, messages):
     today = now.date()
     todays = [event for event in events if _display_day(event, now) == today]
-    return {"value": str(len(todays)), "text": _mini_text(todays, now)}
+    return {"value": str(len(todays)), "text": _mini_text(todays, now, messages)}
 
 
-def _mini_text(todays, now):
+def _mini_text(todays, now, messages):
     for event in todays:
         if not event.all_day and event.start > now:
-            return NEXT_EVENT_TEXT.format(time=_local(event.start, now).strftime(TIME_FORMAT))
-    return FREE_TODAY_TEXT if not todays else NO_NEXT_EVENT_TEXT
+            return messages.next_event_text.format(time=_local(event.start, now).strftime(TIME_FORMAT))
+    return messages.free_today_text if not todays else messages.no_next_event_text
 
 
 @dataclass(frozen=True)
@@ -946,7 +1097,7 @@ def expand_occurrences(event, window_start, window_end, zone):
     return found + extra
 
 
-def ics_events_in_window(events, calendar, window_start, window_end, zone):
+def ics_events_in_window(events, calendar, window_start, window_end, zone, messages=ENGLISH_MESSAGES):
     groups = {}
     for index, event in enumerate(events):
         groups.setdefault(event.uid or index, []).append(event)
@@ -956,7 +1107,7 @@ def ics_events_in_window(events, calendar, window_start, window_end, zone):
             found += _group_events(group, calendar, window_start, window_end, zone)
         except UnsupportedRule:
             title = next((event.summary for event in group if event.recurrence_id is None), group[0].summary)
-            warnings.append(UNSUPPORTED_RULE_WARNING.format(title=title))
+            warnings.append(messages.unsupported_rule_warning.format(title=title))
     return SourceResult(events=found, warnings=warnings)
 
 
@@ -1013,28 +1164,28 @@ class HttpUnauthorized(Exception):
 ACCOUNT_FAILURES = (SourceError, HttpUnauthorized, KeyError, TypeError, ValueError, AttributeError)
 
 
-def _read_capped(request, limit):
+def _read_capped(request, limit, messages):
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
         body = response.read(limit + 1)
     if len(body) > limit:
-        raise FetchError(OVERSIZED_RESPONSE_MESSAGE)
+        raise FetchError(messages.oversized_response)
     return body
 
 
-def fetch_url(url):
-    return _read_capped(url, MAXIMUM_ICS_BYTES).decode("utf-8", errors="replace")
+def fetch_url(url, messages=ENGLISH_MESSAGES):
+    return _read_capped(url, MAXIMUM_ICS_BYTES, messages).decode("utf-8", errors="replace")
 
 
-def google_get(url, token):
+def google_get(url, token, messages=ENGLISH_MESSAGES):
     request = urllib.request.Request(url, headers={AUTHORIZATION_HEADER: BEARER_TOKEN_FORMAT.format(token=token)})
     try:
-        return _json_object(_read_capped(request, MAXIMUM_GOOGLE_RESPONSE_BYTES))
+        return _json_object(_read_capped(request, MAXIMUM_GOOGLE_RESPONSE_BYTES, messages))
     except urllib.error.HTTPError as error:
         if error.code == HTTP_UNAUTHORIZED:
             raise HttpUnauthorized from None
-        raise SourceError(GOOGLE_UNAVAILABLE_MESSAGE) from None
+        raise SourceError(messages.google_unavailable) from None
     except (OSError, http.client.HTTPException, ValueError, FetchError):
-        raise SourceError(GOOGLE_UNAVAILABLE_MESSAGE) from None
+        raise SourceError(messages.google_unavailable) from None
 
 
 def _json_object(body):
@@ -1044,7 +1195,7 @@ def _json_object(body):
     return value
 
 
-def run_busctl(arguments):
+def run_busctl(arguments, messages=ENGLISH_MESSAGES):
     try:
         completed = subprocess.run(
             [*BUSCTL_COMMAND, *arguments],
@@ -1055,24 +1206,26 @@ def run_busctl(arguments):
         )
         return _json_object(completed.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
-        raise SourceError(BUS_UNAVAILABLE_MESSAGE) from None
+        raise SourceError(messages.bus_unavailable) from None
 
 
-def ics_source(config, window_start, window_end, zone, fetch=fetch_url):
+def ics_source(config, window_start, window_end, zone, fetch=None):
+    messages = config.messages
+    fetch = partial(fetch_url, messages=messages) if fetch is None else fetch
     events, warnings = [], []
     failures = 0
     for number, url in enumerate(config.ics_urls, start=1):
         try:
             text = _download(url, fetch)
         except _LinkFailure:
-            warnings.append(LINK_UNAVAILABLE_WARNING.format(number=number))
+            warnings.append(messages.link_unavailable_warning.format(number=number))
             failures += 1
             continue
-        result = _link_result(text, number, window_start, window_end, zone)
+        result = _link_result(text, number, window_start, window_end, zone, messages)
         events += result.events
         warnings += result.warnings
     if config.ics_urls and failures == len(config.ics_urls):
-        raise SourceError(ALL_LINKS_FAILED_MESSAGE)
+        raise SourceError(messages.all_links_failed)
     return SourceResult(events=events, warnings=warnings)
 
 
@@ -1086,10 +1239,10 @@ def _download(url, fetch):
     return text
 
 
-def _link_result(text, number, window_start, window_end, zone):
+def _link_result(text, number, window_start, window_end, zone, messages):
     events, calendar_name = parse_ics(text, zone)
     calendar = calendar_name or ICS_CALENDAR_NAME_FALLBACK.format(number=number)
-    return ics_events_in_window(events, calendar, window_start, window_end, zone)
+    return ics_events_in_window(events, calendar, window_start, window_end, zone, messages)
 
 
 @dataclass(frozen=True)
@@ -1099,37 +1252,44 @@ class GoaAccount:
     attention_needed: bool
 
 
-def goa_source(config, window_start, window_end, zone, busctl=run_busctl, http_get=google_get):
-    accounts = _google_accounts(busctl, config.goa_account)
+def goa_source(config, window_start, window_end, zone, busctl=None, http_get=None):
+    messages = config.messages
+    busctl = partial(run_busctl, messages=messages) if busctl is None else busctl
+    http_get = partial(google_get, messages=messages) if http_get is None else http_get
+    accounts = _google_accounts(busctl, config.goa_account, messages)
     if not accounts:
-        raise SourceError(NO_GOOGLE_ACCOUNT_MESSAGE)
+        raise SourceError(messages.no_google_account)
     events, warnings = [], []
     for account in accounts:
         if account.attention_needed:
-            warnings.append(ATTENTION_NEEDED_WARNING.format(email=account.email))
+            warnings.append(messages.attention_needed_warning.format(email=account.email))
             continue
         try:
-            events += _account_events(account, config.calendars, window_start, window_end, zone, busctl, http_get)
+            events += _account_events(
+                account, config.calendars, window_start, window_end, zone, busctl, http_get, messages
+            )
         except ACCOUNT_FAILURES:
-            warnings.append(ACCOUNT_UNAVAILABLE_WARNING.format(email=account.email))
+            warnings.append(messages.account_unavailable_warning.format(email=account.email))
     if len(warnings) == len(accounts):
-        raise SourceError(_all_accounts_failed_message(accounts))
+        raise SourceError(_all_accounts_failed_message(accounts, messages))
     return SourceResult(events=events, warnings=warnings)
 
 
-def _all_accounts_failed_message(accounts):
+def _all_accounts_failed_message(accounts, messages):
     attention_warnings = [
-        ATTENTION_NEEDED_WARNING.format(email=account.email) for account in accounts if account.attention_needed
+        messages.attention_needed_warning.format(email=account.email)
+        for account in accounts
+        if account.attention_needed
     ]
-    return "; ".join(attention_warnings) or ALL_ACCOUNTS_FAILED_MESSAGE
+    return "; ".join(attention_warnings) or messages.all_accounts_failed
 
 
 def _goa_arguments(path, interface, method):
     return [GOA_SERVICE, path, interface, method]
 
 
-def _google_accounts(busctl, goa_account):
-    objects = _managed_objects(busctl)
+def _google_accounts(busctl, goa_account, messages):
+    objects = _managed_objects(busctl, messages)
     accounts = []
     for path, interfaces in objects.items():
         properties = interfaces.get(GOA_ACCOUNT_INTERFACE, {})
@@ -1143,12 +1303,12 @@ def _google_accounts(busctl, goa_account):
     return accounts
 
 
-def _managed_objects(busctl):
+def _managed_objects(busctl, messages):
     reply = busctl(_goa_arguments(GOA_OBJECTS_PATH, DBUS_OBJECT_MANAGER_INTERFACE, GET_MANAGED_OBJECTS))
     try:
         return reply["data"][0]
     except (KeyError, IndexError, TypeError):
-        raise SourceError(BUS_UNAVAILABLE_MESSAGE) from None
+        raise SourceError(messages.bus_unavailable) from None
 
 
 def _is_enabled_google_account(properties):
@@ -1161,9 +1321,9 @@ def _variant(properties, name):
     return properties.get(name, {}).get("data")
 
 
-def _account_events(account, calendars, window_start, window_end, zone, busctl, http_get):
+def _account_events(account, calendars, window_start, window_end, zone, busctl, http_get, messages):
     def fetch():
-        return _fetch_account_events(account, calendars, window_start, window_end, zone, busctl, http_get)
+        return _fetch_account_events(account, calendars, window_start, window_end, zone, busctl, http_get, messages)
 
     try:
         return fetch()
@@ -1176,11 +1336,11 @@ def _ensure_credentials(account, busctl):
     busctl(_goa_arguments(account.path, GOA_ACCOUNT_INTERFACE, ENSURE_CREDENTIALS))
 
 
-def _fetch_account_events(account, calendars, window_start, window_end, zone, busctl, http_get):
+def _fetch_account_events(account, calendars, window_start, window_end, zone, busctl, http_get, messages):
     token = _access_token(account, busctl)
     events = []
     for calendar_id, name in _selected_calendars(token, calendars, http_get):
-        events += _calendar_events(calendar_id, name, token, window_start, window_end, zone, http_get)
+        events += _calendar_events(calendar_id, name, token, window_start, window_end, zone, http_get, messages)
     return events
 
 
@@ -1198,7 +1358,7 @@ def _google_calendar_name(item):
     return item.get("summaryOverride") or item.get("summary", "")
 
 
-def _calendar_events(calendar_id, calendar_name, token, window_start, window_end, zone, http_get):
+def _calendar_events(calendar_id, calendar_name, token, window_start, window_end, zone, http_get, messages):
     parameters = {
         "timeMin": window_start.isoformat(),
         "timeMax": window_end.isoformat(),
@@ -1209,7 +1369,7 @@ def _calendar_events(calendar_id, calendar_name, token, window_start, window_end
     quoted_id = urllib.parse.quote(calendar_id, safe="")
     url = f"{GOOGLE_CALENDAR_API}/calendars/{quoted_id}/events"
     items = _paginated_items(url, parameters, token, http_get)
-    return [_google_event(item, calendar_name, zone) for item in items]
+    return [_google_event(item, calendar_name, zone, messages) for item in items]
 
 
 def _paginated_items(url, parameters, token, http_get):
@@ -1228,12 +1388,12 @@ def _page_url(url, parameters):
     return f"{url}?{urllib.parse.urlencode(parameters)}" if parameters else url
 
 
-def _google_event(item, calendar_name, zone):
+def _google_event(item, calendar_name, zone, messages):
     start, all_day = _google_moment(item["start"], zone)
     end, _ = _google_moment(item["end"], zone)
     return Event(
         id=item["id"],
-        title=item.get("summary") or GOOGLE_UNTITLED_TITLE,
+        title=item.get("summary") or messages.untitled_event,
         start=start,
         end=end,
         all_day=all_day,
@@ -1271,10 +1431,11 @@ def run_gcalcli(arguments):
 
 def gcalcli_source(config, window_start, window_end, zone, run=run_gcalcli):
     arguments = _gcalcli_arguments(config, window_start, window_end)
-    code, output, errors = _run_gcalcli(arguments, run)
+    messages = config.messages
+    code, output, errors = _run_gcalcli(arguments, run, messages)
     if code != SUCCESS_EXIT_CODE:
-        raise SourceError(GCALCLI_FAILURE_MESSAGE.format(detail=_first_error_line(errors)))
-    return _gcalcli_result(output, zone)
+        raise SourceError(messages.gcalcli_failure.format(detail=_first_error_line(errors, messages)))
+    return _gcalcli_result(output, zone, messages)
 
 
 def _gcalcli_arguments(config, window_start, window_end):
@@ -1290,50 +1451,50 @@ def _gcalcli_arguments(config, window_start, window_end):
     ]
 
 
-def _run_gcalcli(arguments, run):
+def _run_gcalcli(arguments, run, messages):
     try:
         return run(arguments)
     except FileNotFoundError:
-        raise SourceError(GCALCLI_MISSING_BINARY_MESSAGE) from None
+        raise SourceError(messages.gcalcli_missing_binary) from None
     except subprocess.TimeoutExpired:
-        raise SourceError(GCALCLI_NOT_RESPONDING_MESSAGE) from None
+        raise SourceError(messages.gcalcli_not_responding) from None
     except OSError:
-        raise SourceError(GCALCLI_UNEXECUTABLE_MESSAGE) from None
+        raise SourceError(messages.gcalcli_unexecutable) from None
 
 
-def _first_error_line(errors):
+def _first_error_line(errors, messages):
     for line in errors.splitlines():
         if line.strip():
             return line.strip()[:GCALCLI_ERROR_LINE_LIMIT]
-    return GCALCLI_NO_ERROR_DETAIL
+    return messages.gcalcli_no_error_detail
 
 
-def _gcalcli_result(output, zone):
-    rows, columns = _tsv_table(output)
+def _gcalcli_result(output, zone, messages):
+    rows, columns = _tsv_table(output, messages)
     events, skipped_any = [], False
     for fields in rows:
         try:
             events.append(_gcalcli_event(_gcalcli_row(fields, columns), zone))
         except ValueError:
             skipped_any = True
-    warnings = [GCALCLI_SKIPPED_ROW_WARNING] if skipped_any else []
+    warnings = [messages.gcalcli_skipped_row_warning] if skipped_any else []
     return SourceResult(events=events, warnings=warnings)
 
 
-def _tsv_table(output):
+def _tsv_table(output, messages):
     lines = [line for line in output.splitlines() if line.strip()]
     if not lines:
         return [], {}
     header = [name.strip() for name in lines[0].split(TSV_SEPARATOR)]
-    _check_required_columns(header)
+    _check_required_columns(header, messages)
     columns = {name: index for index, name in enumerate(header)}
     return [line.split(TSV_SEPARATOR) for line in lines[1:]], columns
 
 
-def _check_required_columns(header):
+def _check_required_columns(header, messages):
     missing = [name for name in GCALCLI_REQUIRED_COLUMNS if name not in header]
     if missing:
-        raise SourceError(GCALCLI_MISSING_COLUMNS_MESSAGE.format(columns=", ".join(missing)))
+        raise SourceError(messages.gcalcli_missing_columns.format(columns=", ".join(missing)))
 
 
 def _gcalcli_row(fields, columns):
@@ -1414,13 +1575,14 @@ def main(arguments, environ=None, sources=None, now=None, stdout=None, stderr=No
     now = datetime.now().astimezone() if now is None else now
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
+    messages = messages_for(environ)
     if arguments != [SNAPSHOT_COMMAND]:
-        stderr.write(USAGE_MESSAGE)
+        stderr.write(messages.usage)
         return USAGE_EXIT_CODE
     try:
         stdout.write(_snapshot_json(environ, sources, now) + "\n")
     except (ConfigError, SourceError) as error:
-        stderr.write(f"erro: {error}\n")
+        stderr.write(f"{messages.error_prefix}{error}\n")
         return FAILURE_EXIT_CODE
     return SUCCESS_EXIT_CODE
 
@@ -1431,7 +1593,7 @@ def _snapshot_json(environ, sources, now):
     moment = now.astimezone(zone)
     _, window_end = week_window(moment)
     result = sources[config.source](config, moment, window_end, zone)
-    return json.dumps(build_snapshot(result, moment, config.title), ensure_ascii=False)
+    return json.dumps(build_snapshot(result, moment, config.title, config.messages), ensure_ascii=False)
 
 
 if __name__ == "__main__":

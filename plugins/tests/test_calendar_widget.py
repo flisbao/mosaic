@@ -1,6 +1,8 @@
+import dataclasses
 import io
 import json
 import subprocess
+import string
 import sys
 import tempfile
 import traceback
@@ -15,6 +17,12 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "calendar"))
 
 import calendar_widget  # noqa: E402
+
+PORTUGUESE_ENVIRONMENT = {"MOSAIC_LANGUAGE": "pt-BR"}
+
+
+def load_config_in_portuguese(environ):
+    return calendar_widget.load_config({"MOSAIC_LANGUAGE": "pt-BR", **environ})
 
 ZONE = ZoneInfo("America/Sao_Paulo")
 NOW = datetime(2026, 10, 20, 10, 0, tzinfo=ZONE)
@@ -34,7 +42,7 @@ def event(title, start, end, **fields):
 
 def snapshot(events=(), warnings=()):
     result = calendar_widget.SourceResult(events=list(events), warnings=list(warnings))
-    return calendar_widget.build_snapshot(result, NOW, "Agenda")
+    return calendar_widget.build_snapshot(result, NOW, "Agenda", calendar_widget.PORTUGUESE_MESSAGES)
 
 
 def summary_rows(snapshot_data):
@@ -54,15 +62,15 @@ def parse_event(*lines, zone=ZONE):
 class ConfigTests(unittest.TestCase):
     def test_source_is_required(self):
         with self.assertRaises(calendar_widget.ConfigError):
-            calendar_widget.load_config({})
+            load_config_in_portuguese({})
 
     def test_source_must_be_a_known_name(self):
         with self.assertRaises(calendar_widget.ConfigError) as context:
-            calendar_widget.load_config({"CALENDAR_SOURCE": "outlook"})
+            load_config_in_portuguese({"CALENDAR_SOURCE": "outlook"})
         self.assertIn("CALENDAR_SOURCE", str(context.exception))
 
     def test_ics_urls_come_from_named_variables(self):
-        config = calendar_widget.load_config({
+        config = load_config_in_portuguese({
             "CALENDAR_SOURCE": "ics",
             "CALENDAR_ICS_URL_ENV": "A, B",
             "A": " https://x/a.ics ",
@@ -74,7 +82,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "links.txt"
             path.write_text("  https://x/a.ics  \n\nwebcal://x/b.ics\n", encoding="utf-8")
-            config = calendar_widget.load_config({
+            config = load_config_in_portuguese({
                 "CALENDAR_SOURCE": "ics",
                 "CALENDAR_ICS_URL_FILE": str(path),
             })
@@ -82,7 +90,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_unreadable_url_file_is_an_error_that_names_the_variable(self):
         with self.assertRaises(calendar_widget.ConfigError) as context:
-            calendar_widget.load_config({
+            load_config_in_portuguese({
                 "CALENDAR_SOURCE": "ics",
                 "CALENDAR_ICS_URL_FILE": "/nao/existe/links.txt",
             })
@@ -93,7 +101,7 @@ class ConfigTests(unittest.TestCase):
             path = Path(directory) / "links.txt"
             path.write_text("https://x/a.ics\nftp://x/b.ics\n", encoding="utf-8")
             with self.assertRaises(calendar_widget.ConfigError) as context:
-                calendar_widget.load_config({
+                load_config_in_portuguese({
                     "CALENDAR_SOURCE": "ics",
                     "CALENDAR_ICS_URL_FILE": str(path),
                 })
@@ -102,7 +110,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_missing_named_variable_is_an_error_that_names_it(self):
         with self.assertRaises(calendar_widget.ConfigError) as context:
-            calendar_widget.load_config({
+            load_config_in_portuguese({
                 "CALENDAR_SOURCE": "ics",
                 "CALENDAR_ICS_URL_ENV": "AUSENTE",
             })
@@ -110,7 +118,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_empty_named_variable_is_an_error_that_names_it_without_leaking_the_others(self):
         with self.assertRaises(calendar_widget.ConfigError) as context:
-            calendar_widget.load_config({
+            load_config_in_portuguese({
                 "CALENDAR_SOURCE": "ics",
                 "CALENDAR_ICS_URL_ENV": "A,B",
                 "A": "   ",
@@ -121,11 +129,11 @@ class ConfigTests(unittest.TestCase):
 
     def test_ics_without_any_url_is_an_error(self):
         with self.assertRaises(calendar_widget.ConfigError):
-            calendar_widget.load_config({"CALENDAR_SOURCE": "ics"})
+            load_config_in_portuguese({"CALENDAR_SOURCE": "ics"})
 
     def test_ics_rejects_non_http_scheme_without_echoing_the_link(self):
         with self.assertRaises(calendar_widget.ConfigError) as context:
-            calendar_widget.load_config({
+            load_config_in_portuguese({
                 "CALENDAR_SOURCE": "ics",
                 "CALENDAR_ICS_URL_ENV": "A",
                 "A": "file:///etc/tokens-secretos",
@@ -134,11 +142,11 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("tokens-secretos", str(context.exception))
 
     def test_defaults(self):
-        config = calendar_widget.load_config({"CALENDAR_SOURCE": "goa"})
+        config = load_config_in_portuguese({"CALENDAR_SOURCE": "goa"})
         self.assertEqual((config.title, config.goa_account, config.calendars), ("Agenda", None, []))
 
     def test_goa_account_and_calendars_are_read(self):
-        config = calendar_widget.load_config({
+        config = load_config_in_portuguese({
             "CALENDAR_SOURCE": "gcalcli",
             "CALENDAR_GOA_ACCOUNT": " conta@x.com ",
             "CALENDAR_CALENDARS": "Trabalho, ,Pessoal",
@@ -469,7 +477,7 @@ def occurrences(lines, window_start=NOW, window_end=WINDOW_END, zone=ZONE):
 
 
 def in_window(blocks, window_start=NOW, window_end=WINDOW_END, calendar="Pessoal"):
-    return calendar_widget.ics_events_in_window(parse_calendar(*blocks), calendar, window_start, window_end, ZONE)
+    return calendar_widget.ics_events_in_window(parse_calendar(*blocks), calendar, window_start, window_end, ZONE, calendar_widget.PORTUGUESE_MESSAGES)
 
 
 class RecurrenceTests(unittest.TestCase):
@@ -627,7 +635,7 @@ def meeting(uid, summary, hour):
 
 
 def ics_config(*urls):
-    return calendar_widget.Config(source="ics", title="Agenda", ics_urls=list(urls), goa_account=None, calendars=[])
+    return calendar_widget.Config(source="ics", title="Agenda", ics_urls=list(urls), goa_account=None, calendars=[], messages=calendar_widget.PORTUGUESE_MESSAGES)
 
 
 def fake_fetch(responses):
@@ -729,7 +737,7 @@ class FetchUrlTests(unittest.TestCase):
     def test_decodes_utf8_and_replaces_invalid_bytes(self):
         body = "Reunião".encode("utf-8") + b"\xff"
         with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=io.BytesIO(body)) as urlopen:
-            text = calendar_widget.fetch_url("https://a.example/a.ics")
+            text = calendar_widget.fetch_url("https://a.example/a.ics", calendar_widget.PORTUGUESE_MESSAGES)
         self.assertEqual(text, "Reunião�")
         self.assertEqual(urlopen.call_args.kwargs["timeout"], calendar_widget.REQUEST_TIMEOUT_SECONDS)
 
@@ -737,7 +745,7 @@ class FetchUrlTests(unittest.TestCase):
         body = io.BytesIO(b"x" * (calendar_widget.MAXIMUM_ICS_BYTES + 1))
         with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=body):
             with self.assertRaises(calendar_widget.FetchError):
-                calendar_widget.fetch_url("https://a.example/a.ics")
+                calendar_widget.fetch_url("https://a.example/a.ics", calendar_widget.PORTUGUESE_MESSAGES)
 
 
 GOA_SERVICE = "org.gnome.OnlineAccounts"
@@ -844,8 +852,7 @@ def titles(result):
 
 def goa_config(goa_account=None, calendars=()):
     return calendar_widget.Config(
-        source="goa", title="Agenda", ics_urls=[], goa_account=goa_account, calendars=list(calendars)
-    )
+        source="goa", title="Agenda", ics_urls=[], goa_account=goa_account, calendars=list(calendars), messages=calendar_widget.PORTUGUESE_MESSAGES)
 
 
 def run_goa_source(config, busctl, http_get):
@@ -1221,7 +1228,7 @@ class GoogleGetTests(unittest.TestCase):
     def test_sends_bearer_token_and_returns_json(self):
         body = io.BytesIO(json.dumps({"items": []}).encode("utf-8"))
         with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=body) as urlopen:
-            payload = calendar_widget.google_get(self.URL, TOKEN)
+            payload = calendar_widget.google_get(self.URL, TOKEN, calendar_widget.PORTUGUESE_MESSAGES)
         self.assertEqual(urlopen.call_args.args[0].get_header("Authorization"), f"Bearer {TOKEN}")
         self.assertEqual(urlopen.call_args.kwargs["timeout"], calendar_widget.REQUEST_TIMEOUT_SECONDS)
         self.assertEqual(payload, {"items": []})
@@ -1229,7 +1236,7 @@ class GoogleGetTests(unittest.TestCase):
     def test_unauthorized_raises_http_unauthorized(self):
         with mock.patch.object(calendar_widget.urllib.request, "urlopen", side_effect=http_error(401)):
             with self.assertRaises(calendar_widget.HttpUnauthorized):
-                calendar_widget.google_get(self.URL, TOKEN)
+                calendar_widget.google_get(self.URL, TOKEN, calendar_widget.PORTUGUESE_MESSAGES)
 
     def test_failures_are_source_errors_without_secrets(self):
         failures = [http_error(500), urllib.error.URLError("TOKEN-SECRETO"), TimeoutError("TOKEN-SECRETO")]
@@ -1237,7 +1244,7 @@ class GoogleGetTests(unittest.TestCase):
             with self.subTest(failure=type(failure).__name__):
                 with mock.patch.object(calendar_widget.urllib.request, "urlopen", side_effect=failure):
                     with self.assertRaises(calendar_widget.SourceError) as context:
-                        calendar_widget.google_get(self.URL, "TOKEN-SECRETO")
+                        calendar_widget.google_get(self.URL, "TOKEN-SECRETO", calendar_widget.PORTUGUESE_MESSAGES)
                 self.assertEqual(str(context.exception), GOOGLE_UNAVAILABLE_MESSAGE)
                 rendered = "".join(traceback.format_exception(context.exception))
                 self.assertNotIn("TOKEN-SECRETO", rendered)
@@ -1249,19 +1256,19 @@ class GoogleGetTests(unittest.TestCase):
             with self.subTest(size=body.getbuffer().nbytes):
                 with mock.patch.object(calendar_widget.urllib.request, "urlopen", return_value=body):
                     with self.assertRaises(calendar_widget.SourceError):
-                        calendar_widget.google_get(self.URL, TOKEN)
+                        calendar_widget.google_get(self.URL, TOKEN, calendar_widget.PORTUGUESE_MESSAGES)
 
 
 class MainTests(unittest.TestCase):
     def test_usage_error_returns_2(self):
         stderr = io.StringIO()
-        self.assertEqual(calendar_widget.main([], environ={}, stdout=io.StringIO(), stderr=stderr), 2)
+        self.assertEqual(calendar_widget.main([], environ=PORTUGUESE_ENVIRONMENT, stdout=io.StringIO(), stderr=stderr), 2)
         self.assertTrue(stderr.getvalue().startswith("uso:"))
-        self.assertEqual(calendar_widget.main(["snapshot", "extra"], environ={}, stderr=io.StringIO()), 2)
+        self.assertEqual(calendar_widget.main(["snapshot", "extra"], environ=PORTUGUESE_ENVIRONMENT, stderr=io.StringIO()), 2)
 
     def test_config_error_returns_1_with_message(self):
         stderr = io.StringIO()
-        code = calendar_widget.main(["snapshot"], environ={}, stdout=io.StringIO(), stderr=stderr)
+        code = calendar_widget.main(["snapshot"], environ=PORTUGUESE_ENVIRONMENT, stdout=io.StringIO(), stderr=stderr)
         self.assertEqual(code, 1)
         self.assertTrue(stderr.getvalue().startswith("erro: "))
 
@@ -1272,7 +1279,7 @@ class MainTests(unittest.TestCase):
         stderr = io.StringIO()
         code = calendar_widget.main(
             ["snapshot"],
-            environ={"CALENDAR_SOURCE": "goa"},
+            environ={"CALENDAR_SOURCE": "goa", **PORTUGUESE_ENVIRONMENT},
             sources={"goa": failing_source},
             now=NOW,
             stdout=io.StringIO(),
@@ -1338,7 +1345,7 @@ def gcalcli_config(*calendars):
     environ = {"CALENDAR_SOURCE": "gcalcli"}
     if calendars:
         environ["CALENDAR_CALENDARS"] = ",".join(calendars)
-    return calendar_widget.load_config(environ)
+    return load_config_in_portuguese(environ)
 
 
 def run_gcalcli_source(fake, config=None):
@@ -1485,6 +1492,41 @@ class GcalcliSourceTests(unittest.TestCase):
             stdin=subprocess.DEVNULL,
         )
         self.assertEqual(result, (0, "saída", "aviso"))
+
+
+class LanguageTests(unittest.TestCase):
+    def test_portuguese_is_chosen_by_any_value_starting_with_pt(self):
+        for value in ("pt-BR", "pt", "PT_br", " pt_BR.UTF-8 "):
+            self.assertIs(calendar_widget.messages_for({"MOSAIC_LANGUAGE": value}), calendar_widget.PORTUGUESE_MESSAGES, value)
+
+    def test_english_is_the_default_and_the_system_locale_is_ignored(self):
+        for environment in ({}, {"MOSAIC_LANGUAGE": ""}, {"MOSAIC_LANGUAGE": "fr"}, {"LANG": "pt_BR.UTF-8"}):
+            self.assertIs(calendar_widget.messages_for(environment), calendar_widget.ENGLISH_MESSAGES, environment)
+
+    def test_every_message_exists_in_both_languages_with_the_same_placeholders(self):
+        formatter = string.Formatter()
+
+        def placeholders(template):
+            return {name for _, name, _, _ in formatter.parse(template) if name is not None}
+
+        english = dataclasses.asdict(calendar_widget.ENGLISH_MESSAGES)
+        portuguese = dataclasses.asdict(calendar_widget.PORTUGUESE_MESSAGES)
+        self.assertEqual(english.keys(), portuguese.keys())
+        for key in english:
+            if key == "language":
+                continue
+            self.assertTrue(str(english[key]).strip(), key)
+            self.assertTrue(str(portuguese[key]).strip(), key)
+            if isinstance(english[key], str):
+                self.assertEqual(placeholders(english[key]), placeholders(portuguese[key]), key)
+
+    def test_the_english_main_reports_usage_and_errors_in_english(self):
+        stderr = io.StringIO()
+        self.assertEqual(calendar_widget.main([], environ={}, stdout=io.StringIO(), stderr=stderr), 2)
+        self.assertEqual(stderr.getvalue(), "usage: calendar_widget.py snapshot\n")
+        stderr = io.StringIO()
+        self.assertEqual(calendar_widget.main(["snapshot"], environ={}, stdout=io.StringIO(), stderr=stderr), 1)
+        self.assertTrue(stderr.getvalue().startswith("error: "), stderr.getvalue())
 
 
 if __name__ == "__main__":
