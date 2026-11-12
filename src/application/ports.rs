@@ -2,24 +2,37 @@ use chrono::NaiveDateTime;
 use thiserror::Error;
 
 use crate::application::plugin_setup::{SetupOptions, TabContext};
+use crate::display_in_portuguese;
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::plugin_setup::InstalledPlugin;
 use crate::domain::release::ReleaseVersion;
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 
 #[derive(Debug, Clone, Error, PartialEq)]
 pub enum SourceError {
-    #[error("{0}")]
     Failed(String),
-    #[error("{0}")]
     TimedOut(String),
-    #[error("{0}")]
     OutputTooLarge(String),
-    #[error("processo cancelado")]
     Cancelled,
-    #[error("{0}")]
     InvalidSnapshot(String),
 }
+
+impl LocalizedMessage for SourceError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::Failed(text)
+            | Self::TimedOut(text)
+            | Self::OutputTooLarge(text)
+            | Self::InvalidSnapshot(text) => text.clone(),
+            Self::Cancelled => language
+                .pick("process cancelled", "processo cancelado")
+                .to_string(),
+        }
+    }
+}
+
+display_in_portuguese!(SourceError);
 
 pub trait Cancellable: Send + Sync {
     fn cancel(&self);
@@ -112,11 +125,25 @@ pub trait CriteriaSource {
 
 #[derive(Debug, Clone, Error, PartialEq)]
 pub enum PromptError {
-    #[error("a entrada terminou antes do fim das perguntas")]
     EndOfInput,
-    #[error("{0}")]
     Failed(String),
 }
+
+impl LocalizedMessage for PromptError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::EndOfInput => language
+                .pick(
+                    "the input ended before the end of the questions",
+                    "a entrada terminou antes do fim das perguntas",
+                )
+                .to_string(),
+            Self::Failed(reason) => reason.clone(),
+        }
+    }
+}
+
+display_in_portuguese!(PromptError);
 
 pub trait Prompter {
     fn ask(&mut self, question: &str) -> Result<String, PromptError>;
@@ -178,15 +205,24 @@ pub trait PluginFetcher {
 
 #[derive(Debug, Clone, Error, PartialEq)]
 pub enum ReleaseError {
-    #[error("{0}")]
     ToolMissing(String),
-    #[error("{0}")]
     Failed(String),
-    #[error("{0}")]
     NotWritable(String),
-    #[error("operação cancelada")]
     Cancelled,
 }
+
+impl LocalizedMessage for ReleaseError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::ToolMissing(text) | Self::Failed(text) | Self::NotWritable(text) => text.clone(),
+            Self::Cancelled => language
+                .pick("operation cancelled", "operação cancelada")
+                .to_string(),
+        }
+    }
+}
+
+display_in_portuguese!(ReleaseError);
 
 pub trait ReleaseSource: Send + Sync {
     fn latest_version(&self) -> Result<ReleaseVersion, ReleaseError>;
@@ -243,4 +279,41 @@ pub struct UpdateCheckRecord {
 pub trait UpdateCheckStore: Send + Sync {
     fn load(&self) -> Option<UpdateCheckRecord>;
     fn save(&self, record: &UpdateCheckRecord) -> Result<(), StoreError>;
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+    use crate::language_assertions::assert_translated;
+
+    #[test]
+    fn unit_variants_are_translated_and_display_stays_in_portuguese() {
+        assert_translated("source", |language| {
+            SourceError::Cancelled.message(language)
+        });
+        assert_translated("release", |language| {
+            ReleaseError::Cancelled.message(language)
+        });
+        assert_translated("prompt", |language| {
+            PromptError::EndOfInput.message(language)
+        });
+        assert_eq!(SourceError::Cancelled.to_string(), "processo cancelado");
+        assert_eq!(ReleaseError::Cancelled.to_string(), "operação cancelada");
+        assert_eq!(
+            PromptError::EndOfInput.message(Language::English),
+            "the input ended before the end of the questions"
+        );
+    }
+
+    #[test]
+    fn variants_with_text_keep_it() {
+        assert_eq!(
+            SourceError::Failed("boom".to_string()).message(Language::English),
+            "boom"
+        );
+        assert_eq!(
+            ReleaseError::NotWritable("no".to_string()).message(Language::BrazilianPortuguese),
+            "no"
+        );
+    }
 }

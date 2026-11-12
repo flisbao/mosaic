@@ -90,7 +90,7 @@ impl LocalizedMessage for TabsFailure {
                 format!("could not write to the output: {reason}"),
                 format!("não consegui escrever na saída: {reason}"),
             ),
-            Self::Prompt(error) => error.to_string(),
+            Self::Prompt(error) => error.message(language),
         }
     }
 }

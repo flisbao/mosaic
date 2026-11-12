@@ -87,7 +87,7 @@ impl LocalizedMessage for SetupFailure {
             ),
             Self::Manifest(error) => error.to_string(),
             Self::Append(error) => error.message(language),
-            Self::Setup(error) => error.to_string(),
+            Self::Setup(error) => error.message(language),
             Self::Output(reason) => language.pick(
                 format!("could not write to the output: {reason}"),
                 format!("não consegui escrever na saída: {reason}"),

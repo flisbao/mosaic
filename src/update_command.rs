@@ -97,7 +97,7 @@ impl LocalizedMessage for UpdateCommandError {
             Self::Version(error) => error.message(language),
             Self::Update(error) => error.message(language),
             Self::Release(error) => release_error_text(error, language),
-            Self::Prompt(error) => error.to_string(),
+            Self::Prompt(error) => error.message(language),
             Self::Output(reason) => language.pick(
                 format!("could not write to the output: {reason}"),
                 format!("não consegui escrever na saída: {reason}"),

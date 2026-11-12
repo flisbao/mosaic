@@ -2,15 +2,25 @@ use thiserror::Error;
 
 use crate::application::ports::{PromptError, Prompter};
 use crate::application::setup_session::{Answered, SetupSession, SetupState};
-use crate::domain::language::Language;
+use crate::display_in_portuguese;
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::domain::plugin_setup::SetupManifest;
 use crate::domain::widget_draft::{tab_toml_block, WidgetDraft};
 
 #[derive(Debug, Error, PartialEq)]
 pub enum SetupError {
-    #[error(transparent)]
     Prompt(#[from] PromptError),
 }
+
+impl LocalizedMessage for SetupError {
+    fn message(&self, language: Language) -> String {
+        match self {
+            Self::Prompt(error) => error.message(language),
+        }
+    }
+}
+
+display_in_portuguese!(SetupError);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabContext {

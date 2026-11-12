@@ -41,7 +41,7 @@ impl LocalizedMessage for RemoteCommandError {
     fn message(&self, language: Language) -> String {
         match self {
             Self::Prepare(error) => error.message(language),
-            Self::Prompt(error) => error.to_string(),
+            Self::Prompt(error) => error.message(language),
             Self::Version(error) => error.message(language),
             Self::Output { reason, .. } => language.pick(
                 format!("could not write to the output: {reason}"),
@@ -96,7 +96,7 @@ pub fn execute_remote_install(
     let current = PluginVersion::parse(env!("CARGO_PKG_VERSION"))?;
     let candidates = sources
         .iter()
-        .map(|source| prepare_remote_plugin(fetcher, source, &current))
+        .map(|source| prepare_remote_plugin(fetcher, source, &current, language))
         .collect::<Result<Vec<_>, _>>()?;
     let mut names = HashSet::new();
     for candidate in &candidates {

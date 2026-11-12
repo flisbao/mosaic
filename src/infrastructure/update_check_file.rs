@@ -4,6 +4,7 @@ use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::{StoreError, UpdateCheckRecord, UpdateCheckStore};
+use crate::domain::language::Language;
 use crate::domain::release::ReleaseVersion;
 use crate::infrastructure::private_file::{read_regular_file, write_private_file_atomically};
 
@@ -43,7 +44,7 @@ impl UpdateCheckStore for FileUpdateCheckStore {
         };
         let content = serde_json::to_string(&stored)
             .map_err(|error| StoreError::Failed(error.to_string()))?;
-        write_private_file_atomically(&self.path, &content)
+        write_private_file_atomically(&self.path, &content, Language::default())
             .map_err(|error| StoreError::Failed(error.to_string()))
     }
 }

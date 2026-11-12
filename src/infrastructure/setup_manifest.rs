@@ -196,7 +196,14 @@ pub fn parse_package_manifest_in(
     language: Language,
 ) -> Result<PackageManifest, String> {
     let (setup, metadata) = parse_document(text, language)?;
-    let metadata = metadata.ok_or("plugin remoto precisa de version e min_mosaic_version")?;
+    let metadata = metadata.ok_or_else(|| {
+        language
+            .pick(
+                "a remote plugin needs version and min_mosaic_version",
+                "plugin remoto precisa de version e min_mosaic_version",
+            )
+            .to_string()
+    })?;
     Ok(PackageManifest { setup, metadata })
 }
 
@@ -211,20 +218,27 @@ fn parse_document(
             version: PluginVersion::parse(version).map_err(|error| error.to_string())?,
             min_mosaic_version: PluginVersion::parse(minimum).map_err(|error| error.to_string())?,
         }),
-        _ => return Err("version e min_mosaic_version precisam aparecer juntos".to_string()),
+        _ => {
+            return Err(language
+                .pick(
+                    "version and min_mosaic_version must appear together",
+                    "version e min_mosaic_version precisam aparecer juntos",
+                )
+                .to_string())
+        }
     };
     let steps = raw
         .steps
         .into_iter()
         .map(|step| convert_step(step, language))
         .collect::<Result<Vec<_>, _>>()?;
-    ensure_conditions_point_backwards(&steps)?;
+    ensure_conditions_point_backwards(&steps, language)?;
     let presets: Vec<Preset> = raw
         .presets
         .into_iter()
         .map(|preset| convert_preset(preset, language))
         .collect();
-    ensure_preset_flags_exist(&presets, &steps)?;
+    ensure_preset_flags_exist(&presets, &steps, language)?;
     Ok((
         SetupManifest {
             plugin: raw.plugin,
@@ -236,7 +250,7 @@ fn parse_document(
             inherit_rules: raw
                 .inherit
                 .into_iter()
-                .map(convert_inherit)
+                .map(|rule| convert_inherit(rule, language))
                 .collect::<Result<Vec<_>, _>>()?,
             presets,
             notes: raw
@@ -249,15 +263,24 @@ fn parse_document(
     ))
 }
 
-fn convert_condition(raw: RawCondition) -> Result<Condition, String> {
+fn convert_condition(raw: RawCondition, language: Language) -> Result<Condition, String> {
     match (&raw.any_of.is_empty(), raw.present) {
-        (true, None) => Err(format!(
-            "condição em {} precisa de 'in' ou de 'present'",
-            raw.variable
+        (true, None) => Err(language.pick(
+            format!("condition on {} needs 'in' or 'present'", raw.variable),
+            format!(
+                "condição em {} precisa de 'in' ou de 'present'",
+                raw.variable
+            ),
         )),
-        (false, Some(_)) => Err(format!(
-            "condição em {} não pode ter 'in' e 'present' juntos",
-            raw.variable
+        (false, Some(_)) => Err(language.pick(
+            format!(
+                "condition on {} cannot have both 'in' and 'present'",
+                raw.variable
+            ),
+            format!(
+                "condição em {} não pode ter 'in' e 'present' juntos",
+                raw.variable
+            ),
         )),
         _ => Ok(Condition {
             variable: raw.variable,
@@ -267,42 +290,58 @@ fn convert_condition(raw: RawCondition) -> Result<Condition, String> {
     }
 }
 
-fn convert_optional_condition(raw: Option<RawCondition>) -> Result<Option<Condition>, String> {
-    raw.map(convert_condition).transpose()
+fn convert_optional_condition(
+    raw: Option<RawCondition>,
+    language: Language,
+) -> Result<Option<Condition>, String> {
+    raw.map(|condition| convert_condition(condition, language))
+        .transpose()
 }
 
 fn convert_step(raw: RawStep, language: Language) -> Result<Step, String> {
     match raw.kind.as_str() {
         KIND_SECRET => convert_secret(raw, language).map(Step::Secret),
         KIND_VARIABLE | KIND_ARGUMENT => convert_question(raw, language).map(Step::Question),
-        other => Err(format!("tipo de passo desconhecido: {other}")),
+        other => Err(language.pick(
+            format!("unknown step kind: {other}"),
+            format!("tipo de passo desconhecido: {other}"),
+        )),
     }
 }
 
 fn requirement_of(
     required: bool,
     required_when: Option<RawCondition>,
+    language: Language,
 ) -> Result<Requirement, String> {
     match (required, required_when) {
         (true, _) => Ok(Requirement::Always),
-        (false, Some(condition)) => convert_condition(condition).map(Requirement::When),
+        (false, Some(condition)) => convert_condition(condition, language).map(Requirement::When),
         (false, None) => Ok(Requirement::Optional),
     }
 }
 
 fn convert_secret(raw: RawStep, language: Language) -> Result<SecretQuestion, String> {
-    let environment_key = raw
-        .environment_key
-        .ok_or("passo secret precisa de environment_key")?;
-    let file_key = raw.file_key.ok_or("passo secret precisa de file_key")?;
+    let environment_key = raw.environment_key.ok_or_else(|| {
+        language.pick(
+            "secret step needs environment_key",
+            "passo secret precisa de environment_key",
+        )
+    })?;
+    let file_key = raw.file_key.ok_or_else(|| {
+        language.pick(
+            "secret step needs file_key",
+            "passo secret precisa de file_key",
+        )
+    })?;
     Ok(SecretQuestion {
         prompt: localized(raw.prompt, raw.prompt_en, language),
         environment_key,
         file_key,
         names_are_list: raw.list,
         allow_both: raw.both,
-        requirement: requirement_of(raw.required, raw.required_when)?,
-        condition: convert_optional_condition(raw.when)?,
+        requirement: requirement_of(raw.required, raw.required_when, language)?,
+        condition: convert_optional_condition(raw.when, language)?,
     })
 }
 
@@ -310,8 +349,22 @@ fn convert_question(raw: RawStep, language: Language) -> Result<Question, String
     let target = match (raw.kind.as_str(), raw.name, raw.flag) {
         (KIND_VARIABLE, Some(name), None) => Target::Variable(name),
         (KIND_ARGUMENT, None, Some(flag)) => Target::Argument(flag),
-        (KIND_VARIABLE, _, _) => return Err("passo variable precisa só de name".to_string()),
-        _ => return Err("passo argument precisa só de flag".to_string()),
+        (KIND_VARIABLE, _, _) => {
+            return Err(language
+                .pick(
+                    "variable step needs only name",
+                    "passo variable precisa só de name",
+                )
+                .to_string())
+        }
+        _ => {
+            return Err(language
+                .pick(
+                    "argument step needs only flag",
+                    "passo argument precisa só de flag",
+                )
+                .to_string())
+        }
     };
     let kind = convert_kind(
         raw.answer_type.as_deref(),
@@ -325,10 +378,10 @@ fn convert_question(raw: RawStep, language: Language) -> Result<Question, String
         target,
         prompt: localized(raw.prompt, raw.prompt_en, language),
         kind,
-        requirement: requirement_of(raw.required, raw.required_when)?,
+        requirement: requirement_of(raw.required, raw.required_when, language)?,
         default: raw.default,
         advanced: raw.advanced,
-        condition: convert_optional_condition(raw.when)?,
+        condition: convert_optional_condition(raw.when, language)?,
     })
 }
 
@@ -347,7 +400,10 @@ fn convert_kind(
             (Some(minimum), Some(maximum)) if minimum <= maximum => {
                 Ok(AnswerKind::Integer { minimum, maximum })
             }
-            _ => Err(format!("{key}: integer precisa de min <= max")),
+            _ => Err(language.pick(
+                format!("{key}: integer needs min <= max"),
+                format!("{key}: integer precisa de min <= max"),
+            )),
         },
         TYPE_CHOICE if !choices.is_empty() => Ok(AnswerKind::Choice(
             choices
@@ -358,22 +414,28 @@ fn convert_kind(
                 })
                 .collect(),
         )),
-        TYPE_CHOICE => Err(format!("{key}: choice precisa de choices")),
-        other => Err(format!("{key}: type desconhecido: {other}")),
+        TYPE_CHOICE => Err(language.pick(
+            format!("{key}: choice needs choices"),
+            format!("{key}: choice precisa de choices"),
+        )),
+        other => Err(language.pick(
+            format!("{key}: unknown type: {other}"),
+            format!("{key}: type desconhecido: {other}"),
+        )),
     }
 }
 
-fn convert_inherit(raw: RawInherit) -> Result<InheritRule, String> {
+fn convert_inherit(raw: RawInherit, language: Language) -> Result<InheritRule, String> {
     Ok(InheritRule {
         name: raw.name,
-        condition: convert_optional_condition(raw.when)?,
+        condition: convert_optional_condition(raw.when, language)?,
     })
 }
 
 fn convert_note(raw: RawNote, language: Language) -> Result<Note, String> {
     Ok(Note {
         text: localized(raw.text, raw.text_en, language),
-        condition: convert_optional_condition(raw.when)?,
+        condition: convert_optional_condition(raw.when, language)?,
     })
 }
 
@@ -402,7 +464,7 @@ fn question_keys(step: &Step) -> Vec<&str> {
     }
 }
 
-fn ensure_conditions_point_backwards(steps: &[Step]) -> Result<(), String> {
+fn ensure_conditions_point_backwards(steps: &[Step], language: Language) -> Result<(), String> {
     let mut earlier_keys: Vec<&str> = Vec::new();
     for step in steps {
         let referenced = step
@@ -411,9 +473,15 @@ fn ensure_conditions_point_backwards(steps: &[Step]) -> Result<(), String> {
             .chain(requirement_condition(step));
         for condition in referenced {
             if !earlier_keys.contains(&condition.variable.as_str()) {
-                return Err(format!(
-                    "condição usa {} antes de essa pergunta existir",
-                    condition.variable
+                return Err(language.pick(
+                    format!(
+                        "condition uses {} before that question exists",
+                        condition.variable
+                    ),
+                    format!(
+                        "condição usa {} antes de essa pergunta existir",
+                        condition.variable
+                    ),
                 ));
             }
         }
@@ -433,7 +501,11 @@ fn requirement_condition(step: &Step) -> Option<&Condition> {
     }
 }
 
-fn ensure_preset_flags_exist(presets: &[Preset], steps: &[Step]) -> Result<(), String> {
+fn ensure_preset_flags_exist(
+    presets: &[Preset],
+    steps: &[Step],
+    language: Language,
+) -> Result<(), String> {
     let flags: Vec<&str> = steps
         .iter()
         .filter_map(|step| match step {
@@ -447,9 +519,15 @@ fn ensure_preset_flags_exist(presets: &[Preset], steps: &[Step]) -> Result<(), S
     for preset in presets {
         for (flag, _) in &preset.arguments {
             if !flags.contains(&flag.as_str()) {
-                return Err(format!(
-                    "preset {} usa {flag}, que o plugin não pergunta",
-                    preset.name
+                return Err(language.pick(
+                    format!(
+                        "preset {} uses {flag}, which the plugin does not ask",
+                        preset.name
+                    ),
+                    format!(
+                        "preset {} usa {flag}, que o plugin não pergunta",
+                        preset.name
+                    ),
                 ));
             }
         }
@@ -752,5 +830,59 @@ description_en = "Quick"
             assert_eq!(first_prompt(&manifest), "Modo");
             assert_eq!(manifest.notes[0].text, "Aviso");
         }
+    }
+
+    const HEADER: &str = "plugin = \"demo\"\nscript = \"plugins/demo/demo.py\"\ndefault_id = \"demo\"\ninterval_seconds = 60\ntimeout_seconds = 5\n";
+
+    fn error_of(body: &str, language: Language) -> String {
+        parse_manifest_in(&format!("{HEADER}{body}"), language).unwrap_err()
+    }
+
+    #[test]
+    fn authoring_errors_are_translated() {
+        let cases = [
+            (
+                "[[steps]]\nkind = \"nope\"\nprompt = \"x\"\n",
+                "unknown step kind: nope",
+                "tipo de passo desconhecido: nope",
+            ),
+            (
+                "[[steps]]\nkind = \"variable\"\nname = \"A\"\nprompt = \"x\"\ntype = \"choice\"\n",
+                "A: choice needs choices",
+                "A: choice precisa de choices",
+            ),
+            (
+                "[[steps]]\nkind = \"variable\"\nname = \"A\"\nprompt = \"x\"\nwhen = { variable = \"B\", in = [\"1\"] }\n",
+                "condition uses B before that question exists",
+                "condição usa B antes de essa pergunta existir",
+            ),
+            (
+                "[[steps]]\nkind = \"variable\"\nname = \"A\"\nprompt = \"x\"\nwhen = { variable = \"B\" }\n",
+                "condition on B needs 'in' or 'present'",
+                "condição em B precisa de 'in' ou de 'present'",
+            ),
+            (
+                "[[presets]]\nname = \"p\"\ndescription = \"d\"\narguments = { \"--x\" = \"1\" }\n",
+                "preset p uses --x, which the plugin does not ask",
+                "preset p usa --x, que o plugin não pergunta",
+            ),
+        ];
+        for (body, english, portuguese) in cases {
+            assert_eq!(error_of(body, Language::English), english);
+            assert_eq!(error_of(body, Language::BrazilianPortuguese), portuguese);
+        }
+    }
+
+    #[test]
+    fn a_package_without_versions_is_refused_in_both_languages() {
+        let text = HEADER.to_string();
+        assert_eq!(
+            parse_package_manifest_in(&text, Language::English).unwrap_err(),
+            "a remote plugin needs version and min_mosaic_version"
+        );
+        assert_eq!(
+            parse_package_manifest_in(&text, Language::BrazilianPortuguese).unwrap_err(),
+            "plugin remoto precisa de version e min_mosaic_version"
+        );
     }
 }

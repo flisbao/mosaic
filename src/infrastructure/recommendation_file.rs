@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::ports::{RecommendationStore, StoreError, StoredRecommendation};
 use crate::infrastructure::private_file::{read_regular_file, write_private_file_atomically};
+use crate::infrastructure::shared_language::SharedLanguage;
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 pub const MAXIMUM_RECOMMENDATION_FILE_BYTES: u64 = 1_048_576;
@@ -17,11 +18,20 @@ struct StoredFile {
 
 pub struct FileRecommendationStore {
     path: PathBuf,
+    language: SharedLanguage,
 }
 
 impl FileRecommendationStore {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            language: SharedLanguage::default(),
+        }
+    }
+
+    pub fn with_language(mut self, language: SharedLanguage) -> Self {
+        self.language = language;
+        self
     }
 }
 
@@ -62,7 +72,7 @@ impl RecommendationStore for FileRecommendationStore {
         };
         let content = serde_json::to_string(&stored)
             .map_err(|error| StoreError::Failed(error.to_string()))?;
-        write_private_file_atomically(&self.path, &content)
+        write_private_file_atomically(&self.path, &content, self.language.get())
             .map_err(|error| StoreError::Failed(error.to_string()))
     }
 }

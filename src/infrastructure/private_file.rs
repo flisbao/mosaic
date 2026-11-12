@@ -2,17 +2,25 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::domain::language::{Language, LocalizedMessage};
 use crate::infrastructure::private_directory::prepare_private_directory;
 
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const TEMPORARY_FILE_SUFFIX: &str = ".tmp";
-const NO_PARENT_DIRECTORY_MESSAGE: &str = "o caminho do arquivo não tem diretório pai";
 
-pub fn write_private_file_atomically(path: &Path, content: &str) -> std::io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| std::io::Error::other(NO_PARENT_DIRECTORY_MESSAGE))?;
-    prepare_private_directory(parent).map_err(|error| std::io::Error::other(error.to_string()))?;
+pub fn write_private_file_atomically(
+    path: &Path,
+    content: &str,
+    language: Language,
+) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::other(language.pick(
+            "the file path has no parent directory",
+            "o caminho do arquivo não tem diretório pai",
+        ))
+    })?;
+    prepare_private_directory(parent)
+        .map_err(|error| std::io::Error::other(error.message(language)))?;
     let mut temporary_name = path.as_os_str().to_os_string();
     temporary_name.push(TEMPORARY_FILE_SUFFIX);
     let temporary = PathBuf::from(temporary_name);
@@ -52,4 +60,23 @@ fn open_private_file(path: &Path) -> std::io::Result<File> {
 #[cfg(not(unix))]
 fn open_private_file(path: &Path) -> std::io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+
+    #[test]
+    fn a_path_without_parent_is_reported_in_the_selected_language() {
+        let english =
+            write_private_file_atomically(Path::new("/"), "x", Language::English).unwrap_err();
+        assert_eq!(english.to_string(), "the file path has no parent directory");
+        let portuguese =
+            write_private_file_atomically(Path::new("/"), "x", Language::BrazilianPortuguese)
+                .unwrap_err();
+        assert_eq!(
+            portuguese.to_string(),
+            "o caminho do arquivo não tem diretório pai"
+        );
+    }
 }

@@ -62,12 +62,7 @@ impl LocalizedMessage for UpdateError {
 display_in_portuguese!(UpdateError);
 
 pub fn release_error_text(error: &ReleaseError, language: Language) -> String {
-    match error {
-        ReleaseError::Cancelled => language
-            .pick("operation cancelled", "operação cancelada")
-            .to_string(),
-        other => other.to_string(),
-    }
+    error.message(language)
 }
 
 pub fn check_latest(

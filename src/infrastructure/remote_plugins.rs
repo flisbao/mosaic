@@ -9,7 +9,7 @@ use super::plugins_installer::{
     install_plugin_directory, is_copyable_file, is_plain_name, Overwrite, PluginOutcome,
     PluginsError,
 };
-use super::setup_manifest::{parse_package_manifest, PackageManifest, MANIFEST_FILE_NAME};
+use super::setup_manifest::{parse_package_manifest_in, PackageManifest, MANIFEST_FILE_NAME};
 use crate::application::ports::{PluginFetchError, PluginFetcher};
 use crate::domain::plugin_package::{GitHubSource, PluginPackageError, PluginVersion};
 
@@ -59,29 +59,31 @@ pub fn prepare_remote_plugin(
     fetcher: &impl PluginFetcher,
     source: &GitHubSource,
     current: &PluginVersion,
+    language: Language,
 ) -> Result<PreparedRemotePlugin, RemotePluginError> {
     let source = GitHubSource::parse(&source.reference())?;
     let temporary =
         tempfile::tempdir().map_err(RemotePluginError::io(std::env::temp_dir().as_path()))?;
     let mut directory = temporary.path().join("repository");
     fetcher.fetch(&source, &directory)?;
-    require_directory(&directory)?;
+    require_directory(&directory, language)?;
     for component in &source.subdirectory {
         directory.push(component);
-        require_directory(&directory)?;
+        require_directory(&directory, language)?;
     }
     for entry in fs::read_dir(&directory).map_err(RemotePluginError::io(&directory))? {
         let entry = entry.map_err(RemotePluginError::io(&directory))?;
         let path = entry.path();
         if is_copyable_file(&path) {
-            require_regular_file(&path)?;
+            require_regular_file(&path, language)?;
         }
     }
     let manifest_path = directory.join(MANIFEST_FILE_NAME);
-    require_regular_file(&manifest_path)?;
-    require_regular_file(&directory.join("SKILL.md"))?;
+    require_regular_file(&manifest_path, language)?;
+    require_regular_file(&directory.join("SKILL.md"), language)?;
     let text = fs::read_to_string(&manifest_path).map_err(RemotePluginError::io(&manifest_path))?;
-    let manifest = parse_package_manifest(&text).map_err(RemotePluginError::InvalidPackage)?;
+    let manifest =
+        parse_package_manifest_in(&text, language).map_err(RemotePluginError::InvalidPackage)?;
     manifest.metadata.ensure_compatible(current)?;
     let name = &manifest.setup.plugin;
     if !is_plain_name(name) {
@@ -101,11 +103,12 @@ pub fn prepare_remote_plugin(
                 .is_some_and(|extension| extension == "py" || extension == "js")
         })
         .ok_or_else(|| {
-            RemotePluginError::InvalidPackage(format!(
-                "script deve ser plugins/{name}/<arquivo>.py ou .js"
+            RemotePluginError::InvalidPackage(language.pick(
+                format!("script must be plugins/{name}/<file>.py or .js"),
+                format!("script deve ser plugins/{name}/<arquivo>.py ou .js"),
             ))
         })?;
-    require_regular_file(&directory.join(filename))?;
+    require_regular_file(&directory.join(filename), language)?;
     Ok(PreparedRemotePlugin {
         _temporary: temporary,
         source,
@@ -114,23 +117,23 @@ pub fn prepare_remote_plugin(
     })
 }
 
-fn require_directory(path: &Path) -> Result<(), RemotePluginError> {
+fn require_directory(path: &Path, language: Language) -> Result<(), RemotePluginError> {
     let metadata = fs::symlink_metadata(path).map_err(RemotePluginError::io(path))?;
     if !metadata.is_dir() {
-        return Err(RemotePluginError::InvalidPackage(format!(
-            "{} não é uma pasta regular",
-            path.display()
+        return Err(RemotePluginError::InvalidPackage(language.pick(
+            format!("{} is not a regular folder", path.display()),
+            format!("{} não é uma pasta regular", path.display()),
         )));
     }
     Ok(())
 }
 
-fn require_regular_file(path: &Path) -> Result<(), RemotePluginError> {
+fn require_regular_file(path: &Path, language: Language) -> Result<(), RemotePluginError> {
     let metadata = fs::symlink_metadata(path).map_err(RemotePluginError::io(path))?;
     if !metadata.is_file() {
-        return Err(RemotePluginError::InvalidPackage(format!(
-            "{} não é um arquivo regular",
-            path.display()
+        return Err(RemotePluginError::InvalidPackage(language.pick(
+            format!("{} is not a regular file", path.display()),
+            format!("{} não é um arquivo regular", path.display()),
         )));
     }
     Ok(())
@@ -158,6 +161,7 @@ mod fixtures;
 mod tests {
     use super::*;
     use crate::application::ports::{PluginFetchError, PluginFetcher};
+    use crate::domain::language::Language;
     use std::cell::RefCell;
     use std::os::unix::fs::symlink;
 
@@ -174,6 +178,7 @@ mod tests {
             &LocalFetcher(root.to_path_buf()),
             &GitHubSource::parse(reference).unwrap(),
             &PluginVersion::parse("0.0.10").unwrap(),
+            Language::BrazilianPortuguese,
         )
     }
 
@@ -270,9 +275,33 @@ mod tests {
         assert!(prepare_remote_plugin(
             &fetcher,
             &GitHubSource::parse("owner/repo").unwrap(),
-            &PluginVersion::parse("0.0.10").unwrap()
+            &PluginVersion::parse("0.0.10").unwrap(),
+            Language::BrazilianPortuguese
         )
         .is_err());
         assert!(!fetcher.0.borrow().as_ref().unwrap().exists());
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+
+    #[test]
+    fn package_problems_are_described_in_the_selected_language() {
+        let directory = tempfile::tempdir().unwrap();
+        let english = require_regular_file(directory.path(), Language::English).unwrap_err();
+        assert!(english
+            .message(Language::English)
+            .ends_with("is not a regular file"));
+        let portuguese =
+            require_regular_file(directory.path(), Language::BrazilianPortuguese).unwrap_err();
+        assert!(portuguese.to_string().ends_with("não é um arquivo regular"));
+        let file = directory.path().join("f");
+        std::fs::write(&file, "x").unwrap();
+        let error = require_directory(&file, Language::English).unwrap_err();
+        assert!(error
+            .message(Language::English)
+            .contains("is not a regular folder"));
     }
 }

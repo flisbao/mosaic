@@ -410,7 +410,7 @@ fn build_llm_services(
     let runner: Arc<dyn LlmRunner> = shared.clone();
     let cancellable: Arc<dyn Cancellable> = shared;
     let store: Arc<dyn RecommendationStore> = match recommendation_file() {
-        Some(path) => Arc::new(FileRecommendationStore::new(path)),
+        Some(path) => Arc::new(FileRecommendationStore::new(path).with_language(language.clone())),
         None => {
             warnings.push(messages::no_state_directory_store_warning(config.language).to_string());
             Arc::new(NullRecommendationStore)
