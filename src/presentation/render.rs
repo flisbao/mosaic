@@ -546,7 +546,7 @@ fn notice_row(area: Rect) -> Option<Rect> {
 
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
     let (title, lines) = match state.mode() {
-        Mode::Browsing => return,
+        Mode::Browsing | Mode::AddingWidget(_) => return,
         Mode::Helping => {
             let context = HintContext::from_expanded(state.is_expanded());
             (context.title(), help_lines(context))

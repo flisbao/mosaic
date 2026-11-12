@@ -502,6 +502,7 @@ impl App {
                 &self.clock,
                 &self.events.sender,
             ),
+            Command::OpenAddWidget | Command::AppendWidget(_) => {}
         }
         None
     }

@@ -47,6 +47,9 @@ impl AppState {
             | KeyInput::PageDown
             | KeyInput::Home
             | KeyInput::End
+            | KeyInput::Backspace
+            | KeyInput::Delete
+            | KeyInput::Quit
             | KeyInput::Character(_) => {}
         }
     }
@@ -60,7 +63,13 @@ impl AppState {
             KeyInput::Home => self.selected_item = 0,
             KeyInput::End => self.selected_item = self.item_count().saturating_sub(1),
             KeyInput::Escape => self.collapse(),
-            KeyInput::Tab | KeyInput::BackTab | KeyInput::Enter | KeyInput::Character(_) => {}
+            KeyInput::Tab
+            | KeyInput::BackTab
+            | KeyInput::Enter
+            | KeyInput::Backspace
+            | KeyInput::Delete
+            | KeyInput::Quit
+            | KeyInput::Character(_) => {}
         }
     }
 

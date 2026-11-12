@@ -3,6 +3,7 @@ use std::time::Duration;
 use chrono::NaiveDateTime;
 
 use crate::application::ports::AlertMessage;
+use crate::application::ports::SetupCatalogSnapshot;
 use crate::application::ports::SourceError;
 use crate::application::recommendation::RecommendationPlan;
 use crate::domain::action::{ConfirmedAction, ProposedAction};
@@ -14,11 +15,15 @@ use crate::presentation::key_input::KeyInput;
 use crate::presentation::shortcuts::assign_shortcuts;
 use crate::presentation::theme_styles::ThemeStyles;
 
+mod add_widget;
 mod alert_queue;
 mod focus_navigation;
 mod pending_actions;
 mod pomodoro_control;
+mod text_field;
 
+use add_widget::FlowOutcome;
+pub use add_widget::{AddWidgetFlow, AddWidgetStep, Answering, ChoiceRow, NewWidget, Review};
 use alert_queue::AlertQueue;
 use pending_actions::PendingActions;
 use pomodoro_control::PomodoroControl;
@@ -28,6 +33,7 @@ pub const PAGE_JUMP_ITEMS: usize = 10;
 const NO_ACTIONS_NOTICE: &str = "Nenhuma ação disponível aqui";
 const RECOMMENDATION_BUSY_NOTICE: &str = "A IA já está processando um pedido";
 const ACTION_PENDING_NOTICE: &str = "Ação em andamento";
+const ADD_WIDGET_KEY: char = '+';
 const NO_DETAIL_NOTICE: &str = "Este widget ainda não tem detalhe para mostrar";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +77,7 @@ pub enum Mode {
         text: String,
         plan: RecommendationPlan,
     },
+    AddingWidget(Box<AddWidgetFlow>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +88,8 @@ pub enum Command {
     Execute(ConfirmedAction),
     RequestRecommendation,
     SendRecommendation(RecommendationPlan),
+    OpenAddWidget,
+    AppendWidget(NewWidget),
 }
 
 struct Transition {
@@ -190,6 +199,26 @@ impl AppState {
         let alert = self.pomodoro.advance(elapsed)?;
         self.show_alert(alert.clone());
         Some(alert)
+    }
+
+    pub fn open_add_widget(&mut self, snapshot: SetupCatalogSnapshot) {
+        self.mode = Mode::AddingWidget(Box::new(AddWidgetFlow::open(snapshot)));
+    }
+
+    pub fn finish_adding_widget(&mut self) {
+        if matches!(self.mode, Mode::AddingWidget(_)) {
+            self.mode = Mode::Browsing;
+        }
+    }
+
+    pub fn fail_adding_widget(&mut self, message: String) {
+        if let Mode::AddingWidget(flow) = &mut self.mode {
+            flow.show_save_error(message);
+        }
+    }
+
+    fn is_typing(&self) -> bool {
+        matches!(&self.mode, Mode::AddingWidget(flow) if flow.is_typing())
     }
 
     pub fn ask_send_confirmation(&mut self, text: String, plan: RecommendationPlan) {
@@ -325,6 +354,11 @@ impl AppState {
         if self.alerts.dismiss_front() {
             return None;
         }
+        let key = if self.is_typing() {
+            key
+        } else {
+            key.with_vim_navigation()
+        };
         let transition = match self.mode.clone() {
             Mode::Browsing => self.handle_browsing_key(key),
             Mode::Helping => Self::handle_help_key(key),
@@ -333,6 +367,7 @@ impl AppState {
             Mode::ConfirmingSend { text, plan } => {
                 self.handle_send_confirmation_key(key, text, plan)
             }
+            Mode::AddingWidget(flow) => Self::handle_add_widget_key(key, *flow),
         };
         self.mode = transition.mode;
         transition.command
@@ -341,6 +376,7 @@ impl AppState {
     fn handle_browsing_key(&mut self, key: KeyInput) -> Transition {
         match key {
             KeyInput::Character(letter) => self.handle_character(letter),
+            KeyInput::Quit => Transition::emit(Command::Quit),
             KeyInput::Tab
             | KeyInput::BackTab
             | KeyInput::Up
@@ -352,7 +388,9 @@ impl AppState {
             | KeyInput::PageUp
             | KeyInput::PageDown
             | KeyInput::Home
-            | KeyInput::End => {
+            | KeyInput::End
+            | KeyInput::Backspace
+            | KeyInput::Delete => {
                 self.handle_navigation_key(key);
                 Transition::idle()
             }
@@ -366,8 +404,20 @@ impl AppState {
         }
     }
 
+    fn handle_add_widget_key(key: KeyInput, mut flow: AddWidgetFlow) -> Transition {
+        match flow.handle_key(key) {
+            FlowOutcome::Stay => Transition::to(Mode::AddingWidget(Box::new(flow))),
+            FlowOutcome::Close => Transition::idle(),
+            FlowOutcome::Save(widget) => Transition {
+                mode: Mode::AddingWidget(Box::new(flow)),
+                command: Some(Command::AppendWidget(widget)),
+            },
+        }
+    }
+
     fn handle_character(&mut self, letter: char) -> Transition {
         match letter {
+            ADD_WIDGET_KEY => Transition::emit(Command::OpenAddWidget),
             '?' => Transition::to(Mode::Helping),
             'r' => Transition::emit(Command::RefreshAll),
             'R' => Transition::emit(Command::ReloadConfig),
@@ -1521,5 +1571,145 @@ mod tests {
         assert_eq!(app.focused_entry(), focus);
         assert_eq!(app.is_expanded(), expanded);
         assert_eq!(app.tabs().len(), 2);
+    }
+    fn plugin_snapshot() -> SetupCatalogSnapshot {
+        use crate::domain::plugin_setup::{InstalledPlugin, SetupManifest};
+        SetupCatalogSnapshot {
+            plugins: vec![InstalledPlugin {
+                name: "demo".to_string(),
+                version: None,
+                manifest: SetupManifest {
+                    plugin: "demo".to_string(),
+                    script: "plugins/demo/demo.py".to_string(),
+                    default_id: "demo".to_string(),
+                    interval_seconds: 120,
+                    timeout_seconds: 30,
+                    steps: Vec::new(),
+                    inherit_rules: Vec::new(),
+                    presets: Vec::new(),
+                    notes: Vec::new(),
+                },
+            }],
+            ..SetupCatalogSnapshot::default()
+        }
+    }
+
+    fn adding_widget() -> AppState {
+        let mut app = app();
+        app.open_add_widget(plugin_snapshot());
+        app
+    }
+
+    #[test]
+    fn the_plus_key_asks_the_loop_to_open_the_add_widget_flow() {
+        let mut app = app();
+        assert_eq!(
+            app.handle_key(KeyInput::Character('+')),
+            Some(Command::OpenAddWidget)
+        );
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn the_plus_key_also_works_with_a_widget_expanded() {
+        let mut app = app();
+        press(&mut app, &[KeyInput::Enter]);
+        assert_eq!(
+            app.handle_key(KeyInput::Character('+')),
+            Some(Command::OpenAddWidget)
+        );
+    }
+
+    #[test]
+    fn while_the_flow_is_open_keys_go_only_to_it() {
+        let mut app = adding_widget();
+        let focus = app.focused_entry();
+        assert_eq!(app.handle_key(KeyInput::Character('q')), None);
+        assert_eq!(app.handle_key(KeyInput::Character('R')), None);
+        assert_eq!(app.handle_key(KeyInput::Character('+')), None);
+        assert_eq!(app.handle_key(KeyInput::Tab), None);
+        assert!(matches!(app.mode(), Mode::AddingWidget(_)));
+        assert_eq!(app.focused_entry(), focus);
+    }
+
+    #[test]
+    fn vim_letters_still_navigate_the_grid_and_the_plugin_list() {
+        let mut app = app();
+        app.handle_key(KeyInput::Character('j'));
+        assert_eq!(app.focused_entry(), Some(1));
+        app.handle_key(KeyInput::Character('k'));
+        assert_eq!(app.focused_entry(), Some(0));
+        let mut flow = adding_widget();
+        flow.handle_key(KeyInput::Character('j'));
+        flow.handle_key(KeyInput::Enter);
+        flow.handle_key(KeyInput::Enter);
+        let Mode::AddingWidget(open) = flow.mode() else {
+            panic!("esperava o fluxo");
+        };
+        assert!(matches!(open.step(), AddWidgetStep::Answering(_)));
+    }
+
+    #[test]
+    fn typing_letters_in_a_text_answer_never_navigates() {
+        let mut app = adding_widget();
+        app.handle_key(KeyInput::Enter);
+        for letter in ['h', 'j', 'k', 'l'] {
+            app.handle_key(KeyInput::Character(letter));
+        }
+        let Mode::AddingWidget(flow) = app.mode() else {
+            panic!("esperava o fluxo");
+        };
+        let AddWidgetStep::Answering(answering) = flow.step() else {
+            panic!("esperava perguntas");
+        };
+        assert_eq!(answering.field().text(), "hjkl");
+    }
+
+    #[test]
+    fn escape_closes_the_flow_without_a_command() {
+        let mut app = adding_widget();
+        assert_eq!(app.handle_key(KeyInput::Escape), None);
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn control_c_quits_from_the_grid_but_only_closes_the_flow() {
+        let mut app = app();
+        assert_eq!(app.handle_key(KeyInput::Quit), Some(Command::Quit));
+        let mut flow = adding_widget();
+        assert_eq!(flow.handle_key(KeyInput::Quit), None);
+        assert_eq!(flow.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn confirming_the_review_emits_the_append_command_and_keeps_the_flow_open() {
+        let mut app = adding_widget();
+        let command = (0..6)
+            .map(|_| app.handle_key(KeyInput::Enter))
+            .last()
+            .flatten();
+        let Some(Command::AppendWidget(widget)) = command else {
+            panic!("esperava gravar, veio {command:?}");
+        };
+        assert_eq!(widget.widget_id, "demo");
+        assert!(matches!(app.mode(), Mode::AddingWidget(_)));
+        app.fail_adding_widget("sem espaço".to_string());
+        let Mode::AddingWidget(flow) = app.mode() else {
+            panic!("esperava o fluxo");
+        };
+        let AddWidgetStep::Reviewing(review) = flow.step() else {
+            panic!("esperava a revisão");
+        };
+        assert_eq!(review.error(), Some("sem espaço"));
+        app.finish_adding_widget();
+        assert_eq!(app.mode(), &Mode::Browsing);
+    }
+
+    #[test]
+    fn finishing_or_failing_outside_the_flow_changes_nothing() {
+        let mut app = app();
+        app.finish_adding_widget();
+        app.fail_adding_widget("erro".to_string());
+        assert_eq!(app.mode(), &Mode::Browsing);
     }
 }

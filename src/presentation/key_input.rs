@@ -16,7 +16,22 @@ pub enum KeyInput {
     PageDown,
     Home,
     End,
+    Backspace,
+    Delete,
+    Quit,
     Character(char),
+}
+
+impl KeyInput {
+    pub fn with_vim_navigation(self) -> Self {
+        match self {
+            KeyInput::Character('j') => KeyInput::Down,
+            KeyInput::Character('k') => KeyInput::Up,
+            KeyInput::Character('h') => KeyInput::Left,
+            KeyInput::Character('l') => KeyInput::Right,
+            other => other,
+        }
+    }
 }
 
 pub fn from_crossterm(event: KeyEvent) -> Option<KeyInput> {
@@ -36,6 +51,8 @@ pub fn from_crossterm(event: KeyEvent) -> Option<KeyInput> {
         KeyCode::PageDown => Some(KeyInput::PageDown),
         KeyCode::Home => Some(KeyInput::Home),
         KeyCode::End => Some(KeyInput::End),
+        KeyCode::Backspace => Some(KeyInput::Backspace),
+        KeyCode::Delete => Some(KeyInput::Delete),
         KeyCode::Char(letter)
             if event.modifiers.contains(KeyModifiers::ALT)
                 && !event.modifiers.contains(KeyModifiers::CONTROL)
@@ -46,12 +63,8 @@ pub fn from_crossterm(event: KeyEvent) -> Option<KeyInput> {
                 .then_some(KeyInput::Character(shortcut))
         }
         KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(KeyInput::Character('q'))
+            Some(KeyInput::Quit)
         }
-        KeyCode::Char('j') => Some(KeyInput::Down),
-        KeyCode::Char('k') => Some(KeyInput::Up),
-        KeyCode::Char('h') => Some(KeyInput::Left),
-        KeyCode::Char('l') => Some(KeyInput::Right),
         KeyCode::Char(character) => Some(KeyInput::Character(character)),
         _ => None,
     }
@@ -80,14 +93,33 @@ mod tests {
     }
 
     #[test]
-    fn vim_keys_become_vertical_movement() {
+    fn vim_letters_arrive_as_characters_and_become_movement_on_request() {
+        for (letter, movement) in [
+            ('j', KeyInput::Down),
+            ('k', KeyInput::Up),
+            ('h', KeyInput::Left),
+            ('l', KeyInput::Right),
+        ] {
+            let typed = from_crossterm(press(KeyCode::Char(letter))).unwrap();
+            assert_eq!(typed, KeyInput::Character(letter));
+            assert_eq!(typed.with_vim_navigation(), movement);
+        }
         assert_eq!(
-            from_crossterm(press(KeyCode::Char('j'))),
-            Some(KeyInput::Down)
+            KeyInput::Character('a').with_vim_navigation(),
+            KeyInput::Character('a')
+        );
+        assert_eq!(KeyInput::Up.with_vim_navigation(), KeyInput::Up);
+    }
+
+    #[test]
+    fn editing_keys_are_mapped() {
+        assert_eq!(
+            from_crossterm(press(KeyCode::Backspace)),
+            Some(KeyInput::Backspace)
         );
         assert_eq!(
-            from_crossterm(press(KeyCode::Char('k'))),
-            Some(KeyInput::Up)
+            from_crossterm(press(KeyCode::Delete)),
+            Some(KeyInput::Delete)
         );
     }
 
@@ -108,26 +140,14 @@ mod tests {
     }
 
     #[test]
-    fn h_and_l_move_horizontally() {
-        assert_eq!(
-            from_crossterm(press(KeyCode::Char('h'))),
-            Some(KeyInput::Left)
-        );
-        assert_eq!(
-            from_crossterm(press(KeyCode::Char('l'))),
-            Some(KeyInput::Right)
-        );
-    }
-
-    #[test]
     fn uppercase_h_and_l_are_not_horizontal_movement() {
         assert_eq!(
-            from_crossterm(press(KeyCode::Char('H'))),
-            Some(KeyInput::Character('H'))
+            KeyInput::Character('H').with_vim_navigation(),
+            KeyInput::Character('H')
         );
         assert_eq!(
-            from_crossterm(press(KeyCode::Char('L'))),
-            Some(KeyInput::Character('L'))
+            KeyInput::Character('L').with_vim_navigation(),
+            KeyInput::Character('L')
         );
     }
 
@@ -173,7 +193,7 @@ mod tests {
     #[test]
     fn control_c_quits() {
         let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(from_crossterm(event), Some(KeyInput::Character('q')));
+        assert_eq!(from_crossterm(event), Some(KeyInput::Quit));
     }
 
     #[test]
