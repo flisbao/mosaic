@@ -5,6 +5,7 @@ pub mod error;
 pub mod plugin_package;
 pub mod plugin_setup;
 pub mod pomodoro;
+pub mod release;
 pub mod snapshot_report;
 pub mod theme;
 pub mod widget;
