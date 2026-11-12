@@ -18,6 +18,13 @@ pub struct SetupManifest {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct InstalledPlugin {
+    pub name: String,
+    pub version: Option<String>,
+    pub manifest: SetupManifest,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Step {
     Question(Question),
     Secret(SecretQuestion),

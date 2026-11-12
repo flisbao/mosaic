@@ -23,6 +23,7 @@ pub mod protocol_report;
 pub mod recommendation_file;
 pub mod refresh_signal;
 pub mod remote_plugins;
+pub mod setup_catalog;
 pub mod setup_manifest;
 pub mod shutdown;
 pub mod skills_installer;

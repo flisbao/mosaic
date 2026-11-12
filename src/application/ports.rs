@@ -1,7 +1,9 @@
 use chrono::NaiveDateTime;
 use thiserror::Error;
 
+use crate::application::plugin_setup::{SetupOptions, TabContext};
 use crate::domain::action::{ActionOutcome, ConfirmedAction};
+use crate::domain::plugin_setup::InstalledPlugin;
 use crate::domain::release::ReleaseVersion;
 use crate::domain::widget::{WidgetId, WidgetSnapshot};
 
@@ -119,6 +121,43 @@ pub enum PromptError {
 pub trait Prompter {
     fn ask(&mut self, question: &str) -> Result<String, PromptError>;
     fn tell(&mut self, message: &str);
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SetupCatalogSnapshot {
+    pub plugins: Vec<InstalledPlugin>,
+    pub problems: Vec<String>,
+    pub widget_ids: Vec<String>,
+    pub declared_tabs: Vec<String>,
+}
+
+impl SetupCatalogSnapshot {
+    pub fn setup_options(&self) -> SetupOptions {
+        SetupOptions {
+            include_advanced: false,
+            existing_ids: self.widget_ids.clone(),
+            tab_context: Some(TabContext {
+                declared: self.declared_tabs.clone(),
+                existing_widgets: self.widget_ids.len(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Error, PartialEq)]
+#[error("{0}")]
+pub struct SetupCatalogError(pub String);
+
+pub trait SetupCatalog {
+    fn load(&self) -> Result<SetupCatalogSnapshot, SetupCatalogError>;
+}
+
+#[derive(Debug, Clone, Error, PartialEq)]
+#[error("{0}")]
+pub struct ConfigWriteError(pub String);
+
+pub trait WidgetConfigWriter {
+    fn append(&self, blocks: &[String]) -> Result<(), ConfigWriteError>;
 }
 
 #[derive(Debug, Error)]

@@ -131,14 +131,22 @@ struct RawPreset {
 }
 
 pub fn read_manifest(path: &Path) -> Result<SetupManifest, ManifestError> {
+    read_manifest_with_version(path).map(|(manifest, _)| manifest)
+}
+
+pub fn read_manifest_with_version(
+    path: &Path,
+) -> Result<(SetupManifest, Option<PluginVersion>), ManifestError> {
     let text = fs::read_to_string(path).map_err(|error| ManifestError::Unreadable {
         path: path.display().to_string(),
         reason: error.to_string(),
     })?;
-    parse_manifest(&text).map_err(|reason| ManifestError::Invalid {
-        path: path.display().to_string(),
-        reason,
-    })
+    parse_document(&text)
+        .map(|(manifest, metadata)| (manifest, metadata.map(|metadata| metadata.version)))
+        .map_err(|reason| ManifestError::Invalid {
+            path: path.display().to_string(),
+            reason,
+        })
 }
 
 #[derive(Debug)]
