@@ -43,18 +43,11 @@ STATE_DIRECTORY_VARIABLE = "GITHUB_STATE_DIR"
 TIMESTAMP_FORMATS = ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z")
 UTC_OFFSET_SUFFIX = "+0000"
 UTC_ZULU_SUFFIX = "Z"
-REVIEW_SECTION = "Aguardando minha revisão"
-MINE_SECTION = "Meus PRs"
+REVIEW_SECTION = "review"
+MINE_SECTION = "mine"
 UNREVIEWED = "unreviewed"
 REVIEWED = "reviewed"
 APPROVED = "approved"
-UNKNOWN_AUTHOR = "desconhecido"
-STATE_NEW = "novo"
-STATE_PUSHED = "push novo"
-STATE_CONFLICT = "conflito"
-STATE_CHANGES = "mudança pedida"
-STATE_APPROVED = "aprovado"
-STATE_WAITING = "aguardando"
 REVIEW_SEARCH = "is:pr is:open draft:false archived:false review-requested:@me"
 REVIEWED_SEARCH = "is:pr is:open draft:false archived:false reviewed-by:@me -author:@me"
 MINE_SEARCH = "is:pr is:open draft:false archived:false author:@me"
@@ -71,13 +64,8 @@ TITLE_TEXT_LIMIT = 80
 MAXIMUM_BLOCK_ROWS = 200
 PROTOCOL_VERSION = 1
 ITEM_SEPARATOR = " · "
-EMPTY_TEXT = "nada pendente"
-MINI_TEXT = "para revisar"
-REVIEW_LABEL = "revisar"
-MINE_LABEL = "meus PRs"
 ALERT_ID_PREFIX = "review-"
 MAXIMUM_ALERT_ID_LENGTH = 100
-ALERT_TITLE_PREFIX = "Revisão pedida: "
 ALERT_LEVEL = "info"
 UPDATED_FLAG = "updated"
 TONE_NORMAL = "normal"
@@ -86,16 +74,6 @@ TONE_WARN = "warn"
 TONE_OK = "ok"
 TONE_CURRENT = "current"
 TONE_DANGER = "danger"
-TONE_BY_STATE = {
-    STATE_NEW: TONE_CURRENT,
-    STATE_PUSHED: TONE_WARN,
-    STATE_CONFLICT: TONE_DANGER,
-    STATE_CHANGES: TONE_WARN,
-    STATE_APPROVED: TONE_OK,
-    STATE_WAITING: TONE_MUTED,
-}
-OFFLINE_NOTICE_FORMAT = "dados de %H:%M (offline)"
-OFFLINE_NOTICE_FORMAT_WITH_DATE = "dados de %d/%m %H:%M (offline)"
 SECONDS_PER_MINUTE = 60
 MINUTES_PER_HOUR = 60
 HOURS_PER_DAY = 24
@@ -106,11 +84,148 @@ TEMPORARY_FILE_SUFFIX = ".tmp"
 STATE_DIRECTORY_MODE = 0o700
 ARGUMENT_ERROR_EXIT_CODE = 2
 FAILURE_EXIT_CODE = 1
-USAGE_MESSAGE = "uso: github_prs.py snapshot"
 SNAPSHOT_COMMAND = ["snapshot"]
 STATE_KEY_SEPARATOR = "\n"
 TOKEN_VARIABLE_KEY = f"{TOKEN_PREFIX}_TOKEN_ENV"
 TOKEN_FILE_KEY = f"{TOKEN_PREFIX}_TOKEN_FILE"
+LANGUAGE_VARIABLE = "MOSAIC_LANGUAGE"
+ENGLISH_LANGUAGE = "en"
+PORTUGUESE_LANGUAGE = "pt-BR"
+PORTUGUESE_LANGUAGE_PREFIX = "pt"
+
+
+@dataclass(frozen=True)
+class Messages:
+    review_section: str
+    mine_section: str
+    unknown_author: str
+    state_new: str
+    state_pushed: str
+    state_conflict: str
+    state_changes: str
+    state_approved: str
+    state_waiting: str
+    empty_text: str
+    mini_text: str
+    review_label: str
+    mine_label: str
+    alert_title: str
+    offline_notice: str
+    offline_notice_with_date: str
+    usage: str
+    error_line: str
+    base_url_invalid: str
+    token_invalid_characters: str
+    token_not_configured: str
+    token_variable_empty: str
+    token_file_unreadable: str
+    token_file_empty: str
+    response_too_large: str
+    unexpected_status: str
+    response_not_json: str
+    unexpected_response: str
+    network_failure: str
+    auth_failed: str
+    rate_limited: str
+    request_rejected: str
+    query_rejected: str
+
+    def state_tone(self, state: str) -> str:
+        return {
+            self.state_new: TONE_CURRENT,
+            self.state_pushed: TONE_WARN,
+            self.state_conflict: TONE_DANGER,
+            self.state_changes: TONE_WARN,
+            self.state_approved: TONE_OK,
+            self.state_waiting: TONE_MUTED,
+        }[state]
+
+    def section_heading(self, section: str) -> str:
+        return {REVIEW_SECTION: self.review_section, MINE_SECTION: self.mine_section}[section]
+
+
+PORTUGUESE_MESSAGES = Messages(
+    review_section="Aguardando minha revisão",
+    mine_section="Meus PRs",
+    unknown_author="desconhecido",
+    state_new="novo",
+    state_pushed="push novo",
+    state_conflict="conflito",
+    state_changes="mudança pedida",
+    state_approved="aprovado",
+    state_waiting="aguardando",
+    empty_text="nada pendente",
+    mini_text="para revisar",
+    review_label="revisar",
+    mine_label="meus PRs",
+    alert_title="Revisão pedida: {repository} {reference}",
+    offline_notice="dados de %H:%M (offline)",
+    offline_notice_with_date="dados de %d/%m %H:%M (offline)",
+    usage="uso: github_prs.py snapshot",
+    error_line="erro: {message}",
+    base_url_invalid="{variable} precisa ser https ou um endereço local de teste",
+    token_invalid_characters="o token de {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contém caracteres inválidos",
+    token_not_configured="defina {variable_key} (nome da variável com o token) ou {file_key}",
+    token_variable_empty="a variável {variable} ({variable_key}) está vazia ou ausente",
+    token_file_unreadable="não foi possível ler o arquivo de {file_key}",
+    token_file_empty="o arquivo de {file_key} está vazio",
+    response_too_large="a resposta do {service} excede o tamanho máximo permitido",
+    unexpected_status="resposta inesperada do {service} (HTTP {status})",
+    response_not_json="a resposta do {service} não é JSON",
+    unexpected_response="resposta inesperada do {service}",
+    network_failure="falha de rede ao falar com {service} ({error_type})",
+    auth_failed="token inválido ou sem permissão para {service}",
+    rate_limited="limite de requisições do {service}; tento de novo na próxima leitura",
+    request_rejected="o {service} recusou a requisição (HTTP {status}); confira a configuração do widget",
+    query_rejected="o {service} recusou a consulta; o plugin pode estar desatualizado",
+)
+
+ENGLISH_MESSAGES = Messages(
+    review_section="Awaiting my review",
+    mine_section="My PRs",
+    unknown_author="unknown",
+    state_new="new",
+    state_pushed="new push",
+    state_conflict="conflict",
+    state_changes="changes requested",
+    state_approved="approved",
+    state_waiting="waiting",
+    empty_text="nothing pending",
+    mini_text="to review",
+    review_label="to review",
+    mine_label="my PRs",
+    alert_title="Review requested: {repository} {reference}",
+    offline_notice="data as of %H:%M (offline)",
+    offline_notice_with_date="data as of %Y-%m-%d %H:%M (offline)",
+    usage="usage: github_prs.py snapshot",
+    error_line="error: {message}",
+    base_url_invalid="{variable} must be https or a local test address",
+    token_invalid_characters="the token from {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contains invalid characters",
+    token_not_configured="set {variable_key} (name of the variable holding the token) or {file_key}",
+    token_variable_empty="the variable {variable} ({variable_key}) is empty or missing",
+    token_file_unreadable="could not read the file from {file_key}",
+    token_file_empty="the file from {file_key} is empty",
+    response_too_large="the {service} response exceeds the maximum allowed size",
+    unexpected_status="unexpected response from {service} (HTTP {status})",
+    response_not_json="the {service} response is not JSON",
+    unexpected_response="unexpected response from {service}",
+    network_failure="network failure while talking to {service} ({error_type})",
+    auth_failed="invalid token or missing permission for {service}",
+    rate_limited="{service} rate limit reached; will try again on the next refresh",
+    request_rejected="{service} rejected the request (HTTP {status}); check the widget configuration",
+    query_rejected="{service} rejected the query; the plugin may be out of date",
+)
+
+MESSAGES_BY_LANGUAGE = {
+    ENGLISH_LANGUAGE: ENGLISH_MESSAGES,
+    PORTUGUESE_LANGUAGE: PORTUGUESE_MESSAGES,
+}
+
+
+def resolve_messages(environ: Mapping[str, str]) -> Messages:
+    requested = environ.get(LANGUAGE_VARIABLE, "").strip().lower()
+    is_portuguese = requested.startswith(PORTUGUESE_LANGUAGE_PREFIX)
+    return MESSAGES_BY_LANGUAGE[PORTUGUESE_LANGUAGE if is_portuguese else ENGLISH_LANGUAGE]
 
 
 class ConfigError(Exception):
@@ -124,15 +239,18 @@ class GitHubConfig:
     owners: tuple[str, ...]
     title: str
     state_dir: Path
+    messages: Messages
 
 
 def load_config(environ: Mapping[str, str]) -> GitHubConfig:
+    messages = resolve_messages(environ)
     return GitHubConfig(
-        api_url=read_base_url(environ, API_URL_VARIABLE, DEFAULT_API_URL),
-        token=read_token(environ, TOKEN_PREFIX),
+        api_url=read_base_url(environ, API_URL_VARIABLE, DEFAULT_API_URL, messages),
+        token=read_token(environ, TOKEN_PREFIX, messages),
         owners=_read_owners(environ),
         title=environ.get("GITHUB_TITLE", "").strip() or DEFAULT_TITLE,
         state_dir=read_state_dir(environ, STATE_DIRECTORY_VARIABLE, DEFAULT_STATE_DIRECTORY),
+        messages=messages,
     )
 
 
@@ -141,7 +259,7 @@ def _read_owners(environ: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(name for name in names if name)
 
 
-def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> str:
+def read_base_url(environ: Mapping[str, str], variable: str, default: str, messages: Messages) -> str:
     override = environ.get(variable, "").strip()
     if not override:
         return default
@@ -149,7 +267,7 @@ def read_base_url(environ: Mapping[str, str], variable: str, default: str) -> st
     is_secure = parsed.scheme == "https" and bool(parsed.hostname)
     is_local = parsed.scheme == "http" and parsed.hostname in LOCAL_HOSTS
     if not (is_secure or is_local) or any(character.isspace() for character in override):
-        raise ConfigError(f"{variable} precisa ser https ou um endereço local de teste")
+        raise ConfigError(messages.base_url_invalid.format(variable=variable))
     return override.rstrip("/")
 
 
@@ -158,15 +276,13 @@ def read_state_dir(environ: Mapping[str, str], variable: str, default: str) -> P
     return Path(raw).expanduser()
 
 
-def read_token(environ: Mapping[str, str], prefix: str) -> str:
-    return _ensure_token_is_header_safe(_read_token_source(environ, prefix), prefix)
+def read_token(environ: Mapping[str, str], prefix: str, messages: Messages) -> str:
+    return _ensure_token_is_header_safe(_read_token_source(environ, prefix, messages), prefix, messages)
 
 
-def _ensure_token_is_header_safe(value: str, prefix: str) -> str:
+def _ensure_token_is_header_safe(value: str, prefix: str, messages: Messages) -> str:
     if any(character.isspace() or not character.isprintable() for character in value) or not _is_latin1(value):
-        raise ConfigError(
-            f"o token de {prefix}_TOKEN_ENV/{prefix}_TOKEN_FILE contém caracteres inválidos"
-        )
+        raise ConfigError(messages.token_invalid_characters.format(prefix=prefix))
     return value
 
 
@@ -178,32 +294,34 @@ def _is_latin1(value: str) -> bool:
     return True
 
 
-def _read_token_source(environ: Mapping[str, str], prefix: str) -> str:
+def _read_token_source(environ: Mapping[str, str], prefix: str, messages: Messages) -> str:
     variable_key = f"{prefix}_TOKEN_ENV"
     file_key = f"{prefix}_TOKEN_FILE"
     variable = environ.get(variable_key, "").strip()
     if variable:
-        return _read_token_variable(environ, variable, variable_key)
+        return _read_token_variable(environ, variable, variable_key, messages)
     path = environ.get(file_key, "").strip()
     if path:
-        return _read_token_file(path, file_key)
-    raise ConfigError(f"defina {variable_key} (nome da variável com o token) ou {file_key}")
+        return _read_token_file(path, file_key, messages)
+    raise ConfigError(messages.token_not_configured.format(variable_key=variable_key, file_key=file_key))
 
 
-def _read_token_variable(environ: Mapping[str, str], variable: str, variable_key: str) -> str:
+def _read_token_variable(
+    environ: Mapping[str, str], variable: str, variable_key: str, messages: Messages
+) -> str:
     value = environ.get(variable, "").strip()
     if not value:
-        raise ConfigError(f"a variável {variable} ({variable_key}) está vazia ou ausente")
+        raise ConfigError(messages.token_variable_empty.format(variable=variable, variable_key=variable_key))
     return value
 
 
-def _read_token_file(path: str, file_key: str) -> str:
+def _read_token_file(path: str, file_key: str, messages: Messages) -> str:
     try:
         value = Path(path).expanduser().read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
-        raise ConfigError(f"não foi possível ler o arquivo de {file_key}") from None
+        raise ConfigError(messages.token_file_unreadable.format(file_key=file_key)) from None
     if not value:
-        raise ConfigError(f"o arquivo de {file_key} está vazio")
+        raise ConfigError(messages.token_file_empty.format(file_key=file_key))
     return value
 
 
@@ -231,6 +349,10 @@ class RequestRejectedError(ApiError):
     pass
 
 
+class ResponseTooLargeError(UnexpectedResponseError):
+    pass
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
         return None
@@ -252,39 +374,39 @@ def urllib_http(url: str, method: str, headers: dict, body: bytes | None, timeou
 def _read_limited(stream, limit: int) -> bytes:
     body = stream.read(limit + 1)
     if len(body) > limit:
-        raise UnexpectedResponseError(f"a resposta do {SERVICE_NAME} excede o tamanho máximo permitido")
+        raise ResponseTooLargeError()
     return body
 
 
-def decode_response(status: int, body: bytes, service: str) -> object:
+def decode_response(status: int, body: bytes, service: str, messages: Messages) -> object:
     if status == HTTP_UNAUTHORIZED:
-        raise AuthError(_auth_message(service))
+        raise AuthError(_auth_message(service, messages))
     if status == HTTP_FORBIDDEN:
         if RATE_LIMIT_MARKER in body.lower():
-            raise RateLimitError(_rate_limit_message(service))
-        raise AuthError(_auth_message(service))
+            raise RateLimitError(_rate_limit_message(service, messages))
+        raise AuthError(_auth_message(service, messages))
     if status == HTTP_TOO_MANY_REQUESTS:
-        raise RateLimitError(_rate_limit_message(service))
+        raise RateLimitError(_rate_limit_message(service, messages))
     if status in REJECTED_STATUSES:
-        raise RequestRejectedError(_rejected_message(service, status))
+        raise RequestRejectedError(_rejected_message(service, status, messages))
     if status >= HTTP_REDIRECT_FLOOR:
-        raise UnexpectedResponseError(f"resposta inesperada do {service} (HTTP {status})")
+        raise UnexpectedResponseError(messages.unexpected_status.format(service=service, status=status))
     try:
         return json.loads(body)
     except ValueError:
-        raise UnexpectedResponseError(f"a resposta do {service} não é JSON") from None
+        raise UnexpectedResponseError(messages.response_not_json.format(service=service)) from None
 
 
-def _auth_message(service: str) -> str:
-    return f"token inválido ou sem permissão para {service}"
+def _auth_message(service: str, messages: Messages) -> str:
+    return messages.auth_failed.format(service=service)
 
 
-def _rate_limit_message(service: str) -> str:
-    return f"limite de requisições do {service}; tento de novo na próxima leitura"
+def _rate_limit_message(service: str, messages: Messages) -> str:
+    return messages.rate_limited.format(service=service)
 
 
-def _rejected_message(service: str, status: int) -> str:
-    return f"o {service} recusou a requisição (HTTP {status}); confira a configuração do widget"
+def _rejected_message(service: str, status: int, messages: Messages) -> str:
+    return messages.request_rejected.format(service=service, status=status)
 
 
 class GitHubClient:
@@ -301,12 +423,16 @@ class GitHubClient:
     def owners(self) -> tuple[str, ...]:
         return self._config.owners
 
+    @property
+    def messages(self) -> Messages:
+        return self._config.messages
+
     def query(self, document: str, variables: dict) -> dict:
         payload = self._post_graphql(document, variables)
-        _raise_on_graphql_errors(payload)
+        _raise_on_graphql_errors(payload, self.messages)
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
-            raise UnexpectedResponseError(f"resposta inesperada do {SERVICE_NAME}")
+            raise UnexpectedResponseError(self.messages.unexpected_response.format(service=SERVICE_NAME))
         return data
 
     def _post_graphql(self, document: str, variables: dict) -> object:
@@ -314,31 +440,29 @@ class GitHubClient:
         url = self._config.api_url + GRAPHQL_PATH
         try:
             status, response_body = self._http(url, "POST", self._headers, body, REQUEST_TIMEOUT_SECONDS)
+        except ResponseTooLargeError:
+            raise UnexpectedResponseError(self.messages.response_too_large.format(service=SERVICE_NAME)) from None
         except (OSError, http.client.HTTPException) as error:
             raise NetworkError(
-                f"falha de rede ao falar com {SERVICE_NAME} ({type(error).__name__})"
+                self.messages.network_failure.format(service=SERVICE_NAME, error_type=type(error).__name__)
             ) from None
-        return decode_response(status, response_body, SERVICE_NAME)
+        return decode_response(status, response_body, SERVICE_NAME, self.messages)
 
 
-def _raise_on_graphql_errors(payload: object) -> None:
+def _raise_on_graphql_errors(payload: object, messages: Messages) -> None:
     if not isinstance(payload, dict):
         return
     errors = payload.get("errors")
     if not isinstance(errors, list) or not errors:
         return
     if any(_is_rate_limited(error) for error in errors):
-        raise RateLimitError(_rate_limit_message(SERVICE_NAME))
+        raise RateLimitError(_rate_limit_message(SERVICE_NAME, messages))
     if not isinstance(payload.get("data"), dict):
-        raise RequestRejectedError(_query_rejected_message(SERVICE_NAME))
+        raise RequestRejectedError(messages.query_rejected.format(service=SERVICE_NAME))
 
 
 def _is_rate_limited(error: object) -> bool:
     return isinstance(error, dict) and error.get("type") == RATE_LIMITED_ERROR_TYPE
-
-
-def _query_rejected_message(service: str) -> str:
-    return f"o {service} recusou a consulta; o plugin pode estar desatualizado"
 
 
 @dataclass(frozen=True)
@@ -411,18 +535,18 @@ def _owners_suffix(owners: tuple[str, ...]) -> str:
 
 
 def fetch_pull_requests(client: GitHubClient) -> list[PullRequest]:
-    return normalize(client.query(PULL_REQUESTS_QUERY, search_queries(client.owners)))
+    return normalize(client.query(PULL_REQUESTS_QUERY, search_queries(client.owners)), client.messages)
 
 
-def normalize(data: dict) -> list[PullRequest]:
+def normalize(data: dict, messages: Messages) -> list[PullRequest]:
     viewer_login = _nested_text(data, "viewer", "login")
     pulls: dict[str, PullRequest] = {}
     for node in _connection_nodes(data.get(REVIEW_ALIAS)):
-        _keep_first(pulls, _review_pull(node, viewer_login))
+        _keep_first(pulls, _review_pull(node, viewer_login, messages))
     for node in _connection_nodes(data.get(REVIEWED_ALIAS)):
-        _keep_first(pulls, _reviewed_pull(node, viewer_login))
+        _keep_first(pulls, _reviewed_pull(node, viewer_login, messages))
     for node in _connection_nodes(data.get(MINE_ALIAS)):
-        _keep_first(pulls, _mine_pull(node))
+        _keep_first(pulls, _mine_pull(node, messages))
     return sorted(pulls.values(), key=lambda pull: pull.created_at)
 
 
@@ -431,8 +555,8 @@ def _keep_first(pulls: dict[str, PullRequest], pull: PullRequest | None) -> None
         pulls.setdefault(pull.item_id, pull)
 
 
-def _review_pull(node: dict, viewer_login: str) -> PullRequest | None:
-    pull = _base_pull(node)
+def _review_pull(node: dict, viewer_login: str, messages: Messages) -> PullRequest | None:
+    pull = _base_pull(node, messages)
     if pull is None:
         return None
     review = _my_review(node, viewer_login)
@@ -442,19 +566,19 @@ def _review_pull(node: dict, viewer_login: str) -> PullRequest | None:
     return _in_review_section(pull, status, _pushed_after_review(node, review))
 
 
-def _reviewed_pull(node: dict, viewer_login: str) -> PullRequest | None:
-    pull = _base_pull(node)
+def _reviewed_pull(node: dict, viewer_login: str, messages: Messages) -> PullRequest | None:
+    pull = _base_pull(node, messages)
     review = _my_review(node, viewer_login)
     if pull is None or review is None or review.get("state") != REVIEW_STATE_CHANGES_REQUESTED:
         return None
     return _in_review_section(pull, REVIEWED, _pushed_after_review(node, review))
 
 
-def _mine_pull(node: dict) -> PullRequest | None:
-    pull = _base_pull(node)
+def _mine_pull(node: dict, messages: Messages) -> PullRequest | None:
+    pull = _base_pull(node, messages)
     if pull is None:
         return None
-    return replace(pull, section=MINE_SECTION, state=_mine_state(node))
+    return replace(pull, section=MINE_SECTION, state=_mine_state(node, messages))
 
 
 def _in_review_section(pull: PullRequest, status: str, pushed_after_review: bool) -> PullRequest:
@@ -466,18 +590,18 @@ def _in_review_section(pull: PullRequest, status: str, pushed_after_review: bool
     )
 
 
-def _mine_state(node: dict) -> str:
+def _mine_state(node: dict, messages: Messages) -> str:
     if node.get("mergeable") == MERGEABLE_CONFLICTING:
-        return STATE_CONFLICT
+        return messages.state_conflict
     decision = node.get("reviewDecision")
     if decision == DECISION_CHANGES_REQUESTED:
-        return STATE_CHANGES
+        return messages.state_changes
     if decision == DECISION_APPROVED:
-        return STATE_APPROVED
-    return _state_from_reviews(node)
+        return messages.state_approved
+    return _state_from_reviews(node, messages)
 
 
-def _state_from_reviews(node: dict) -> str:
+def _state_from_reviews(node: dict, messages: Messages) -> str:
     author = _nested_text(node, "author", "login")
     states = {
         review.get("state")
@@ -485,13 +609,13 @@ def _state_from_reviews(node: dict) -> str:
         if _nested_text(review, "author", "login") != author
     }
     if REVIEW_STATE_CHANGES_REQUESTED in states:
-        return STATE_CHANGES
+        return messages.state_changes
     if REVIEW_STATE_APPROVED in states:
-        return STATE_APPROVED
-    return STATE_WAITING
+        return messages.state_approved
+    return messages.state_waiting
 
 
-def _base_pull(node: dict) -> PullRequest | None:
+def _base_pull(node: dict, messages: Messages) -> PullRequest | None:
     number = node.get("number")
     created_at = parse_timestamp(node.get("createdAt"))
     if not isinstance(number, int) or created_at is None or node.get("isDraft") is True:
@@ -502,7 +626,7 @@ def _base_pull(node: dict) -> PullRequest | None:
         repository=repository,
         reference=f"#{number}",
         title=node.get("title") or "",
-        author=_nested_text(node, "author", "login") or UNKNOWN_AUTHOR,
+        author=_nested_text(node, "author", "login") or messages.unknown_author,
         created_at=created_at,
         url=node.get("url") or "",
         target_branch=node.get("baseRefName") or "",
@@ -550,7 +674,7 @@ def _nested_text(node: dict, key: str, field: str) -> str:
 
 
 def apply_review_memory(
-    pull_requests: list[PullRequest], memory: dict
+    pull_requests: list[PullRequest], memory: dict, messages: Messages
 ) -> tuple[list[PullRequest], dict]:
     displayed, remembered = [], {}
     for pull in pull_requests:
@@ -565,7 +689,7 @@ def apply_review_memory(
             "status": pull.review_status,
         }
         if pull.review_status != APPROVED:
-            displayed.append(replace(pull, state=_review_state(pull, reviewed_head)))
+            displayed.append(replace(pull, state=_review_state(pull, reviewed_head, messages)))
     return displayed, remembered
 
 
@@ -584,15 +708,15 @@ def _reviewed_head_after(pull: PullRequest, previous: dict) -> str | None:
     return reviewed_head
 
 
-def _review_state(pull: PullRequest, reviewed_head: str | None) -> str:
+def _review_state(pull: PullRequest, reviewed_head: str | None, messages: Messages) -> str:
     if pull.pushed_after_review is not None:
         if pull.pushed_after_review:
-            return STATE_PUSHED
-        return STATE_NEW if pull.review_status == UNREVIEWED else ""
+            return messages.state_pushed
+        return messages.state_new if pull.review_status == UNREVIEWED else ""
     pushed = reviewed_head is not None and reviewed_head != pull.head_commit
     if pushed:
-        return STATE_PUSHED
-    return STATE_NEW if pull.review_status == UNREVIEWED else ""
+        return messages.state_pushed
+    return messages.state_new if pull.review_status == UNREVIEWED else ""
 
 
 def format_age(delta: timedelta) -> str:
@@ -616,18 +740,24 @@ def flatten_text(text, limit: int) -> str:
     return flattened[: limit - 1] + ELLIPSIS
 
 
-def build_snapshot(pull_requests: list[PullRequest], title: str, now: datetime) -> dict:
+def build_snapshot(pull_requests: list[PullRequest], title: str, now: datetime, messages: Messages) -> dict:
     review = _sorted_by_creation(pull for pull in pull_requests if pull.section == REVIEW_SECTION)
     mine = _sorted_by_creation(pull for pull in pull_requests if pull.section == MINE_SECTION)
     return {
         "protocol": PROTOCOL_VERSION,
-        "summary": {"title": title, "blocks": _summary_blocks(review, mine, now)},
+        "summary": {"title": title, "blocks": _summary_blocks(review, mine, now, messages)},
         "detail": [
-            {"heading": REVIEW_SECTION, "items": [_detail_item(pull, now) for pull in review]},
-            {"heading": MINE_SECTION, "items": [_detail_item(pull, now) for pull in mine]},
+            {
+                "heading": messages.section_heading(REVIEW_SECTION),
+                "items": [_detail_item(pull, now, messages) for pull in review],
+            },
+            {
+                "heading": messages.section_heading(MINE_SECTION),
+                "items": [_detail_item(pull, now, messages) for pull in mine],
+            },
         ],
-        "mini": _mini_block(review),
-        "alerts": [_alert(pull) for pull in review if pull.state],
+        "mini": _mini_block(review, messages),
+        "alerts": [_alert(pull, messages) for pull in review if pull.state],
     }
 
 
@@ -635,29 +765,32 @@ def _sorted_by_creation(pulls) -> list[PullRequest]:
     return sorted(pulls, key=lambda pull: pull.created_at)
 
 
-def _summary_blocks(review: list[PullRequest], mine: list[PullRequest], now: datetime) -> list[dict]:
-    blocks = [_stat_block(review, mine)]
+def _summary_blocks(
+    review: list[PullRequest], mine: list[PullRequest], now: datetime, messages: Messages
+) -> list[dict]:
+    blocks = [_stat_block(review, mine, messages)]
     if review:
-        blocks.append({"type": "rows", "rows": [_row(pull, now) for pull in review[:MAXIMUM_BLOCK_ROWS]]})
+        rows = [_row(pull, now, messages) for pull in review[:MAXIMUM_BLOCK_ROWS]]
+        blocks.append({"type": "rows", "rows": rows})
     elif not mine:
-        blocks.append({"type": "lines", "lines": [{"text": EMPTY_TEXT, "tone": TONE_MUTED}]})
+        blocks.append({"type": "lines", "lines": [{"text": messages.empty_text, "tone": TONE_MUTED}]})
     return blocks
 
 
-def _stat_block(review: list[PullRequest], mine: list[PullRequest]) -> dict:
+def _stat_block(review: list[PullRequest], mine: list[PullRequest], messages: Messages) -> dict:
     return {
         "type": "stat",
         "items": [
-            {"value": str(len(review)), "label": REVIEW_LABEL},
-            {"value": str(len(mine)), "label": MINE_LABEL},
+            {"value": str(len(review)), "label": messages.review_label},
+            {"value": str(len(mine)), "label": messages.mine_label},
         ],
     }
 
 
-def _row(pull: PullRequest, now: datetime) -> dict:
+def _row(pull: PullRequest, now: datetime, messages: Messages) -> dict:
     row = {"text": _pull_heading(pull), "time": format_age(now - pull.created_at)}
     if pull.state:
-        row["tags"] = [{"text": pull.state, "tone": TONE_BY_STATE[pull.state]}]
+        row["tags"] = [{"text": pull.state, "tone": messages.state_tone(pull.state)}]
     return row
 
 
@@ -665,7 +798,7 @@ def _pull_heading(pull: PullRequest) -> str:
     return f"{pull.repository} {pull.reference} {flatten_text(pull.title, TITLE_TEXT_LIMIT)}"
 
 
-def _detail_item(pull: PullRequest, now: datetime) -> dict:
+def _detail_item(pull: PullRequest, now: datetime, messages: Messages) -> dict:
     item = {
         "id": pull.item_id,
         "text": _detail_text(pull, now),
@@ -676,7 +809,7 @@ def _detail_item(pull: PullRequest, now: datetime) -> dict:
             "author": pull.author,
         },
     }
-    if pull.state == STATE_PUSHED:
+    if pull.state == messages.state_pushed:
         item["flag"] = UPDATED_FLAG
     return item
 
@@ -688,33 +821,33 @@ def _detail_text(pull: PullRequest, now: datetime) -> str:
     return text
 
 
-def _mini_block(review: list[PullRequest]) -> dict:
+def _mini_block(review: list[PullRequest], messages: Messages) -> dict:
     return {
         "value": str(len(review)),
-        "text": MINI_TEXT,
+        "text": messages.mini_text,
         "tone": TONE_WARN if review else TONE_NORMAL,
     }
 
 
-def _alert(pull: PullRequest) -> dict:
+def _alert(pull: PullRequest, messages: Messages) -> dict:
     return {
         "id": (ALERT_ID_PREFIX + pull.item_id)[:MAXIMUM_ALERT_ID_LENGTH],
-        "title": f"{ALERT_TITLE_PREFIX}{pull.repository} {pull.reference}",
+        "title": messages.alert_title.format(repository=pull.repository, reference=pull.reference),
         "body": flatten_text(pull.title, TITLE_TEXT_LIMIT),
         "level": ALERT_LEVEL,
     }
 
 
-def with_offline_notice(snapshot: dict, saved_at: datetime, now: datetime) -> dict:
+def with_offline_notice(snapshot: dict, saved_at: datetime, now: datetime, messages: Messages) -> dict:
     summary = snapshot["summary"]
-    blocks = [_offline_notice_block(saved_at, now), *summary["blocks"]]
+    blocks = [_offline_notice_block(saved_at, now, messages), *summary["blocks"]]
     return {**snapshot, "summary": {**summary, "blocks": blocks}}
 
 
-def _offline_notice_block(saved_at: datetime, now: datetime) -> dict:
+def _offline_notice_block(saved_at: datetime, now: datetime, messages: Messages) -> dict:
     local_saved_at = saved_at.astimezone()
     is_same_day = local_saved_at.date() == now.astimezone().date()
-    notice_format = OFFLINE_NOTICE_FORMAT if is_same_day else OFFLINE_NOTICE_FORMAT_WITH_DATE
+    notice_format = messages.offline_notice if is_same_day else messages.offline_notice_with_date
     text = local_saved_at.strftime(notice_format)
     return {"type": "lines", "lines": [{"text": text, "tone": TONE_WARN}]}
 
@@ -781,21 +914,22 @@ def run_snapshot(
     moment: datetime,
     stdout,
     stderr,
+    messages: Messages,
 ) -> int:
     state = store.load()
     try:
         pull_requests = fetch()
     except (AuthError, RequestRejectedError) as error:
-        return _fail(stderr, error)
+        return _fail(stderr, error, messages)
     except (RateLimitError, NetworkError, UnexpectedResponseError) as error:
         cached = _cached_snapshot(state)
         if cached is None:
-            return _fail(stderr, error)
+            return _fail(stderr, error, messages)
         snapshot, saved_at = cached
-        _print_json(stdout, with_offline_notice(snapshot, saved_at, moment))
+        _print_json(stdout, with_offline_notice(snapshot, saved_at, moment, messages))
         return 0
-    shown, remembered = apply_review_memory(pull_requests, state["reviews"])
-    snapshot = build_snapshot(shown, title, moment)
+    shown, remembered = apply_review_memory(pull_requests, state["reviews"], messages)
+    snapshot = build_snapshot(shown, title, moment, messages)
     store.save({"saved_at": moment.isoformat(), "snapshot": snapshot, "reviews": remembered})
     _print_json(stdout, snapshot)
     return 0
@@ -820,8 +954,8 @@ def _print_json(stdout, document: dict) -> None:
     print(json.dumps(document, ensure_ascii=False), file=stdout)
 
 
-def _fail(stderr, error: Exception) -> int:
-    print(f"erro: {error}", file=stderr)
+def _fail(stderr, error: Exception, messages: Messages) -> int:
+    print(messages.error_line.format(message=error), file=stderr)
     return FAILURE_EXIT_CODE
 
 
@@ -836,13 +970,14 @@ def main(
     environ = os.environ if environ is None else environ
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
+    messages = resolve_messages(environ)
     if list(arguments) != SNAPSHOT_COMMAND:
-        print(USAGE_MESSAGE, file=stderr)
+        print(messages.usage, file=stderr)
         return ARGUMENT_ERROR_EXIT_CODE
     try:
         config = load_config(environ)
     except ConfigError as error:
-        return _fail(stderr, error)
+        return _fail(stderr, error, messages)
     store = StateStore(config.state_dir, state_key(config, environ))
     client = GitHubClient(config, http)
     moment = now if now is not None else datetime.now(timezone.utc)
@@ -853,6 +988,7 @@ def main(
         moment,
         stdout,
         stderr,
+        messages,
     )
 
 

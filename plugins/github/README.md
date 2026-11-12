@@ -128,3 +128,7 @@ Com a sua conta, em um repositório de teste:
 3. Aprove o PR: ele some da lista.
 4. Abra um PR seu: aparece `aguardando` em **Meus PRs**.
 5. Em um repositório sem revisão obrigatória, peça a outra pessoa para aprovar o seu PR (ou pedir mudanças): a tag vira `aprovado` (ou `mudança pedida`), mesmo sem decisão de revisão do GitHub.
+
+## Idioma
+
+O texto fixo do widget segue a variável `MOSAIC_LANGUAGE`, que o Mosaic passa a cada execução: `en` (o padrão, também usado quando a variável falta) ou `pt-BR`. Dados que vêm do serviço nunca são traduzidos.

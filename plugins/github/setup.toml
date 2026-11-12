@@ -1,4 +1,4 @@
-version = "0.0.4"
+version = "0.0.5"
 min_mosaic_version = "0.0.10"
 plugin = "github"
 script = "plugins/github/github_prs.py"
@@ -10,6 +10,7 @@ testing_only = ["GITHUB_API_URL"]
 [[steps]]
 kind = "secret"
 prompt = "Token do GitHub (fine-grained com Pull requests: Read e Metadata: Read, ou classic com escopo repo)"
+prompt_en = "GitHub token (fine-grained with Pull requests: Read and Metadata: Read, or classic with the repo scope)"
 environment_key = "GITHUB_TOKEN_ENV"
 file_key = "GITHUB_TOKEN_FILE"
 required = true
@@ -18,20 +19,24 @@ required = true
 kind = "variable"
 name = "GITHUB_OWNERS"
 prompt = "Usuários ou organizações a acompanhar (Enter = todos os repositórios que o token alcança)"
+prompt_en = "Users or organizations to follow (Enter = every repository the token can reach)"
 type = "list"
 
 [[steps]]
 kind = "variable"
 name = "GITHUB_TITLE"
 prompt = "Título do widget"
+prompt_en = "Widget title"
 default = "GitHub"
 
 [[steps]]
 kind = "variable"
 name = "GITHUB_STATE_DIR"
 prompt = "Pasta do estado do widget (memória de revisões e cache offline)"
+prompt_en = "Widget state folder (review memory and offline cache)"
 default = "~/.local/state/mosaic/github"
 advanced = true
 
 [[notes]]
 text = "O valor do token fica fora do mosaic.toml: exporte a variável (ou grave o arquivo com chmod 600) antes de abrir o mosaic. Dois conjuntos de repositórios ou duas contas são dois widgets."
+text_en = "The token value stays out of mosaic.toml: export the variable (or write the file with chmod 600) before opening mosaic. Two sets of repositories or two accounts are two widgets."

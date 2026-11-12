@@ -1,6 +1,8 @@
+import dataclasses
 import io
 import json
 import stat
+import string
 import sys
 import tempfile
 import threading
@@ -23,6 +25,7 @@ def base_environment(**overrides):
     environment = {
         "GITHUB_TOKEN_ENV": "MEU_TOKEN",
         "MEU_TOKEN": SECRET,
+        "MOSAIC_LANGUAGE": "pt-BR",
     }
     environment.update(overrides)
     return {key: value for key, value in environment.items() if value is not None}
@@ -196,7 +199,7 @@ class DecodeResponseTests(unittest.TestCase):
         for status in (400, 404, 410):
             body = json.dumps({"message": SECRET}).encode()
             with self.assertRaises(github_prs.RequestRejectedError, msg=status) as caught:
-                github_prs.decode_response(status, body, "GitHub")
+                github_prs.decode_response(status, body, "GitHub", github_prs.PORTUGUESE_MESSAGES)
             self.assertEqual(
                 str(caught.exception),
                 f"o GitHub recusou a requisição (HTTP {status}); confira a configuração do widget",
@@ -205,7 +208,7 @@ class DecodeResponseTests(unittest.TestCase):
     def test_transient_statuses_are_not_permanent_rejections(self):
         for status in (500, 502, 503):
             with self.assertRaises(github_prs.UnexpectedResponseError, msg=status):
-                github_prs.decode_response(status, b"{}", "GitHub")
+                github_prs.decode_response(status, b"{}", "GitHub", github_prs.PORTUGUESE_MESSAGES)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -294,7 +297,7 @@ class ParseTimestampTests(unittest.TestCase):
 
 class NormalizeTests(unittest.TestCase):
     def setUp(self):
-        self.pulls = {p.item_id: p for p in github_prs.normalize(fixtures.github_response()["data"])}
+        self.pulls = {p.item_id: p for p in github_prs.normalize(fixtures.github_response()["data"], github_prs.PORTUGUESE_MESSAGES)}
 
     def test_review_section_membership(self):
         review = {i for i, p in self.pulls.items() if p.section == github_prs.REVIEW_SECTION}
@@ -316,7 +319,7 @@ class NormalizeTests(unittest.TestCase):
                     "acme/api#22": "aprovado", "acme/api#23": "aguardando"}
         for item_id, state in expected.items():
             self.assertEqual(self.pulls[item_id].state, state, item_id)
-            self.assertEqual(self.pulls[item_id].section, "Meus PRs")
+            self.assertEqual(self.pulls[item_id].section, github_prs.MINE_SECTION)
 
     def test_mine_state_is_derived_from_reviews_without_review_decision(self):
         approved = fixtures.github_review(fixtures.OTHER_LOGIN, "APPROVED", "2026-10-20T10:00:00Z")
@@ -350,7 +353,7 @@ class NormalizeTests(unittest.TestCase):
         node = fixtures.github_pull(30, "acme/api", "2026-10-20T08:00:00Z", **options)
         node["latestReviews"] = {"nodes": list(reviews)}
         data = {"viewer": {"login": fixtures.VIEWER_LOGIN}, "mine": {"nodes": [node]}}
-        return github_prs.normalize(data)[0].state
+        return github_prs.normalize(data, github_prs.PORTUGUESE_MESSAGES)[0].state
 
     def test_pull_request_fields_are_mapped(self):
         pull = self.pulls["acme/api#11"]
@@ -367,7 +370,7 @@ class NormalizeTests(unittest.TestCase):
     def test_pull_request_without_creation_date_is_skipped(self):
         data = fixtures.github_response()["data"]
         data["mine"]["nodes"][0]["createdAt"] = None
-        ids = {p.item_id for p in github_prs.normalize(data)}
+        ids = {p.item_id for p in github_prs.normalize(data, github_prs.PORTUGUESE_MESSAGES)}
         self.assertNotIn("acme/api#20", ids)
         self.assertIn("acme/api#21", ids)
 
@@ -378,7 +381,7 @@ class NormalizeTests(unittest.TestCase):
         self.assertNotIn("acme/lib#15", self.pulls)
 
     def test_pull_request_already_in_review_section_is_not_repeated(self):
-        pulls = github_prs.normalize(fixtures.github_response()["data"])
+        pulls = github_prs.normalize(fixtures.github_response()["data"], github_prs.PORTUGUESE_MESSAGES)
         matches = [p for p in pulls if p.item_id == "acme/api#11"]
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].section, github_prs.REVIEW_SECTION)
@@ -387,11 +390,11 @@ class NormalizeTests(unittest.TestCase):
         data = fixtures.github_response()["data"]
         data["review"]["nodes"].append("lixo")
         data["mine"]["nodes"].append(None)
-        ids = {p.item_id for p in github_prs.normalize(data)}
+        ids = {p.item_id for p in github_prs.normalize(data, github_prs.PORTUGUESE_MESSAGES)}
         self.assertIn("acme/api#10", ids)
 
     def test_sections_are_sorted_by_creation_date(self):
-        created = [p.created_at for p in github_prs.normalize(fixtures.github_response()["data"])]
+        created = [p.created_at for p in github_prs.normalize(fixtures.github_response()["data"], github_prs.PORTUGUESE_MESSAGES)]
         self.assertEqual(created, sorted(created))
 
 
@@ -443,40 +446,40 @@ NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 class ReviewMemoryTests(unittest.TestCase):
     def test_unreviewed_without_memory_is_new(self):
-        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed")], {})
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed")], {}, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown[0].state, "novo")
 
     def test_reviewed_then_head_changes_is_pushed(self):
-        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], {})
-        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h2")], memory)
+        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], {}, github_prs.PORTUGUESE_MESSAGES)
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h2")], memory, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown[0].state, "push novo")
 
     def test_reviewed_same_head_has_no_tag(self):
-        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], {})
-        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], memory)
+        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], {}, github_prs.PORTUGUESE_MESSAGES)
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", head="h1")], memory, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown[0].state, "")
 
     def test_vote_reset_by_push_is_pushed_not_new(self):
-        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "approved", head="h1")], {})
-        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed", head="h2")], memory)
+        _, memory = github_prs.apply_review_memory([pull("a", REVIEW, "approved", head="h1")], {}, github_prs.PORTUGUESE_MESSAGES)
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed", head="h2")], memory, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown[0].state, "push novo")
 
     def test_approved_is_hidden_but_remembered(self):
-        shown, memory = github_prs.apply_review_memory([pull("a", REVIEW, "approved")], {})
+        shown, memory = github_prs.apply_review_memory([pull("a", REVIEW, "approved")], {}, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown, [])
         self.assertEqual(memory["a"]["reviewed_head"], "h1")
 
     def test_known_push_flag_wins_over_memory(self):
-        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", pushed=True)], {})
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "reviewed", pushed=True)], {}, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown[0].state, "push novo")
 
     def test_mine_passes_through_and_memory_drops_vanished(self):
-        shown, memory = github_prs.apply_review_memory([pull("m", MINE, state="aprovado")], {"old": {}})
+        shown, memory = github_prs.apply_review_memory([pull("m", MINE, state="aprovado")], {"old": {}}, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown[0].state, "aprovado")
         self.assertEqual(memory, {})
 
     def test_non_dict_memory_entry_is_ignored(self):
-        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed")], {"a": "lixo"})
+        shown, _ = github_prs.apply_review_memory([pull("a", REVIEW, "unreviewed")], {"a": "lixo"}, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(shown[0].state, "novo")
 
 
@@ -487,7 +490,7 @@ class SnapshotTests(unittest.TestCase):
             pull("a", REVIEW, state="push novo", created="2026-10-19T12:00:00Z"),
             pull("m", MINE, state="aprovado"),
         ]
-        snapshot = github_prs.build_snapshot(pulls, "GitHub", NOW)
+        snapshot = github_prs.build_snapshot(pulls, "GitHub", NOW, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual([s["heading"] for s in snapshot["detail"]], ["Aguardando minha revisão", "Meus PRs"])
         review_items = snapshot["detail"][0]["items"]
         self.assertEqual([i["id"] for i in review_items], ["a", "b"])
@@ -498,7 +501,7 @@ class SnapshotTests(unittest.TestCase):
                                                    "state": "push novo", "author": "ana"})
 
     def test_home_stat_rows_mini_and_alerts(self):
-        snapshot = github_prs.build_snapshot([pull("a", REVIEW, state="novo"), pull("m", MINE, state="conflito")], "GitHub", NOW)
+        snapshot = github_prs.build_snapshot([pull("a", REVIEW, state="novo"), pull("m", MINE, state="conflito")], "GitHub", NOW, github_prs.PORTUGUESE_MESSAGES)
         stat, rows = snapshot["summary"]["blocks"]
         self.assertEqual(stat["items"], [{"value": "1", "label": "revisar"}, {"value": "1", "label": "meus PRs"}])
         self.assertEqual(rows["rows"][0]["tags"], [{"text": "novo", "tone": "current"}])
@@ -507,27 +510,27 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["protocol"], 1)
 
     def test_empty_shows_nothing_pending(self):
-        snapshot = github_prs.build_snapshot([], "GitHub", NOW)
+        snapshot = github_prs.build_snapshot([], "GitHub", NOW, github_prs.PORTUGUESE_MESSAGES)
         self.assertEqual(snapshot["summary"]["blocks"][1],
                          {"type": "lines", "lines": [{"text": "nada pendente", "tone": "muted"}]})
         self.assertEqual(snapshot["mini"]["tone"], "normal")
 
     def test_home_rows_are_capped_at_protocol_limit(self):
         pulls = [pull(f"p{n}", REVIEW, state="novo") for n in range(250)]
-        rows = github_prs.build_snapshot(pulls, "GitHub", NOW)["summary"]["blocks"][1]["rows"]
+        rows = github_prs.build_snapshot(pulls, "GitHub", NOW, github_prs.PORTUGUESE_MESSAGES)["summary"]["blocks"][1]["rows"]
         self.assertEqual(len(rows), 200)
 
     def test_long_titles_are_flattened_and_cut(self):
         pulls = [pull("a", REVIEW, state="novo", title="linha um\nlinha dois " + "x" * 200)]
-        item_text = github_prs.build_snapshot(pulls, "GitHub", NOW)["detail"][0]["items"][0]["text"]
+        item_text = github_prs.build_snapshot(pulls, "GitHub", NOW, github_prs.PORTUGUESE_MESSAGES)["detail"][0]["items"][0]["text"]
         self.assertNotIn("\n", item_text)
         self.assertIn("…", item_text)
         self.assertLessEqual(len(item_text.split(" · ")[0]), len("acme/api #1 ") + 80)
 
     def test_offline_notice_is_first_block_with_warn_tone(self):
-        snapshot = github_prs.build_snapshot([pull("a", REVIEW, state="novo")], "GitHub", NOW)
+        snapshot = github_prs.build_snapshot([pull("a", REVIEW, state="novo")], "GitHub", NOW, github_prs.PORTUGUESE_MESSAGES)
         saved_at = NOW
-        notice = github_prs.with_offline_notice(snapshot, saved_at, NOW)["summary"]["blocks"][0]
+        notice = github_prs.with_offline_notice(snapshot, saved_at, NOW, github_prs.PORTUGUESE_MESSAGES)["summary"]["blocks"][0]
         expected = saved_at.astimezone().strftime("dados de %H:%M (offline)")
         self.assertEqual(notice, {"type": "lines", "lines": [{"text": expected, "tone": "warn"}]})
         self.assertEqual(snapshot["summary"]["blocks"][0]["type"], "stat")
@@ -535,7 +538,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_reviewed_items_have_no_alert(self):
         pulls = [pull("a", REVIEW, state="novo"), pull("b", REVIEW, state="")]
-        alerts = github_prs.build_snapshot(pulls, "GitHub", NOW)["alerts"]
+        alerts = github_prs.build_snapshot(pulls, "GitHub", NOW, github_prs.PORTUGUESE_MESSAGES)["alerts"]
         self.assertEqual([alert["id"] for alert in alerts], ["review-a"])
 
 
@@ -544,7 +547,7 @@ class OfflineNoticeTests(unittest.TestCase):
     SAVED_AT = datetime(2026, 10, 21, 15, 30).astimezone()
 
     def notice_text(self, now):
-        blocks = github_prs.with_offline_notice(self.SNAPSHOT, self.SAVED_AT, now)["summary"]["blocks"]
+        blocks = github_prs.with_offline_notice(self.SNAPSHOT, self.SAVED_AT, now, github_prs.PORTUGUESE_MESSAGES)["summary"]["blocks"]
         self.assertEqual(blocks[0]["lines"][0]["tone"], "warn")
         self.assertEqual(blocks[1], self.SNAPSHOT["summary"]["blocks"][0])
         return blocks[0]["lines"][0]["text"]
@@ -614,7 +617,10 @@ class MainTests(unittest.TestCase):
         code = self.run_main(FakeHttp([(200, fixtures.github_response())]))
         self.assertEqual(code, 0)
         snapshot = json.loads(self.stdout.getvalue())
-        self.assertEqual([s["heading"] for s in snapshot["detail"]], [REVIEW, MINE])
+        self.assertEqual(
+            [s["heading"] for s in snapshot["detail"]],
+            [github_prs.PORTUGUESE_MESSAGES.review_section, github_prs.PORTUGUESE_MESSAGES.mine_section],
+        )
         self.assertEqual(len(list(self.state_dir.glob("*.json"))), 1)
 
     def test_main_usage_error_exits_two(self):
@@ -692,6 +698,52 @@ class MainTests(unittest.TestCase):
         self.stderr = io.StringIO()
         self.assertEqual(self.run_main(FakeHttp(error=OSError("sem rede"))), 1)
         self.assertTrue(self.stderr.getvalue().startswith("erro: "))
+
+
+class LanguageTests(unittest.TestCase):
+    def test_portuguese_is_chosen_by_any_value_starting_with_pt(self):
+        for value in ("pt-BR", "pt", "PT_br", " pt_BR.UTF-8 "):
+            messages = github_prs.resolve_messages({"MOSAIC_LANGUAGE": value})
+            self.assertIs(messages, github_prs.PORTUGUESE_MESSAGES, value)
+
+    def test_english_is_the_default_and_the_system_locale_is_ignored(self):
+        for environment in ({}, {"MOSAIC_LANGUAGE": ""}, {"MOSAIC_LANGUAGE": "fr"}, {"LANG": "pt_BR.UTF-8"}):
+            messages = github_prs.resolve_messages(environment)
+            self.assertIs(messages, github_prs.ENGLISH_MESSAGES, environment)
+
+    def test_every_message_exists_in_both_languages_with_the_same_placeholders(self):
+        formatter = string.Formatter()
+
+        def placeholders(template):
+            return {name for _, name, _, _ in formatter.parse(template) if name is not None}
+
+        english = dataclasses.asdict(github_prs.ENGLISH_MESSAGES)
+        portuguese = dataclasses.asdict(github_prs.PORTUGUESE_MESSAGES)
+        self.assertEqual(english.keys(), portuguese.keys())
+        for key in english:
+            self.assertTrue(english[key].strip(), key)
+            self.assertTrue(portuguese[key].strip(), key)
+            self.assertEqual(placeholders(english[key]), placeholders(portuguese[key]), key)
+            if key not in ("error_line", "state_new"):
+                self.assertNotEqual(english[key], portuguese[key], key)
+
+    def test_the_english_headings_and_tags_are_natural(self):
+        english = github_prs.ENGLISH_MESSAGES
+        self.assertEqual(english.section_heading(github_prs.REVIEW_SECTION), "Awaiting my review")
+        self.assertEqual(english.section_heading(github_prs.MINE_SECTION), "My PRs")
+        self.assertEqual(english.state_new, "new")
+        self.assertEqual(english.state_pushed, "new push")
+        self.assertEqual(english.state_approved, "approved")
+
+    def test_usage_and_errors_are_in_english_without_the_variable(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        code = github_prs.main(["bogus"], environ={}, stdout=stdout, stderr=stderr)
+        self.assertEqual(code, 2)
+        self.assertEqual(stderr.getvalue(), "usage: github_prs.py snapshot\n")
+        stderr = io.StringIO()
+        code = github_prs.main(["snapshot"], environ={}, stdout=stdout, stderr=stderr)
+        self.assertEqual(code, 1)
+        self.assertTrue(stderr.getvalue().startswith("error: "), stderr.getvalue())
 
 
 if __name__ == "__main__":
