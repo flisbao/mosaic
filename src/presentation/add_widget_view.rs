@@ -37,11 +37,21 @@ const EMPTY_FOOTER: &str = "Esc fecha";
 const TEXT_FOOTER: &str = "Enter confirma  Esc cancela";
 const CHOICE_FOOTER: &str = "↑↓ escolhe  Enter confirma  Esc cancela";
 const REVIEW_FOOTER: &str = "Enter grava e recarrega  Esc cancela";
+const MORE_ABOVE: &str = "  ↑ mais";
+const MORE_BELOW: &str = "  ↓ mais";
+const MORE_MARKER_ROWS: usize = 2;
+const FOOTER_ROWS: usize = 2;
 const HINT_SEPARATOR: &str = " · ";
 
 pub struct ModalContent {
     pub title: String,
     pub lines: Vec<Line<'static>>,
+}
+
+#[derive(Clone, Copy)]
+struct Dimensions {
+    width: usize,
+    height: usize,
 }
 
 struct Layout {
@@ -57,8 +67,12 @@ pub fn modal_content(
     styles: &ThemeStyles,
 ) -> ModalContent {
     let layout = match flow.step() {
-        AddWidgetStep::ChoosingPlugin { selected } => plugin_list(flow, *selected, width, styles),
-        AddWidgetStep::Answering(answering) => answering_layout(answering, width, styles),
+        AddWidgetStep::ChoosingPlugin { selected } => {
+            plugin_list(flow, *selected, Dimensions { width, height }, styles)
+        }
+        AddWidgetStep::Answering(answering) => {
+            answering_layout(answering, Dimensions { width, height }, styles)
+        }
         AddWidgetStep::Reviewing(review) => review_layout(review, width, styles),
     };
     ModalContent {
@@ -73,8 +87,7 @@ fn fit_height(
     height: usize,
     styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
-    let reserved = 2;
-    let room = height.saturating_sub(reserved);
+    let room = height.saturating_sub(FOOTER_ROWS);
     if body.len() > room {
         body.truncate(room.saturating_sub(1));
         body.push(Line::styled(CUT_MARK, styles.muted()));
@@ -82,6 +95,40 @@ fn fit_height(
     body.push(Line::default());
     body.push(Line::styled(footer.to_string(), styles.muted()));
     body
+}
+
+fn windowed(
+    groups: Vec<Vec<Line<'static>>>,
+    selected: usize,
+    room: usize,
+    styles: &ThemeStyles,
+) -> Vec<Line<'static>> {
+    let total: usize = groups.iter().map(Vec::len).sum();
+    if total <= room {
+        return groups.into_iter().flatten().collect();
+    }
+    let budget = room.saturating_sub(MORE_MARKER_ROWS).max(1);
+    let selected = selected.min(groups.len().saturating_sub(1));
+    let mut first = selected;
+    let mut used = groups[selected].len();
+    while first > 0 && used + groups[first - 1].len() <= budget {
+        first -= 1;
+        used += groups[first].len();
+    }
+    let mut last = selected + 1;
+    while last < groups.len() && used + groups[last].len() <= budget {
+        used += groups[last].len();
+        last += 1;
+    }
+    let mut lines = Vec::new();
+    if first > 0 {
+        lines.push(Line::styled(MORE_ABOVE, styles.muted()));
+    }
+    lines.extend(groups[first..last].iter().flatten().cloned());
+    if last < groups.len() {
+        lines.push(Line::styled(MORE_BELOW, styles.muted()));
+    }
+    lines
 }
 
 fn heading(text: &str, styles: &ThemeStyles) -> Line<'static> {
@@ -101,9 +148,10 @@ fn wrapped(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
 fn plugin_list(
     flow: &AddWidgetFlow,
     selected: usize,
-    width: usize,
+    size: Dimensions,
     styles: &ThemeStyles,
 ) -> Layout {
+    let width = size.width;
     if flow.plugins().is_empty() {
         return Layout {
             title: MODAL_TITLE.to_string(),
@@ -112,13 +160,18 @@ fn plugin_list(
         };
     }
     let mut body = vec![heading(CHOOSE_PLUGIN_HEADING, styles), Line::default()];
-    body.extend(
-        flow.plugins()
-            .iter()
-            .enumerate()
-            .map(|(position, plugin)| plugin_line(plugin, position == selected, width, styles)),
-    );
-    body.extend(problem_lines(flow.problems(), width, styles));
+    let problems = problem_lines(flow.problems(), width, styles);
+    let room = size
+        .height
+        .saturating_sub(body.len() + problems.len() + FOOTER_ROWS);
+    let groups = flow
+        .plugins()
+        .iter()
+        .enumerate()
+        .map(|(position, plugin)| vec![plugin_line(plugin, position == selected, width, styles)])
+        .collect();
+    body.extend(windowed(groups, selected, room, styles));
+    body.extend(problems);
     Layout {
         title: MODAL_TITLE.to_string(),
         body,
@@ -196,7 +249,8 @@ fn no_plugins(flow: &AddWidgetFlow, width: usize, styles: &ThemeStyles) -> Vec<L
     lines
 }
 
-fn answering_layout(answering: &Answering, width: usize, styles: &ThemeStyles) -> Layout {
+fn answering_layout(answering: &Answering, size: Dimensions, styles: &ThemeStyles) -> Layout {
+    let width = size.width;
     let title = format!("{MODAL_TITLE}{TITLE_SEPARATOR}{}", answering.plugin_name());
     let SetupState::Asking(prompt) = answering.state() else {
         return Layout {
@@ -214,34 +268,45 @@ fn answering_layout(answering: &Answering, width: usize, styles: &ThemeStyles) -
         styles.muted(),
     ));
     body.push(Line::default());
+    let errors = error_lines(answering.error(), width, styles);
     let footer = match &prompt.input {
         PromptInput::Text => {
             body.push(input_line(answering.field(), prompt, width, styles));
             TEXT_FOOTER
         }
         PromptInput::Choice(_) => {
+            let room = size
+                .height
+                .saturating_sub(body.len() + errors.len() + FOOTER_ROWS);
             body.extend(choice_lines(
                 &answering.rows(),
                 answering.selected_row(),
                 width,
+                room,
                 styles,
             ));
             CHOICE_FOOTER
         }
     };
-    if let Some(message) = answering.error() {
-        body.push(Line::default());
-        body.extend(wrapped(
-            &format!("{ERROR_PREFIX}{message}"),
-            width,
-            styles.danger(),
-        ));
-    }
+    body.extend(errors);
     Layout {
         title,
         body,
         footer,
     }
+}
+
+fn error_lines(message: Option<&str>, width: usize, styles: &ThemeStyles) -> Vec<Line<'static>> {
+    let Some(message) = message else {
+        return Vec::new();
+    };
+    let mut lines = vec![Line::default()];
+    lines.extend(wrapped(
+        &format!("{ERROR_PREFIX}{message}"),
+        width,
+        styles.danger(),
+    ));
+    lines
 }
 
 fn hint_text(prompt: &Prompt) -> String {
@@ -324,12 +389,15 @@ fn choice_lines(
     rows: &[ChoiceRow],
     selected: usize,
     width: usize,
+    room: usize,
     styles: &ThemeStyles,
 ) -> Vec<Line<'static>> {
-    rows.iter()
+    let groups = rows
+        .iter()
         .enumerate()
-        .flat_map(|(position, row)| choice_row_lines(row, position == selected, width, styles))
-        .collect()
+        .map(|(position, row)| choice_row_lines(row, position == selected, width, styles))
+        .collect();
+    windowed(groups, selected, room, styles)
 }
 
 fn choice_row_lines(
@@ -919,5 +987,74 @@ mod tests {
         );
         let text = screen_of(&buffer_of(&with_widget, WIDTH, HEIGHT));
         assert!(!text.contains("nenhum widget ainda"), "{text}");
+    }
+    fn many_presets_state(count: usize) -> AppState {
+        let mut manifest = demo_manifest();
+        manifest.presets = (0..count)
+            .map(|number| crate::domain::plugin_setup::Preset {
+                name: format!("modelo-{number:02}"),
+                description: format!("descrição do modelo {number}"),
+                widget_id: None,
+                arguments: Vec::new(),
+                inputs: Vec::new(),
+            })
+            .collect();
+        let plugin = InstalledPlugin {
+            name: "demo".to_string(),
+            version: None,
+            manifest,
+        };
+        let mut state = state_with(snapshot(vec![plugin]));
+        press(&mut state, &[KeyInput::Enter]);
+        state
+    }
+
+    fn box_corners(text: &str) -> (usize, usize) {
+        (text.matches('┌').count(), text.matches('└').count())
+    }
+
+    #[test]
+    fn a_choice_list_taller_than_the_terminal_scrolls_and_keeps_the_selection_visible() {
+        let mut state = many_presets_state(12);
+        let text = screen_of(&buffer_of(&state, WIDTH, 16));
+        assert!(text.contains("> montar do zero"), "{text}");
+        assert!(text.contains("↓ mais"), "{text}");
+        assert!(!text.contains("↑ mais"), "{text}");
+        assert!(text.contains("Enter confirma  Esc cancela"), "{text}");
+        for _ in 0..12 {
+            press(&mut state, &[KeyInput::Down]);
+        }
+        let text = screen_of(&buffer_of(&state, WIDTH, 16));
+        assert!(text.contains("> modelo-11"), "{text}");
+        assert!(text.contains("↑ mais"), "{text}");
+        assert!(!text.contains("↓ mais"), "{text}");
+        assert!(text.contains("Enter confirma  Esc cancela"), "{text}");
+        assert_eq!(box_corners(&text), (1, 1), "{text}");
+    }
+
+    #[test]
+    fn a_selection_in_the_middle_shows_markers_on_both_sides() {
+        let mut state = many_presets_state(12);
+        for _ in 0..6 {
+            press(&mut state, &[KeyInput::Down]);
+        }
+        let text = screen_of(&buffer_of(&state, WIDTH, 16));
+        assert!(text.contains("> modelo-05"), "{text}");
+        assert!(text.contains("↑ mais") && text.contains("↓ mais"), "{text}");
+    }
+
+    #[test]
+    fn a_plugin_list_taller_than_the_terminal_keeps_the_selection_visible() {
+        let plugins = (0..15)
+            .map(|number| installed(&format!("plugin-{number:02}"), None))
+            .collect();
+        let mut state = state_with(snapshot(plugins));
+        for _ in 0..14 {
+            press(&mut state, &[KeyInput::Down]);
+        }
+        let text = screen_of(&buffer_of(&state, WIDTH, 12));
+        assert!(text.contains("> plugin-14"), "{text}");
+        assert!(text.contains("Enter seleciona  Esc cancela"), "{text}");
+        assert_eq!(box_corners(&text), (1, 1), "{text}");
     }
 }

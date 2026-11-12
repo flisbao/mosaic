@@ -807,7 +807,6 @@ fn first_tab_prompt(context: &TabContext) -> Prompt {
     );
     Prompt {
         explanation: Some(explanation.clone()),
-        hint: Some("Enter mantém a aba única".to_string()),
         ..Prompt::new(
             "Aba do widget",
             "Aba nova para este widget (Enter = manter a aba única): ".to_string(),
