@@ -48,6 +48,26 @@ fn hard_clip(text: &str, budget: usize) -> String {
     clipped
 }
 
+pub fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut used = 0;
+    for character in text.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if used + character_width > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push(character);
+        used += character_width;
+    }
+    lines.push(current);
+    lines
+}
+
 pub fn pieces_width(pieces: &[Piece]) -> usize {
     pieces.iter().map(|(text, _)| display_width(text)).sum()
 }

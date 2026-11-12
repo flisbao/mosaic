@@ -10,7 +10,8 @@ use crate::application::pomodoro_notifications::phase_label;
 use crate::application::ports::AlertMessage;
 use crate::domain::pomodoro::{PomodoroStatus, PomodoroTimer, SECONDS_PER_MINUTE};
 use crate::domain::widget::{DetailItem, DetailSection};
-use crate::presentation::app_state::{AppState, Mode, WidgetEntry};
+use crate::presentation::add_widget_view::{self, modal_content};
+use crate::presentation::app_state::{AddWidgetFlow, AppState, Mode, WidgetEntry};
 use crate::presentation::focus_column::focus_column_lines;
 use crate::presentation::grid_layout::{
     arrange, CellRect, GridLayout, TerminalSize, MINIMUM_FULL_HEIGHT, MINIMUM_FULL_WIDTH,
@@ -19,7 +20,7 @@ use crate::presentation::grid_layout::{
 use crate::presentation::key_hints::{
     context_hints, footer_hints, global_hints, HintContext, KeyHint,
 };
-use crate::presentation::text_fit::{flagged, truncate_to_width};
+use crate::presentation::text_fit::{flagged, truncate_to_width, wrap_to_width};
 use crate::presentation::theme_styles::ThemeStyles;
 use crate::presentation::widget_box::{
     box_block, box_header, dim_if_stale, render_widget_box, BoxContext, Emphasis, FailureDetail,
@@ -36,6 +37,9 @@ const HELP_GLOBAL_HEADING: &str = "Em qualquer tela";
 const HELP_DISMISS_HINT: &str = "Esc ou ? fecha esta ajuda";
 const MAXIMUM_NUMBERED_TABS: usize = 9;
 const CONFIRMATION_HINT: &str = "[s] confirma  [n] cancela";
+const EMPTY_PANEL_TITLE: &str = "nenhum widget ainda";
+const EMPTY_PANEL_ACTION: &str = "pressione + para adicionar um widget";
+const EMPTY_PANEL_LIST_HINT: &str = "ou veja os plugins disponíveis: mosaic plugins list";
 const NOTICE_ROW_HEIGHT: u16 = 1;
 const MINIMUM_HEIGHT_FOR_NOTICE: u16 = 2;
 const FOCUS_COLUMN_WIDTH: u16 = 22;
@@ -213,8 +217,26 @@ fn render_home(frame: &mut Frame, state: &AppState, spans: &[u16], now: NaiveDat
                 render_widget_box(frame, entry, to_rect(area, placement.area), &context);
             }
         }
+        GridLayout::Empty if !state.has_configured_widgets() => {
+            render_empty_panel(frame, content_area(area), state.styles());
+        }
         GridLayout::Empty => {}
     }
+}
+
+fn render_empty_panel(frame: &mut Frame, area: Rect, styles: &ThemeStyles) {
+    let lines = vec![
+        Line::styled(
+            EMPTY_PANEL_TITLE,
+            styles.accent().add_modifier(Modifier::BOLD),
+        ),
+        Line::from(EMPTY_PANEL_ACTION),
+        Line::styled(EMPTY_PANEL_LIST_HINT, styles.muted()),
+    ];
+    let height = (lines.len() as u16).min(area.height);
+    let top = area.y + (area.height - height) / 2;
+    let centered = Rect::new(area.x, top, area.width, height);
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), centered);
 }
 
 fn enlarge_warning() -> String {
@@ -546,7 +568,11 @@ fn notice_row(area: Rect) -> Option<Rect> {
 
 fn render_modal(frame: &mut Frame, state: &AppState, area: Rect) {
     let (title, lines) = match state.mode() {
-        Mode::Browsing | Mode::AddingWidget(_) => return,
+        Mode::Browsing => return,
+        Mode::AddingWidget(flow) => {
+            render_add_widget(frame, area, flow, state.styles());
+            return;
+        }
         Mode::Helping => {
             let context = HintContext::from_expanded(state.is_expanded());
             (context.title(), help_lines(context))
@@ -579,8 +605,43 @@ fn render_alert(frame: &mut Frame, state: &AppState, area: Rect) {
     draw_popup(frame, area, title, &lines, state.styles());
 }
 
+fn render_add_widget(frame: &mut Frame, area: Rect, flow: &AddWidgetFlow, styles: &ThemeStyles) {
+    let width = area.width.min(add_widget_view::MODAL_WIDTH);
+    let inner_width = usize::from(width.saturating_sub(MODAL_FRAME_THICKNESS));
+    let inner_height = usize::from(area.height.saturating_sub(MODAL_FRAME_THICKNESS));
+    let content = modal_content(flow, inner_width, inner_height, styles);
+    draw_styled_popup(
+        frame,
+        area,
+        &content.title,
+        content.lines,
+        add_widget_view::MODAL_WIDTH,
+        styles,
+    );
+}
+
 fn draw_popup(frame: &mut Frame, area: Rect, title: &str, lines: &[String], styles: &ThemeStyles) {
-    let width = area.width.min(MODAL_MAXIMUM_WIDTH);
+    let inner_width = usize::from(
+        area.width
+            .min(MODAL_MAXIMUM_WIDTH)
+            .saturating_sub(MODAL_FRAME_THICKNESS),
+    );
+    let text: Vec<Line> = lines
+        .iter()
+        .map(|line| Line::from(truncate_to_width(line, inner_width)))
+        .collect();
+    draw_styled_popup(frame, area, title, text, MODAL_MAXIMUM_WIDTH, styles);
+}
+
+fn draw_styled_popup(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    maximum_width: u16,
+    styles: &ThemeStyles,
+) {
+    let width = area.width.min(maximum_width);
     let height = (lines.len() as u16 + MODAL_FRAME_THICKNESS).min(area.height);
     if width < MINIMUM_DRAWABLE_SIDE || height < MINIMUM_DRAWABLE_SIDE {
         return;
@@ -595,13 +656,9 @@ fn draw_popup(frame: &mut Frame, area: Rect, title: &str, lines: &[String], styl
         .title(title.to_string())
         .border_style(styles.warn());
     let inner = block.inner(popup);
-    let text: Vec<Line> = lines
-        .iter()
-        .map(|line| Line::from(truncate_to_width(line, inner.width as usize)))
-        .collect();
     clear_with_theme(frame, popup, styles);
     frame.render_widget(block, popup);
-    frame.render_widget(Paragraph::new(text), inner);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn help_lines(context: HintContext) -> Vec<String> {
@@ -646,26 +703,6 @@ fn to_rect(origin: Rect, cell: CellRect) -> Rect {
         cell.width,
         cell.height,
     )
-}
-
-fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return Vec::new();
-    }
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut used = 0;
-    for character in text.chars() {
-        let character_width = character.width().unwrap_or(0);
-        if used + character_width > width && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-            used = 0;
-        }
-        current.push(character);
-        used += character_width;
-    }
-    lines.push(current);
-    lines
 }
 
 #[cfg(test)]

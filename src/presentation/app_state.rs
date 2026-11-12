@@ -27,6 +27,7 @@ pub use add_widget::{AddWidgetFlow, AddWidgetStep, Answering, ChoiceRow, NewWidg
 use alert_queue::AlertQueue;
 use pending_actions::PendingActions;
 use pomodoro_control::PomodoroControl;
+pub use text_field::TextField;
 
 pub const MAXIMUM_QUEUED_ALERTS: usize = 20;
 pub const PAGE_JUMP_ITEMS: usize = 10;
@@ -227,6 +228,12 @@ impl AppState {
 
     pub fn entries(&self) -> &[WidgetEntry] {
         &self.entries
+    }
+
+    pub fn has_configured_widgets(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| !entry.id.is_recommendation())
     }
 
     pub fn tabs(&self) -> &[TabView] {

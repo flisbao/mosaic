@@ -1,3 +1,4 @@
+pub mod add_widget_view;
 pub mod app_events;
 pub mod app_state;
 pub mod blocks;
