@@ -1,11 +1,15 @@
 import base64
+import dataclasses
 import io
 import json
+import os
+import string
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "jira"))
 import jira  # noqa: E402
 
 SECRET = "TOKEN-SECRETO-123"
+PORTUGUESE = "pt-BR"
 
 
 def base_environment(**overrides):
@@ -24,6 +29,7 @@ def base_environment(**overrides):
         "JIRA_EMAIL": "eu@empresa.com",
         "JIRA_TOKEN_ENV": "MEU_TOKEN",
         "MEU_TOKEN": SECRET,
+        "MOSAIC_LANGUAGE": PORTUGUESE,
     }
     environment.update(overrides)
     return {key: value for key, value in environment.items() if value is not None}
@@ -508,6 +514,7 @@ def snapshot_of(issues, has_more=False, offline_since=None, **option_overrides):
         SITE,
         NOW,
         offline_since,
+        jira.PORTUGUESE_MESSAGES,
     )
 
 
@@ -806,6 +813,189 @@ class MainTests(unittest.TestCase):
         collected += [path.read_text(encoding="utf-8") for path in self.state_dir.glob("*")]
         for text in collected:
             self.assertNotIn(SECRET, text)
+
+
+PLACEHOLDER_FORMATTER = string.Formatter()
+
+
+def placeholders_of(template):
+    return {name for _, name, _, _ in PLACEHOLDER_FORMATTER.parse(template) if name is not None}
+
+
+class LanguageTests(unittest.TestCase):
+    def test_portuguese_is_chosen_by_any_value_starting_with_pt(self):
+        for value in ("pt-BR", "pt", "PT_br", "pt_BR.UTF-8", " Pt-BR "):
+            self.assertEqual(jira.resolve_language({"MOSAIC_LANGUAGE": value}), PORTUGUESE, value)
+
+    def test_english_is_the_default(self):
+        for environment in ({}, {"MOSAIC_LANGUAGE": ""}, {"MOSAIC_LANGUAGE": "en"}, {"MOSAIC_LANGUAGE": "fr"}):
+            self.assertEqual(jira.resolve_language(environment), "en", environment)
+
+    def test_system_locale_variables_are_ignored(self):
+        environment = {"LANG": "pt_BR.UTF-8", "LC_ALL": "pt_BR.UTF-8", "LC_MESSAGES": "pt_BR.UTF-8"}
+        self.assertEqual(jira.resolve_language(environment), "en")
+
+    def test_every_message_exists_in_both_languages_with_the_same_placeholders(self):
+        english = dataclasses.asdict(jira.ENGLISH_MESSAGES)
+        portuguese = dataclasses.asdict(jira.PORTUGUESE_MESSAGES)
+        self.assertEqual(english.keys(), portuguese.keys())
+        for name in english:
+            with self.subTest(message=name):
+                if isinstance(english[name], dict):
+                    self.assertEqual(english[name].keys(), portuguese[name].keys())
+                    pairs = [(english[name][key], portuguese[name][key]) for key in english[name]]
+                else:
+                    pairs = [(english[name], portuguese[name])]
+                for english_text, portuguese_text in pairs:
+                    self.assertIsInstance(english_text, str)
+                    self.assertTrue(english_text.strip())
+                    self.assertTrue(portuguese_text.strip())
+                    self.assertEqual(placeholders_of(english_text), placeholders_of(portuguese_text))
+
+    def test_languages_differ_where_translation_makes_sense(self):
+        same_in_both = {"meta_status", "meta_site"}
+        for name, english_text in dataclasses.asdict(jira.ENGLISH_MESSAGES).items():
+            if name in same_in_both:
+                continue
+            portuguese_text = dataclasses.asdict(jira.PORTUGUESE_MESSAGES)[name]
+            with self.subTest(message=name):
+                if isinstance(english_text, dict):
+                    differing = [key for key in english_text if english_text[key] != portuguese_text[key]]
+                    self.assertTrue(differing)
+                else:
+                    self.assertNotEqual(english_text, portuguese_text)
+
+    def test_messages_for_returns_the_table_of_each_language(self):
+        self.assertIs(jira.messages_for("en"), jira.ENGLISH_MESSAGES)
+        self.assertIs(jira.messages_for(PORTUGUESE), jira.PORTUGUESE_MESSAGES)
+
+    def test_portuguese_messages_keep_the_original_texts(self):
+        messages = jira.PORTUGUESE_MESSAGES
+        self.assertEqual(messages.usage, "uso: jira.py [opções] snapshot")
+        self.assertEqual(messages.offline_notice.format(time="09:30"), "dados de 09:30 (offline)")
+        self.assertEqual(messages.nobody_label, "ninguem")
+        self.assertEqual(messages.empty_label, "nenhum ticket")
+        self.assertEqual(messages.others_label, "Outros")
+
+
+class EnglishOutputTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state_dir = Path(self.temporary.name) / "state"
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def run_main(self, http, arguments=("--jql", "x", "snapshot"), **environment_overrides):
+        overrides = {"MOSAIC_LANGUAGE": None, **environment_overrides}
+        environment = base_environment(JIRA_STATE_DIR=str(self.state_dir), **overrides)
+        return jira.main(
+            list(arguments), environ=environment, http=http, now=NOW, stdout=self.stdout, stderr=self.stderr
+        )
+
+    def test_missing_language_variable_gives_english_errors(self):
+        self.assertEqual(self.run_main(FakeHttp([(401, {})])), 1)
+        self.assertEqual(self.stderr.getvalue(), f"error: invalid credentials for {SITE}\n")
+
+    def test_explicit_english_gives_english_errors(self):
+        self.assertEqual(self.run_main(FakeHttp([(429, {})]), MOSAIC_LANGUAGE="en"), 1)
+        self.assertEqual(self.stderr.getvalue(), "error: Jira rate limit reached; will try again later\n")
+
+    def test_usage_message_is_in_english(self):
+        self.assertEqual(self.run_main(FakeHttp(), ["--jql", "x"]), 2)
+        self.assertEqual(self.stderr.getvalue(), "usage: jira.py [options] snapshot\n")
+
+    def test_usage_message_reads_the_process_environment_by_default(self):
+        with unittest.mock.patch.dict(os.environ, {"MOSAIC_LANGUAGE": PORTUGUESE}):
+            self.assertEqual(jira.main(["--jql", "x"], stdout=self.stdout, stderr=self.stderr), 2)
+        self.assertEqual(self.stderr.getvalue(), "uso: jira.py [opções] snapshot\n")
+
+    def test_configuration_errors_are_in_english(self):
+        self.assertEqual(self.run_main(FakeHttp(), JIRA_MODE="x"), 1)
+        self.assertEqual(self.stderr.getvalue(), "error: JIRA_MODE was removed; use --jql\n")
+        for name, expected in (
+            ("JIRA_EMAIL", "JIRA_EMAIL must be a valid email address"),
+            ("JIRA_SITE", "JIRA_SITE must be just the host name (e.g. company.atlassian.net)"),
+        ):
+            with self.assertRaises(jira.ConfigError) as caught:
+                jira.load_config(base_environment(MOSAIC_LANGUAGE=None, **{name: "invalid value"}))
+            self.assertEqual(str(caught.exception), expected)
+        with self.assertRaises(jira.ConfigError) as caught:
+            jira.load_config(base_environment(MOSAIC_LANGUAGE=None, JIRA_BUDGET_SECONDS="0"))
+        self.assertEqual(str(caught.exception), "JIRA_BUDGET_SECONDS must be a positive integer")
+
+    def test_query_error_is_in_english(self):
+        body = {"errorMessages": ["Field 'foo' does not exist"]}
+        self.assertEqual(self.run_main(FakeHttp([(400, body)])), 1)
+        self.assertEqual(self.stderr.getvalue(), "error: Invalid JQL: Field 'foo' does not exist\n")
+
+    def test_offline_notice_is_in_english(self):
+        self.assertEqual(self.run_main(FakeHttp([page(["A-1"])])), 0)
+        self.stdout.truncate(0)
+        self.stdout.seek(0)
+        self.assertEqual(self.run_main(FakeHttp(error=OSError("no network"))), 0)
+        first = json.loads(self.stdout.getvalue())["summary"]["blocks"][0]
+        expected = NOW.astimezone().strftime("data from %H:%M (offline)")
+        self.assertEqual(first["lines"][0], {"text": expected, "tone": "warn"})
+
+    def test_network_and_budget_errors_are_in_english(self):
+        self.assertEqual(self.run_main(FakeHttp(error=OSError("boom"))), 1)
+        self.assertEqual(self.stderr.getvalue(), f"error: network failure talking to {SITE} (OSError)\n")
+        client = make_client(FakeHttp([page(["A-1"], "t2"), page(["A-2"])]), MOSAIC_LANGUAGE=None)
+        with self.assertRaises(jira.NetworkError) as caught:
+            jira.search_issues(client, "x", 10, 40, FakeClock([0, 0, 100]))
+        self.assertEqual(str(caught.exception), "time budget exhausted")
+
+    def test_invalid_option_values_explain_themselves_in_english(self):
+        messages = jira.ENGLISH_MESSAGES
+        self.assertEqual(jira._non_blank_text(messages).__call__("a"), "a")
+        for convert, raw, expected in (
+            (jira._non_blank_text(messages), " ", "cannot be empty"),
+            (jira._column_list(messages), "key,nope", "invalid column: nope (use key, summary, status, assignee, priority, updated)"),
+            (jira._issue_limit(messages), "x", "must be an integer"),
+            (jira._issue_limit(messages), "900", "must be between 1 and 500"),
+        ):
+            with self.assertRaises(jira.argparse.ArgumentTypeError) as caught:
+                convert(raw)
+            self.assertEqual(str(caught.exception), expected)
+
+    def snapshot(self, issues, **option_overrides):
+        return jira.build_snapshot(
+            jira.SearchResult(issues, False), make_options(**option_overrides), SITE, NOW, None
+        )
+
+    def test_table_headers_and_nobody_label_are_in_english(self):
+        snapshot = self.snapshot(
+            [make_issue(1, assignee=None)],
+            view="table",
+            columns=("key", "summary", "status", "assignee", "priority", "updated"),
+        )
+        block = snapshot["summary"]["blocks"][0]
+        self.assertEqual(
+            [column["title"] for column in block["columns"]],
+            ["Key", "Summary", "Status", "Assignee", "Priority", "Updated"],
+        )
+        self.assertEqual(block["rows"][0][3], "unassigned")
+
+    def test_detail_sections_and_meta_labels_are_in_english(self):
+        snapshot = self.snapshot([make_issue(1, assignee=None)], group_by="assignee")
+        self.assertEqual(snapshot["detail"][0]["heading"], "unassigned")
+        self.assertEqual(
+            snapshot["detail"][0]["items"][0]["meta"],
+            {"status": "Em andamento", "priority": "Alta", "assignee": "unassigned", "site": SITE},
+        )
+
+    def test_empty_result_and_collapsed_groups_are_in_english(self):
+        empty = self.snapshot([])["summary"]["blocks"][0]
+        self.assertEqual(empty["lines"], [{"text": "no issues", "tone": "muted"}])
+        issues = [make_issue(index, status=f"S{index}") for index in range(10)]
+        stat = self.snapshot(issues, view="stat", group_by="status")["summary"]["blocks"][0]
+        self.assertEqual(stat["items"][-1], {"value": "3", "label": "Others"})
+
+    def test_service_data_is_not_translated(self):
+        snapshot = self.snapshot([make_issue(1, summary="Corrigir login", status="Em andamento")])
+        self.assertEqual(snapshot["summary"]["blocks"][0]["lines"][0]["text"], "ABC-1 Corrigir login")
+        self.assertEqual(snapshot["detail"][0]["items"][0]["meta"]["status"], "Em andamento")
 
 
 if __name__ == "__main__":

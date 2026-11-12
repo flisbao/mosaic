@@ -50,7 +50,6 @@ MAXIMUM_ISSUES = 500
 COLUMNS_SEPARATOR = ","
 ARGUMENT_ERROR_EXIT_CODE = 2
 FAILURE_EXIT_CODE = 1
-USAGE_MESSAGE = "uso: jira.py [opções] snapshot"
 SNAPSHOT_COMMAND = ["snapshot"]
 STATE_DIRECTORY_MODE = 0o700
 CACHE_KEY_SEPARATOR = "\n"
@@ -65,23 +64,16 @@ PROTOCOL_VERSION = 1
 SUMMARY_TEXT_LIMIT = 80
 MAXIMUM_BLOCK_ROWS = 200
 MAXIMUM_STAT_ITEMS = 8
-OTHERS_LABEL = "Outros"
-NOBODY_LABEL = "ninguem"
 MISSING_PRIORITY = "-"
-EMPTY_LABEL = "nenhum ticket"
 MORE_RESULTS_SUFFIX = "+"
 DETAIL_SEPARATOR = " — "
-OFFLINE_NOTICE_FORMAT = "dados de %H:%M (offline)"
+OFFLINE_TIME_FORMAT = "%H:%M"
 TONE_BY_CATEGORY = {"new": "muted", "indeterminate": "current", "done": "ok"}
 DEFAULT_TONE = "normal"
-COLUMN_TITLES = {
-    "key": "Chave",
-    "summary": "Resumo",
-    "status": "Status",
-    "assignee": "Responsável",
-    "priority": "Prioridade",
-    "updated": "Atualizado",
-}
+LANGUAGE_VARIABLE = "MOSAIC_LANGUAGE"
+PORTUGUESE_LANGUAGE_PREFIX = "pt"
+ENGLISH = "en"
+PORTUGUESE = "pt-BR"
 REMOVED_VARIABLES = (
     "JIRA_MODE",
     "JIRA_PROJECT",
@@ -89,6 +81,141 @@ REMOVED_VARIABLES = (
     "JIRA_TEAM",
     "JIRA_UNASSIGNED_HOURS",
 )
+
+
+@dataclass(frozen=True)
+class Messages:
+    usage: str
+    error_line: str
+    email_invalid: str
+    removed_variable: str
+    base_url_invalid: str
+    site_invalid: str
+    positive_integer_required: str
+    token_variable_empty: str
+    token_file_unreadable: str
+    token_file_empty: str
+    token_missing: str
+    response_too_large: str
+    network_failure: str
+    invalid_credentials: str
+    rate_limited: str
+    unexpected_status: str
+    response_not_json: str
+    invalid_query: str
+    time_budget_exhausted: str
+    search_without_issues: str
+    offline_notice: str
+    empty_label: str
+    others_label: str
+    nobody_label: str
+    blank_text: str
+    invalid_columns: str
+    integer_required: str
+    limit_range: str
+    meta_status: str
+    meta_priority: str
+    meta_assignee: str
+    meta_site: str
+    column_titles: Mapping[str, str]
+
+
+ENGLISH_MESSAGES = Messages(
+    usage="usage: jira.py [options] snapshot",
+    error_line="error: {message}",
+    email_invalid="JIRA_EMAIL must be a valid email address",
+    removed_variable="{name} was removed; use --jql",
+    base_url_invalid="JIRA_BASE_URL must be https or a local test address",
+    site_invalid="JIRA_SITE must be just the host name (e.g. company.atlassian.net)",
+    positive_integer_required="{name} must be a positive integer",
+    token_variable_empty="the variable {variable} (JIRA_TOKEN_ENV) is empty or missing",
+    token_file_unreadable="could not read the JIRA_TOKEN_FILE file",
+    token_file_empty="the JIRA_TOKEN_FILE file is empty",
+    token_missing="set JIRA_TOKEN_ENV (name of the variable holding the token) or JIRA_TOKEN_FILE",
+    response_too_large="the Jira response exceeds the maximum allowed size",
+    network_failure="network failure talking to {site} ({error_type})",
+    invalid_credentials="invalid credentials for {site}",
+    rate_limited="Jira rate limit reached; will try again later",
+    unexpected_status="unexpected response from Jira (HTTP {status})",
+    response_not_json="the Jira response is not JSON",
+    invalid_query="Invalid JQL",
+    time_budget_exhausted="time budget exhausted",
+    search_without_issues="the Jira search response has no issue list",
+    offline_notice="data from {time} (offline)",
+    empty_label="no issues",
+    others_label="Others",
+    nobody_label="unassigned",
+    blank_text="cannot be empty",
+    invalid_columns="invalid column: {names} (use {choices})",
+    integer_required="must be an integer",
+    limit_range="must be between 1 and {maximum}",
+    meta_status="status",
+    meta_priority="priority",
+    meta_assignee="assignee",
+    meta_site="site",
+    column_titles={
+        "key": "Key",
+        "summary": "Summary",
+        "status": "Status",
+        "assignee": "Assignee",
+        "priority": "Priority",
+        "updated": "Updated",
+    },
+)
+
+PORTUGUESE_MESSAGES = Messages(
+    usage="uso: jira.py [opções] snapshot",
+    error_line="erro: {message}",
+    email_invalid="JIRA_EMAIL precisa ser um e-mail válido",
+    removed_variable="{name} foi removido; use --jql",
+    base_url_invalid="JIRA_BASE_URL precisa ser https ou um endereço local de teste",
+    site_invalid="JIRA_SITE precisa ser só o nome do host (ex.: empresa.atlassian.net)",
+    positive_integer_required="{name} precisa ser um número inteiro positivo",
+    token_variable_empty="a variável {variable} (JIRA_TOKEN_ENV) está vazia ou ausente",
+    token_file_unreadable="não foi possível ler o arquivo de JIRA_TOKEN_FILE",
+    token_file_empty="o arquivo de JIRA_TOKEN_FILE está vazio",
+    token_missing="defina JIRA_TOKEN_ENV (nome da variável com o token) ou JIRA_TOKEN_FILE",
+    response_too_large="a resposta do Jira excede o tamanho máximo permitido",
+    network_failure="falha de rede ao falar com {site} ({error_type})",
+    invalid_credentials="credenciais inválidas para {site}",
+    rate_limited="limite de requisições do Jira; tentando de novo mais tarde",
+    unexpected_status="resposta inesperada do Jira (HTTP {status})",
+    response_not_json="a resposta do Jira não é JSON",
+    invalid_query="JQL inválido",
+    time_budget_exhausted="orçamento de tempo esgotado",
+    search_without_issues="a resposta de busca do Jira não tem a lista de issues",
+    offline_notice="dados de {time} (offline)",
+    empty_label="nenhum ticket",
+    others_label="Outros",
+    nobody_label="ninguem",
+    blank_text="não pode ser vazio",
+    invalid_columns="coluna inválida: {names} (use {choices})",
+    integer_required="precisa ser um número inteiro",
+    limit_range="precisa estar entre 1 e {maximum}",
+    meta_status="status",
+    meta_priority="prioridade",
+    meta_assignee="responsavel",
+    meta_site="site",
+    column_titles={
+        "key": "Chave",
+        "summary": "Resumo",
+        "status": "Status",
+        "assignee": "Responsável",
+        "priority": "Prioridade",
+        "updated": "Atualizado",
+    },
+)
+
+MESSAGES_BY_LANGUAGE = {ENGLISH: ENGLISH_MESSAGES, PORTUGUESE: PORTUGUESE_MESSAGES}
+
+
+def resolve_language(environ: Mapping[str, str]) -> str:
+    requested = environ.get(LANGUAGE_VARIABLE, "").strip().lower()
+    return PORTUGUESE if requested.startswith(PORTUGUESE_LANGUAGE_PREFIX) else ENGLISH
+
+
+def messages_for(language: str) -> Messages:
+    return MESSAGES_BY_LANGUAGE[language]
 
 
 class ConfigError(Exception):
@@ -103,6 +230,7 @@ class JiraConfig:
     state_dir: Path
     budget_seconds: int
     base_url: str
+    messages: Messages
 
 
 @dataclass(frozen=True)
@@ -116,29 +244,35 @@ class WidgetOptions:
 
 
 def load_config(environ: Mapping[str, str]) -> JiraConfig:
-    _reject_removed_variables(environ)
-    site = _read_site(environ)
+    messages = messages_for(resolve_language(environ))
+    _reject_removed_variables(environ, messages)
+    site = _read_site(environ, messages)
     email = environ.get("JIRA_EMAIL", "").strip()
     if "@" not in email or not email.isprintable():
-        raise ConfigError("JIRA_EMAIL precisa ser um e-mail válido")
+        raise ConfigError(messages.email_invalid)
     return JiraConfig(
         site=site,
         email=email,
-        token=_read_token(environ),
+        token=_read_token(environ, messages),
         state_dir=Path(environ.get("JIRA_STATE_DIR", DEFAULT_STATE_DIRECTORY)).expanduser(),
-        budget_seconds=_read_positive(environ, "JIRA_BUDGET_SECONDS", DEFAULT_BUDGET_SECONDS),
-        base_url=_read_base_url(environ, site),
+        budget_seconds=_read_positive(
+            environ, "JIRA_BUDGET_SECONDS", DEFAULT_BUDGET_SECONDS, messages
+        ),
+        base_url=_read_base_url(environ, site, messages),
+        messages=messages,
     )
 
 
-def _reject_removed_variables(environ):
+def _reject_removed_variables(environ, messages):
     for name in REMOVED_VARIABLES:
         if name in environ:
-            raise ConfigError(f"{name} foi removido; use --jql")
+            raise ConfigError(messages.removed_variable.format(name=name))
 
 
-def parse_options(arguments: list[str]) -> tuple[WidgetOptions, list[str]]:
-    parser = _build_options_parser()
+def parse_options(
+    arguments: list[str], messages: Messages = ENGLISH_MESSAGES
+) -> tuple[WidgetOptions, list[str]]:
+    parser = _build_options_parser(messages)
     namespace, remainder = parser.parse_known_args(arguments)
     options = WidgetOptions(
         jql=namespace.jql,
@@ -151,44 +285,55 @@ def parse_options(arguments: list[str]) -> tuple[WidgetOptions, list[str]]:
     return options, remainder
 
 
-def _build_options_parser():
+def _build_options_parser(messages):
     parser = argparse.ArgumentParser(prog="jira.py", allow_abbrev=False)
-    parser.add_argument("--jql", required=True, type=_non_blank_text)
+    parser.add_argument("--jql", required=True, type=_non_blank_text(messages))
     parser.add_argument("--title", default=DEFAULT_TITLE)
     parser.add_argument("--group-by", default="none", choices=GROUP_BY_CHOICES)
     parser.add_argument("--view", default="lines", choices=VIEW_CHOICES)
-    parser.add_argument("--columns", default=DEFAULT_COLUMNS, type=_column_list)
-    parser.add_argument("--max-issues", default=DEFAULT_MAX_ISSUES, type=_issue_limit)
+    parser.add_argument("--columns", default=DEFAULT_COLUMNS, type=_column_list(messages))
+    parser.add_argument("--max-issues", default=DEFAULT_MAX_ISSUES, type=_issue_limit(messages))
     return parser
 
 
-def _non_blank_text(raw):
-    if not raw.strip():
-        raise argparse.ArgumentTypeError("não pode ser vazio")
-    return raw
+def _non_blank_text(messages):
+    def convert(raw):
+        if not raw.strip():
+            raise argparse.ArgumentTypeError(messages.blank_text)
+        return raw
+
+    return convert
 
 
-def _column_list(raw):
-    columns = tuple(name.strip() for name in raw.split(COLUMNS_SEPARATOR))
-    unknown = [name for name in columns if name not in COLUMN_CHOICES]
-    if unknown:
-        raise argparse.ArgumentTypeError(
-            f"coluna inválida: {', '.join(unknown)} (use {', '.join(COLUMN_CHOICES)})"
-        )
-    return columns
+def _column_list(messages):
+    def convert(raw):
+        columns = tuple(name.strip() for name in raw.split(COLUMNS_SEPARATOR))
+        unknown = [name for name in columns if name not in COLUMN_CHOICES]
+        if unknown:
+            raise argparse.ArgumentTypeError(
+                messages.invalid_columns.format(
+                    names=", ".join(unknown), choices=", ".join(COLUMN_CHOICES)
+                )
+            )
+        return columns
+
+    return convert
 
 
-def _issue_limit(raw):
-    try:
-        limit = int(raw)
-    except ValueError:
-        raise argparse.ArgumentTypeError("precisa ser um número inteiro") from None
-    if not 1 <= limit <= MAXIMUM_ISSUES:
-        raise argparse.ArgumentTypeError(f"precisa estar entre 1 e {MAXIMUM_ISSUES}")
-    return limit
+def _issue_limit(messages):
+    def convert(raw):
+        try:
+            limit = int(raw)
+        except ValueError:
+            raise argparse.ArgumentTypeError(messages.integer_required) from None
+        if not 1 <= limit <= MAXIMUM_ISSUES:
+            raise argparse.ArgumentTypeError(messages.limit_range.format(maximum=MAXIMUM_ISSUES))
+        return limit
+
+    return convert
 
 
-def _read_base_url(environ, site):
+def _read_base_url(environ, site, messages):
     override = environ.get("JIRA_BASE_URL", "").strip()
     if not override:
         return f"https://{site}"
@@ -196,43 +341,43 @@ def _read_base_url(environ, site):
     is_secure = parsed.scheme == "https" and bool(parsed.hostname)
     is_local = parsed.scheme == "http" and parsed.hostname in LOCAL_HOSTS
     if not (is_secure or is_local) or any(character.isspace() for character in override):
-        raise ConfigError("JIRA_BASE_URL precisa ser https ou um endereço local de teste")
+        raise ConfigError(messages.base_url_invalid)
     return override.rstrip("/")
 
 
-def _read_site(environ):
+def _read_site(environ, messages):
     site = environ.get("JIRA_SITE", "")
     if not site or len(site) > MAXIMUM_SITE_LENGTH or not SITE_PATTERN.fullmatch(site):
-        raise ConfigError("JIRA_SITE precisa ser só o nome do host (ex.: empresa.atlassian.net)")
+        raise ConfigError(messages.site_invalid)
     return site
 
 
-def _read_positive(environ, name, default):
+def _read_positive(environ, name, default, messages):
     raw = environ.get(name)
     if raw is None or raw == "":
         return default
     if not raw.isascii() or not raw.isdigit() or int(raw) == 0:
-        raise ConfigError(f"{name} precisa ser um número inteiro positivo")
+        raise ConfigError(messages.positive_integer_required.format(name=name))
     return int(raw)
 
 
-def _read_token(environ):
+def _read_token(environ, messages):
     variable = environ.get("JIRA_TOKEN_ENV", "").strip()
     if variable:
         value = environ.get(variable, "").strip()
         if not value:
-            raise ConfigError(f"a variável {variable} (JIRA_TOKEN_ENV) está vazia ou ausente")
+            raise ConfigError(messages.token_variable_empty.format(variable=variable))
         return value
     path = environ.get("JIRA_TOKEN_FILE", "").strip()
     if path:
         try:
             value = Path(path).expanduser().read_text(encoding="utf-8").strip()
         except OSError:
-            raise ConfigError("não foi possível ler o arquivo de JIRA_TOKEN_FILE") from None
+            raise ConfigError(messages.token_file_unreadable) from None
         if not value:
-            raise ConfigError("o arquivo de JIRA_TOKEN_FILE está vazio")
+            raise ConfigError(messages.token_file_empty)
         return value
-    raise ConfigError("defina JIRA_TOKEN_ENV (nome da variável com o token) ou JIRA_TOKEN_FILE")
+    raise ConfigError(messages.token_missing)
 
 
 class JiraError(Exception):
@@ -252,6 +397,10 @@ class NetworkError(JiraError):
 
 
 class UnexpectedResponseError(JiraError):
+    pass
+
+
+class ResponseTooLargeError(UnexpectedResponseError):
     pass
 
 
@@ -279,7 +428,7 @@ def urllib_http(url, method, headers, timeout):
 def _read_limited(stream, limit):
     body = stream.read(limit + 1)
     if len(body) > limit:
-        raise UnexpectedResponseError("a resposta do Jira excede o tamanho máximo permitido")
+        raise ResponseTooLargeError
     return body
 
 
@@ -287,11 +436,16 @@ class JiraClient:
     def __init__(self, config, http):
         self._config = config
         self._http = http
+        self._messages = config.messages
         credentials = f"{config.email}:{config.token}".encode("utf-8")
         self._headers = {
             "Authorization": "Basic " + base64.b64encode(credentials).decode("ascii"),
             "Accept": "application/json",
         }
+
+    @property
+    def messages(self):
+        return self._messages
 
     def get_json(self, path, params=None):
         url = self._config.base_url + path
@@ -299,29 +453,34 @@ class JiraClient:
             url += "?" + urllib.parse.urlencode(params)
         try:
             status, body = self._http(url, "GET", self._headers, REQUEST_TIMEOUT_SECONDS)
+        except ResponseTooLargeError:
+            raise UnexpectedResponseError(self._messages.response_too_large) from None
         except (OSError, http.client.HTTPException) as error:
             raise NetworkError(
-                f"falha de rede ao falar com {self._config.site} ({type(error).__name__})"
+                self._messages.network_failure.format(
+                    site=self._config.site, error_type=type(error).__name__
+                )
             ) from None
         return self._decode(status, body)
 
     def _decode(self, status, body):
+        messages = self._messages
         if status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-            raise AuthError(f"credenciais inválidas para {self._config.site}")
+            raise AuthError(messages.invalid_credentials.format(site=self._config.site))
         if status == HTTP_BAD_REQUEST:
-            raise QueryError(_describe_query_failure(body))
+            raise QueryError(_describe_query_failure(body, messages))
         if status == HTTP_TOO_MANY_REQUESTS:
-            raise RateLimitError("limite de requisições do Jira; tentando de novo mais tarde")
+            raise RateLimitError(messages.rate_limited)
         if status >= HTTP_REDIRECT_FLOOR:
-            raise UnexpectedResponseError(f"resposta inesperada do Jira (HTTP {status})")
+            raise UnexpectedResponseError(messages.unexpected_status.format(status=status))
         try:
             return json.loads(body)
         except ValueError:
-            raise UnexpectedResponseError("a resposta do Jira não é JSON") from None
+            raise UnexpectedResponseError(messages.response_not_json) from None
 
 
-def _describe_query_failure(body):
-    prefix = "JQL inválido"
+def _describe_query_failure(body, messages):
+    prefix = messages.invalid_query
     try:
         messages = json.loads(body).get("errorMessages")
     except (ValueError, AttributeError):
@@ -330,6 +489,7 @@ def _describe_query_failure(body):
         return prefix
     first_message = messages[0].strip()[:MAXIMUM_QUERY_MESSAGE_LENGTH]
     return f"{prefix}: {first_message}" if first_message else prefix
+
 
 def parse_timestamp(text):
     if not isinstance(text, str) or not text:
@@ -460,10 +620,10 @@ def search_issues(
     page_token = None
     while True:
         if clock() - started_at > budget_seconds:
-            raise NetworkError("orçamento de tempo esgotado")
+            raise NetworkError(client.messages.time_budget_exhausted)
         remaining = max_issues - len(issues)
         payload = client.get_json(SEARCH_PATH, _search_params(jql, remaining, page_token))
-        page_issues = _parse_search_page(payload)
+        page_issues = _parse_search_page(payload, client.messages)
         issues.extend(page_issues[:remaining])
         page_token = payload.get("nextPageToken") or None
         if len(issues) >= max_issues:
@@ -483,40 +643,41 @@ def _search_params(jql, remaining, page_token):
     return params
 
 
-def _parse_search_page(payload):
+def _parse_search_page(payload, messages):
     raw_issues = payload.get("issues") if isinstance(payload, dict) else None
     if not isinstance(raw_issues, list):
-        raise UnexpectedResponseError("a resposta de busca do Jira não tem a lista de issues")
+        raise UnexpectedResponseError(messages.search_without_issues)
     parsed = (parse_issue(raw_issue) for raw_issue in raw_issues)
     return [issue for issue in parsed if issue is not None]
 
 
-def build_snapshot(result, options, site, now, offline_since=None):
-    blocks = [_build_summary_block(result, options, now)]
+def build_snapshot(result, options, site, now, offline_since=None, messages=ENGLISH_MESSAGES):
+    blocks = [_build_summary_block(result, options, now, messages)]
     if offline_since is not None:
-        blocks.insert(0, _offline_notice_block(offline_since))
+        blocks.insert(0, _offline_notice_block(offline_since, messages))
     snapshot = {
         "protocol": PROTOCOL_VERSION,
         "summary": {"title": options.title, "blocks": blocks},
     }
     if result.issues:
-        snapshot["detail"] = _build_detail(result.issues, options, site)
+        snapshot["detail"] = _build_detail(result.issues, options, site, messages)
     return snapshot
 
 
-def _offline_notice_block(offline_since):
-    text = offline_since.astimezone().strftime(OFFLINE_NOTICE_FORMAT)
+def _offline_notice_block(offline_since, messages):
+    time_of_day = offline_since.astimezone().strftime(OFFLINE_TIME_FORMAT)
+    text = messages.offline_notice.format(time=time_of_day)
     return {"type": "lines", "lines": [{"text": text, "tone": "warn"}]}
 
 
-def _build_summary_block(result, options, now):
+def _build_summary_block(result, options, now, messages):
     if options.view == "stat":
-        return _stat_block(result, options)
+        return _stat_block(result, options, messages)
     if not result.issues:
-        return {"type": "lines", "lines": [{"text": EMPTY_LABEL, "tone": "muted"}]}
+        return {"type": "lines", "lines": [{"text": messages.empty_label, "tone": "muted"}]}
     visible = result.issues[:MAXIMUM_BLOCK_ROWS]
     if options.view == "table":
-        return _table_block(visible, options.columns, now)
+        return _table_block(visible, options.columns, now, messages)
     return _lines_block(visible)
 
 
@@ -533,15 +694,15 @@ def _lines_block(issues):
     }
 
 
-def _table_block(issues, columns, now):
+def _table_block(issues, columns, now, messages):
     return {
         "type": "table",
-        "columns": [{"title": COLUMN_TITLES[column]} for column in columns],
-        "rows": [[_cell_text(issue, column, now) for column in columns] for issue in issues],
+        "columns": [{"title": messages.column_titles[column]} for column in columns],
+        "rows": [[_cell_text(issue, column, now, messages) for column in columns] for issue in issues],
     }
 
 
-def _cell_text(issue, column, now):
+def _cell_text(issue, column, now, messages):
     if column == "key":
         return issue.key
     if column == "summary":
@@ -549,19 +710,23 @@ def _cell_text(issue, column, now):
     if column == "status":
         return issue.status
     if column == "assignee":
-        return _group_name(issue, "assignee")
+        return _group_name(issue, "assignee", messages)
     if column == "priority":
-        return _group_name(issue, "priority")
+        return _group_name(issue, "priority", messages)
     return format_duration(now - issue.updated)
 
 
-def _stat_block(result, options):
+def _stat_block(result, options, messages):
     suffix = MORE_RESULTS_SUFFIX if result.has_more else ""
     if options.group_by == "none" or not result.issues:
         counts = [(options.title, len(result.issues))]
     else:
         counts = _collapse_small_groups(
-            [(name, len(members)) for name, members in _group_issues(result.issues, options.group_by)]
+            [
+                (name, len(members))
+                for name, members in _group_issues(result.issues, options.group_by, messages)
+            ],
+            messages,
         )
     return {
         "type": "stat",
@@ -569,50 +734,50 @@ def _stat_block(result, options):
     }
 
 
-def _collapse_small_groups(counts):
+def _collapse_small_groups(counts, messages):
     if len(counts) <= MAXIMUM_STAT_ITEMS:
         return counts
     kept = counts[: MAXIMUM_STAT_ITEMS - 1]
     others = sum(count for _, count in counts[MAXIMUM_STAT_ITEMS - 1 :])
-    return kept + [(OTHERS_LABEL, others)]
+    return kept + [(messages.others_label, others)]
 
 
-def _group_name(issue, group_by):
+def _group_name(issue, group_by, messages):
     if group_by == "assignee":
-        return issue.assignee or NOBODY_LABEL
+        return issue.assignee or messages.nobody_label
     if group_by == "priority":
         return issue.priority or MISSING_PRIORITY
     return issue.status
 
 
-def _group_issues(issues, group_by):
+def _group_issues(issues, group_by, messages):
     groups = {}
     for issue in issues:
-        groups.setdefault(_group_name(issue, group_by), []).append(issue)
+        groups.setdefault(_group_name(issue, group_by, messages), []).append(issue)
     return sorted(groups.items(), key=lambda group: (-len(group[1]), group[0]))
 
 
-def _build_detail(issues, options, site):
+def _build_detail(issues, options, site, messages):
     if options.group_by == "none":
         groups = [(options.title, issues)]
     else:
-        groups = _group_issues(issues, options.group_by)
+        groups = _group_issues(issues, options.group_by, messages)
     return [
-        {"heading": name, "items": [_detail_item(issue, site) for issue in members]}
+        {"heading": name, "items": [_detail_item(issue, site, messages) for issue in members]}
         for name, members in groups
     ]
 
 
-def _detail_item(issue, site):
+def _detail_item(issue, site, messages):
     summary = flatten_text(issue.summary, SUMMARY_TEXT_LIMIT)
     return {
         "id": issue.key,
         "text": f"{issue.key}{DETAIL_SEPARATOR}{summary}",
         "meta": {
-            "status": issue.status,
-            "prioridade": issue.priority or MISSING_PRIORITY,
-            "responsavel": issue.assignee or NOBODY_LABEL,
-            "site": site,
+            messages.meta_status: issue.status,
+            messages.meta_priority: issue.priority or MISSING_PRIORITY,
+            messages.meta_assignee: issue.assignee or messages.nobody_label,
+            messages.meta_site: site,
         },
     }
 
@@ -677,17 +842,18 @@ def main(
     environ = os.environ if environ is None else environ
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
+    messages = messages_for(resolve_language(environ))
     try:
-        options, remainder = parse_options(arguments)
+        options, remainder = parse_options(arguments, messages)
     except SystemExit:
         return ARGUMENT_ERROR_EXIT_CODE
     if remainder != SNAPSHOT_COMMAND:
-        print(USAGE_MESSAGE, file=stderr)
+        print(messages.usage, file=stderr)
         return ARGUMENT_ERROR_EXIT_CODE
     try:
         config = load_config(environ)
     except ConfigError as error:
-        return _fail(stderr, error)
+        return _fail(stderr, error, messages)
     moment = now if now is not None else datetime.now(timezone.utc)
     return _run_snapshot(config, options, http, moment, clock, stdout, stderr)
 
@@ -700,26 +866,26 @@ def _run_snapshot(config, options, http, moment, clock, stdout, stderr):
             JiraClient(config, http), options.jql, options.max_issues, config.budget_seconds, clock
         )
     except (AuthError, QueryError) as error:
-        return _fail(stderr, error)
+        return _fail(stderr, error, config.messages)
     except (RateLimitError, NetworkError, UnexpectedResponseError) as error:
         cached = cache.load(*cache_key)
         if cached is None:
-            return _fail(stderr, error)
+            return _fail(stderr, error, config.messages)
         stale_result, saved_at = cached
-        _print_snapshot(stdout, stale_result, options, config.site, moment, saved_at)
+        _print_snapshot(stdout, stale_result, options, config, moment, saved_at)
         return 0
     cache.save(*cache_key, result, moment)
-    _print_snapshot(stdout, result, options, config.site, moment, None)
+    _print_snapshot(stdout, result, options, config, moment, None)
     return 0
 
 
-def _print_snapshot(stdout, result, options, site, moment, offline_since):
-    snapshot = build_snapshot(result, options, site, moment, offline_since)
+def _print_snapshot(stdout, result, options, config, moment, offline_since):
+    snapshot = build_snapshot(result, options, config.site, moment, offline_since, config.messages)
     print(json.dumps(snapshot, ensure_ascii=False), file=stdout)
 
 
-def _fail(stderr, error):
-    print(f"erro: {error}", file=stderr)
+def _fail(stderr, error, messages):
+    print(messages.error_line.format(message=error), file=stderr)
     return FAILURE_EXIT_CODE
 
 
