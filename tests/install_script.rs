@@ -274,6 +274,9 @@ fn a_missing_release_file_fails_without_installing() {
 
 #[test]
 fn wget_is_used_when_curl_is_missing() {
+    if find_on_host_path("wget").is_none() {
+        return;
+    }
     let mut environment = Environment::new();
     environment.downloader = "wget";
     environment.server.set_latest("0.0.11");
