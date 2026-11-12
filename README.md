@@ -83,7 +83,7 @@ Then just run:
 mosaic
 ```
 
-On the first run Mosaic creates `~/.config/mosaic/` with a short `mosaic.toml`: two example widgets that only need `python3`. Add service widgets with `mosaic plugins setup <name>`, or run `mosaic --default-config` to see every option, commented. A key Mosaic does not know is ignored with a warning, in the panel and in `mosaic check --config`. Edit, press `R`, done.
+On the first run Mosaic creates `~/.config/mosaic/` with a short `mosaic.toml`: two example widgets that only need `python3`. Add service widgets with `mosaic plugins setup <name>`, or run `mosaic --default-config` to see every option, commented. A key Mosaic does not know is ignored with a warning, in the panel and in `mosaic check --config`. Edit, press `R`, done. To add a widget without leaving the panel, press `+`.
 
 > **Just want to look around?** `scripts/demo.sh` (from the repo) starts Mosaic with fake data and an isolated config. It never touches `~/.config/mosaic`.
 
@@ -103,6 +103,7 @@ Press `?` at any time: the help is always one key away, and the bottom line show
 | `a` | Actions menu for the focused widget or item |
 | `r` | Refresh everything now |
 | `R` | Reload `mosaic.toml` |
+| `+` | Add a widget: choose an installed plugin, answer its questions, review the block and save |
 | `p` / `x` | Start or pause the pomodoro / reset it |
 | `i` | Ask an AI what to do next (if `[llm]` is on) |
 | `PgUp` `PgDn` `Home` `End` | Move faster inside an open widget |
@@ -158,6 +159,8 @@ Remote installation shows source, plugin version, minimum Mosaic version and des
 The old collective **mosaic-plugins** package is retired. Existing installations remain usable and are never removed automatically. To copy its files offline, run `mosaic plugins install --from /usr/share/mosaic/plugins jira`; `--from DIR` also accepts a local checkout's `plugins` directory. The panel and local installation do not need Git. `--to DIR` changes the plugins destination. Remote packages contain a regular script, `SKILL.md` and a versioned `setup.toml`. The installer copies only direct `.py`/`.js` files and `README.md`, `SKILL.md`, `setup.toml`; it does not install dependencies or run the plugin. Python scripts need `python3`; JavaScript scripts need `node`, which the setup selects from the script extension. The manifest's `script` describes the installed path (`plugins/<name>/<file>.py`), while the source file lives directly in the selected repository folder. The installer links the skill into `~/.claude/skills` when Claude Code is present; `--no-skill` skips linking and `--skills-dir DIR` selects another directory.
 
 `mosaic plugins setup <name>` asks one question at a time, shows the finished `[[widgets]]` block and only appends it to `mosaic.toml` after confirmation. It never asks for a token, only the environment variable name or file path. `--print` shows the block, `--advanced` asks optional settings and `--config-dir DIR` selects another configuration folder. Run it again with another id for a second widget, or copy an example from `mosaic --default-config`.
+
+Inside the panel, `+` opens the same interview as a modal: it lists the installed plugins that have a `setup.toml`, asks the same questions with the same validation (an invalid answer shows its message and keeps the question), shows the `[[widgets]]` block and, on `Enter`, appends it to `mosaic.toml` and reloads like `R`. `Esc` (or `Ctrl+C`) cancels at any step and writes nothing. Without installed plugins the modal shows `mosaic plugins install <name>` and the official names; installing from inside the panel is not supported. An empty panel says `nenhum widget ainda` and points to `+`.
 
 The Azure DevOps widgets sign in with Microsoft Entra ID (`az login`, device code, service principal or managed identity); personal access tokens are no longer supported.
 

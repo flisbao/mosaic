@@ -17,6 +17,8 @@ Um widget é um comando completo (script + argumentos) que o Mosaic executa em i
 
 O `setup.toml` declara também `version` e `min_mosaic_version`, versões estáveis `MAJOR.MINOR.PATCH`. Ao alterar um plugin, incremente só sua `version`; aumente o mínimo quando depender de recurso novo do núcleo. O instalador recusa mínimo incompatível mesmo com `--force`. A instalação segue a branch padrão, sem fixar revisão. O script precisa estar diretamente na pasta selecionada; `script = "plugins/<pasta>/<arquivo>.py"` descreve seu caminho depois de instalado.
 
+O mesmo `setup.toml` alimenta a entrevista do terminal (`mosaic plugins setup <pasta>`) e o modal do painel (tecla `+`): as duas interfaces dirigem a mesma máquina de estados, então as mesmas respostas geram o mesmo bloco `[[widgets]]`. Não há texto de ajuda por pergunta além do `prompt`, das `choices` e dos modelos prontos.
+
 O roteiro do `setup.toml` só lista o que o plugin **já** lê (variáveis do README, opções de linha de comando, padrões, faixas, condições e os modelos prontos do README). Não invente configuração que o código não implementa: `test_setup_manifests.py` confere o arquivo com o README e com o código.
 
 Skills existentes: `mosaic-plugin-jira`, `-github`, `-gitlab`, `-azure-devops`, `-azure-pipelines`, `-calendar`. Ao mexer em um deles, use a skill dele junto com esta.

@@ -39,6 +39,7 @@ const fn hint(keys: &'static str, description: &'static str) -> KeyHint {
 
 pub const HELP_HINT: KeyHint = hint("?", "ajuda");
 const QUIT_FOOTER_HINT: KeyHint = hint("q", "sair");
+const ADD_WIDGET_HINT: KeyHint = hint("+", "adicionar widget");
 
 const GRID_HINTS: [KeyHint; 6] = [
     hint("←↑↓→ hjkl", "mover"),
@@ -57,7 +58,8 @@ const FOCUS_HINTS: [KeyHint; 5] = [
     hint("Esc", "voltar"),
 ];
 
-const GLOBAL_HINTS: [KeyHint; 7] = [
+const GLOBAL_HINTS: [KeyHint; 8] = [
+    ADD_WIDGET_HINT,
     hint("r", "atualizar tudo"),
     hint("R", "recarregar config"),
     hint("a", "ações do widget focado"),
@@ -81,6 +83,7 @@ pub fn global_hints() -> &'static [KeyHint] {
 pub fn footer_hints(context: HintContext, width: usize) -> Vec<&'static KeyHint> {
     let mut candidates: Vec<&'static KeyHint> = context_hints(context).iter().collect();
     if context == HintContext::Grid {
+        candidates.push(&ADD_WIDGET_HINT);
         candidates.push(&QUIT_FOOTER_HINT);
     }
     let mut remaining = width
@@ -153,6 +156,15 @@ mod tests {
         );
         assert!(narrow.len() < wide.len());
         assert!(total_width(&narrow) <= NARROW_WIDTH);
+    }
+
+    #[test]
+    fn the_add_widget_key_is_in_the_help_and_in_the_grid_footer_only() {
+        assert!(global_hints().iter().any(|hint| hint.keys == "+"));
+        let grid = footer_hints(HintContext::Grid, WIDE_WIDTH);
+        assert!(grid.iter().any(|hint| hint.keys == "+"));
+        let focus = footer_hints(HintContext::Focus, WIDE_WIDTH);
+        assert!(!focus.iter().any(|hint| hint.keys == "+"));
     }
 
     #[test]

@@ -82,7 +82,7 @@ Primeiros passos:
   mosaic plugins install jira
   mosaic plugins install flisbao/mosaic/plugins/jira --yes
   mosaic plugins setup jira
-  mosaic                          (aperte R para recarregar o mosaic.toml)
+  mosaic                          (aperte + para adicionar um widget sem sair do painel; R recarrega o mosaic.toml)
 
 Configuração: {configuration}
   mosaic.toml  widgets, abas, tema ([theme] name = \"tokyo-night\"), pomodoro e IA
@@ -92,7 +92,7 @@ Configuração: {configuration}
 Aviso de versão nova: no máximo uma consulta por dia ao github.com ao abrir o painel.
   Desligue com [update] check = false no mosaic.toml ou MOSAIC_NO_UPDATE_CHECK=1.
 
-No painel: ? mostra as teclas, R recarrega, r atualiza, q sai.
+No painel: ? mostra as teclas, + adiciona um widget, R recarrega, r atualiza, q sai.
 Cada subcomando mostra o seu uso quando chamado sem argumentos ou com argumento errado.
 Documentação: {DOCUMENTATION_URL}"
     )

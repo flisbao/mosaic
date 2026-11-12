@@ -41,6 +41,8 @@ O pacote coletivo `mosaic-plugins` foi aposentado; instalações existentes cont
 
 Depois rode `mosaic plugins setup jira`: a entrevista mostra o bloco e só grava no `mosaic.toml` após sua confirmação. Nunca pede o token, apenas o nome da variável ou o caminho do arquivo; `--print` mostra o bloco, `--advanced` inclui opções avançadas e `--config-dir DIR` muda a configuração. Pressione `R` no painel para recarregar.
 
+Sem sair do painel, a tecla `+` abre a mesma entrevista como um modal: lista os plugins instalados que têm `setup.toml`, faz as mesmas perguntas com a mesma validação (uma resposta inválida mostra a mensagem e mantém a pergunta), mostra o bloco `[[widgets]]` e, com `Enter`, grava no `mosaic.toml` e recarrega como a tecla `R`. `Esc` (ou `Ctrl+C`) cancela em qualquer passo sem gravar nada. Sem plugin instalado o modal mostra `mosaic plugins install <nome>` e os nomes oficiais; instalar de dentro do painel não é suportado. O painel vazio diz `nenhum widget ainda` e aponta para a tecla `+`.
+
 Se preferir editar à mão, `mosaic --default-config` mostra todas as opções comentadas. Uma chave que o Mosaic não conhece é ignorada com aviso, no painel e no `mosaic check --config`. Se você já usava a versão anterior, copie `~/.config/panel-tui/` para `~/.config/mosaic/`.
 
 O prompt é enviado ao `claude` e ao `opencode` pela entrada padrão, nunca como argumento, para não aparecer em `ps`.
@@ -114,6 +116,7 @@ Teclas (modo grade, com os widgets visíveis):
 | `a` | Abre o menu de ações do widget focado |
 | `r` | Atualiza todos os widgets agora |
 | `R` | Recarrega o `mosaic.toml` |
+| `+` | Adiciona um widget: escolhe um plugin instalado, responde às perguntas, revisa o bloco e grava |
 | `i` | Pede uma recomendação à IA (se `[llm]` estiver ligado) |
 | `p` / `x` | Inicia ou pausa / reinicia o pomodoro |
 | `q` ou `Ctrl+C` | Sai |
