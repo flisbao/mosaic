@@ -369,7 +369,7 @@ impl AppState {
 
     pub fn handle_key(&mut self, key: KeyInput) -> Option<Command> {
         self.notice = None;
-        if self.alerts.dismiss_front() {
+        if !self.is_typing() && self.alerts.dismiss_front() {
             return None;
         }
         let key = if self.is_typing() {
@@ -1692,6 +1692,33 @@ mod tests {
             panic!("esperava o fluxo");
         };
         assert!(matches!(open.step(), AddWidgetStep::Answering(_)));
+    }
+
+    #[test]
+    fn an_alert_arriving_while_typing_in_the_flow_does_not_swallow_the_keys() {
+        let mut app = adding_widget();
+        app.handle_key(KeyInput::Enter);
+        app.show_alert(message("chegou digitando"));
+        for letter in ['a', 'b'] {
+            assert_eq!(app.handle_key(KeyInput::Character(letter)), None);
+        }
+        assert_eq!(app.pending_alert_count(), 1);
+        let Mode::AddingWidget(flow) = app.mode() else {
+            panic!("esperava o fluxo");
+        };
+        let AddWidgetStep::Answering(answering) = flow.step() else {
+            panic!("esperava perguntas");
+        };
+        assert_eq!(answering.field().text(), "ab");
+    }
+
+    #[test]
+    fn an_alert_is_dismissed_by_a_key_in_the_flow_when_nothing_is_being_typed() {
+        let mut app = adding_widget();
+        app.show_alert(message("na lista"));
+        assert_eq!(app.handle_key(KeyInput::Down), None);
+        assert!(app.alert().is_none());
+        assert!(matches!(app.mode(), Mode::AddingWidget(_)));
     }
 
     #[test]
