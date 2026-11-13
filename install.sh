@@ -11,6 +11,7 @@ set -eu
 DEFAULT_DOWNLOAD_BASE="https://github.com/flisbao/mosaic/releases"
 EXECUTABLE_NAME="mosaic"
 EXECUTABLE_MODE=755
+VERSION_COMPONENT_COUNT=3
 
 fail() {
   printf 'install.sh: %s\n' "$1" >&2
@@ -86,6 +87,23 @@ latest_release_location() {
   fi
 }
 
+is_release_version() {
+  case "$1" in
+    v*) ;;
+    *) return 1 ;;
+  esac
+  numbers=${1#v}
+  case "$numbers" in
+    '' | *[!0-9.]* | .* | *. | *..*) return 1 ;;
+  esac
+  previous_separator=$IFS
+  IFS=.
+  # shellcheck disable=SC2086
+  set -- $numbers
+  IFS=$previous_separator
+  [ "$#" -eq "$VERSION_COMPONENT_COUNT" ]
+}
+
 resolve_version() {
   if [ -n "${MOSAIC_VERSION:-}" ]; then
     requested=$MOSAIC_VERSION
@@ -97,7 +115,7 @@ resolve_version() {
     v*) version=$requested ;;
     *) version="v$requested" ;;
   esac
-  if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+  if ! is_release_version "$version"; then
     fail "invalid version: $requested (use something like v0.0.11)"
   fi
 }

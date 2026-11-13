@@ -221,21 +221,37 @@ fn a_pinned_version_is_installed_with_or_without_the_v_prefix() {
 
 #[test]
 fn an_invalid_version_is_refused_before_any_download() {
-    let environment = Environment::new();
-    let output = environment.run(&[
-        ("MOSAIC_VERSION", "v1.2.3/../x"),
-        (
-            "MOSAIC_INSTALL_DIR",
-            environment.install_directory().to_str().unwrap(),
-        ),
-    ]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        text(&output).contains("invalid version"),
-        "{}",
-        text(&output)
-    );
-    assert!(environment.server.requests().is_empty());
+    let invalid_versions = [
+        "v1.2.3/../x",
+        "v1.2.3\n../x",
+        "v1.2.3\n",
+        "\nv1.2.3",
+        "v1.2",
+        "v1.2.3.4",
+        "v1..3",
+        "v.1.2",
+        "v1.2.",
+        "vv1.2.3",
+        "v",
+        "v1.2.3-rc1",
+    ];
+    for invalid in invalid_versions {
+        let environment = Environment::new();
+        let output = environment.run(&[
+            ("MOSAIC_VERSION", invalid),
+            (
+                "MOSAIC_INSTALL_DIR",
+                environment.install_directory().to_str().unwrap(),
+            ),
+        ]);
+        assert_eq!(output.status.code(), Some(1), "{invalid:?}");
+        assert!(
+            text(&output).contains("invalid version"),
+            "{invalid:?}: {}",
+            text(&output)
+        );
+        assert!(environment.server.requests().is_empty(), "{invalid:?}");
+    }
 }
 
 #[test]
