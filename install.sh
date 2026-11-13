@@ -67,13 +67,25 @@ curl_download() {
   fi
 }
 
+wget_supports_https_only() {
+  wget --help 2>&1 | grep -q -- '--https-only'
+}
+
+wget_download() {
+  if [ -z "${MOSAIC_DOWNLOAD_BASE:-}" ] && wget_supports_https_only; then
+    wget --https-only "$@"
+  else
+    wget "$@"
+  fi
+}
+
 download_file() {
   url=$1
   destination=$2
   if [ "$downloader" = curl ]; then
     curl_download -fsSL -o "$destination" "$url" || fail "could not download $url"
   else
-    wget -q -O "$destination" "$url" || fail "could not download $url"
+    wget_download -q -O "$destination" "$url" || fail "could not download $url"
   fi
 }
 
@@ -83,7 +95,7 @@ latest_release_location() {
     curl_download -fsSL -o /dev/null -w '%{url_effective}' "$url" ||
       fail "could not find the latest version at $url"
   else
-    wget -q -S -O /dev/null --max-redirect=0 "$url" 2>&1 |
+    wget_download -q -S -O /dev/null --max-redirect=0 "$url" 2>&1 |
       sed -n 's/^ *[Ll]ocation: *//p' | tr -d '\r' | tail -n 1 || true
   fi
 }

@@ -398,6 +398,83 @@ fn wget_is_used_when_curl_is_missing() {
     assert!(environment.install_directory().join("mosaic").is_file());
 }
 
+fn recording_wget(environment: &mut Environment, help_text: &str) -> PathBuf {
+    environment.downloader = "recording-wget";
+    let wrappers = environment.path("wrappers");
+    fs::create_dir_all(&wrappers).unwrap();
+    let log = environment.path("wget-arguments");
+    write_executable(
+        &wrappers.join("wget"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then echo '{help_text}'; exit 0; fi\n\
+             echo \"$*\" >> '{}'\nexit 1\n",
+            log.display()
+        ),
+    );
+    environment.extra_path = Some(wrappers);
+    log
+}
+
+fn download_attempts(log: &Path) -> Vec<String> {
+    fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn wget_downloads_only_over_https_when_the_default_source_is_used_and_wget_supports_it() {
+    let mut environment = Environment::new();
+    let log = recording_wget(&mut environment, "  --https-only  only follow secure links");
+    environment.run(&[
+        ("MOSAIC_DOWNLOAD_BASE", ""),
+        ("MOSAIC_VERSION", "v0.0.11"),
+        (
+            "MOSAIC_INSTALL_DIR",
+            environment.install_directory().to_str().unwrap(),
+        ),
+    ]);
+    let attempts = download_attempts(&log);
+    assert!(!attempts.is_empty());
+    assert!(
+        attempts
+            .iter()
+            .all(|arguments| arguments.starts_with("--https-only ")),
+        "{attempts:?}"
+    );
+}
+
+#[test]
+fn a_wget_without_https_only_or_a_custom_download_base_keeps_the_plain_call() {
+    let mut environment = Environment::new();
+    let log = recording_wget(&mut environment, "BusyBox wget");
+    environment.run(&[
+        ("MOSAIC_DOWNLOAD_BASE", ""),
+        ("MOSAIC_VERSION", "v0.0.11"),
+        (
+            "MOSAIC_INSTALL_DIR",
+            environment.install_directory().to_str().unwrap(),
+        ),
+    ]);
+    assert!(!download_attempts(&log)
+        .iter()
+        .any(|arguments| arguments.contains("--https-only")));
+
+    let mut environment = Environment::new();
+    let log = recording_wget(&mut environment, "  --https-only  only follow secure links");
+    environment.run(&[
+        ("MOSAIC_VERSION", "v0.0.11"),
+        (
+            "MOSAIC_INSTALL_DIR",
+            environment.install_directory().to_str().unwrap(),
+        ),
+    ]);
+    assert!(!download_attempts(&log)
+        .iter()
+        .any(|arguments| arguments.contains("--https-only")));
+}
+
 #[test]
 fn without_a_downloader_or_a_checksum_tool_it_aborts_without_installing() {
     let mut environment = Environment::new();
