@@ -387,7 +387,6 @@ mod tests {
     struct FakeProbe {
         executable: PathBuf,
         debian_owned: bool,
-        homebrew_prefix: Option<PathBuf>,
     }
     impl InstallationProbe for FakeProbe {
         fn executable_path(&self) -> Result<PathBuf, ReleaseError> {
@@ -395,9 +394,6 @@ mod tests {
         }
         fn owned_by_debian_package(&self, _: &Path) -> bool {
             self.debian_owned
-        }
-        fn homebrew_prefix(&self) -> Option<PathBuf> {
-            self.homebrew_prefix.clone()
         }
         fn cargo_home(&self) -> Option<PathBuf> {
             None
@@ -455,7 +451,6 @@ mod tests {
         directory: tempfile::TempDir,
         latest: Result<ReleaseVersion, ReleaseError>,
         debian_owned: bool,
-        homebrew_prefix: Option<PathBuf>,
         checksum: String,
         denied: bool,
         executable_relative: &'static str,
@@ -467,7 +462,6 @@ mod tests {
                 directory: tempfile::tempdir().unwrap(),
                 latest: Ok(version("0.0.11")),
                 debian_owned: false,
-                homebrew_prefix: None,
                 checksum: "a".repeat(64),
                 denied: false,
                 executable_relative: "bin/mosaic",
@@ -487,7 +481,6 @@ mod tests {
             let probe = FakeProbe {
                 executable: executable.clone(),
                 debian_owned: self.debian_owned,
-                homebrew_prefix: self.homebrew_prefix.clone(),
             };
             let source = FakeSource(self.latest.clone());
             let checksums = FakeChecksum(self.checksum.clone());
@@ -691,7 +684,6 @@ mod tests {
         let probe = FakeProbe {
             executable,
             debian_owned: false,
-            homebrew_prefix: None,
         };
         let source = FakeSource(Ok(version("0.0.11")));
         let services = UpdateServices {

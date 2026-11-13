@@ -128,13 +128,12 @@ pub enum InstallMethod {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallFacts {
     pub owned_by_debian_package: bool,
-    pub homebrew_prefix: Option<PathBuf>,
     pub cargo_home: Option<PathBuf>,
 }
 
 impl InstallMethod {
     pub fn classify(executable: &Path, facts: &InstallFacts) -> Self {
-        if is_homebrew_path(executable, facts.homebrew_prefix.as_deref()) {
+        if is_homebrew_path(executable) {
             Self::Homebrew
         } else if facts.owned_by_debian_package {
             Self::DebianPackage
@@ -150,11 +149,10 @@ impl InstallMethod {
     }
 }
 
-fn is_homebrew_path(executable: &Path, prefix: Option<&Path>) -> bool {
+fn is_homebrew_path(executable: &Path) -> bool {
     executable
         .components()
         .any(|component| component == Component::Normal(HOMEBREW_CELLAR_DIRECTORY.as_ref()))
-        || prefix.is_some_and(|prefix| executable.starts_with(prefix))
 }
 
 fn is_cargo_path(executable: &Path, cargo_home: Option<&Path>) -> bool {
@@ -322,26 +320,23 @@ mod tests {
     }
 
     #[test]
-    fn homebrew_is_recognised_by_the_cellar_or_the_prefix() {
-        let facts = InstallFacts {
-            homebrew_prefix: Some(PathBuf::from("/opt/homebrew")),
-            ..InstallFacts::default()
-        };
-        assert_eq!(
-            classify(
-                "/opt/homebrew/Cellar/mosaic/0.0.11/bin/mosaic",
-                &InstallFacts::default()
-            ),
-            InstallMethod::Homebrew
-        );
-        assert_eq!(
-            classify("/opt/homebrew/bin/mosaic", &facts),
-            InstallMethod::Homebrew
-        );
-        assert_eq!(
-            classify("/opt/other/bin/mosaic", &facts),
-            InstallMethod::SelfManaged
-        );
+    fn homebrew_is_recognised_by_the_cellar_in_the_canonical_path() {
+        let facts = InstallFacts::default();
+        for executable in [
+            "/opt/homebrew/Cellar/mosaic/0.0.11/bin/mosaic",
+            "/usr/local/Cellar/mosaic/0.0.11/bin/mosaic",
+            "/home/linuxbrew/.linuxbrew/Cellar/mosaic/0.0.11/bin/mosaic",
+        ] {
+            assert_eq!(classify(executable, &facts), InstallMethod::Homebrew);
+        }
+    }
+
+    #[test]
+    fn an_install_script_binary_under_the_homebrew_prefix_is_not_homebrew() {
+        let facts = InstallFacts::default();
+        for executable in ["/usr/local/bin/mosaic", "/opt/other/bin/mosaic"] {
+            assert_eq!(classify(executable, &facts), InstallMethod::SelfManaged);
+        }
     }
 
     #[test]

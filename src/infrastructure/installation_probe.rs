@@ -10,7 +10,6 @@ use crate::infrastructure::process::{run_process, CancelFlag, ProcessLimits};
 const DPKG_PROGRAM: &str = "dpkg";
 const DPKG_TIMEOUT: Duration = Duration::from_secs(10);
 const MAXIMUM_DPKG_OUTPUT_BYTES: usize = 65_536;
-const HOMEBREW_PREFIX_VARIABLE: &str = "HOMEBREW_PREFIX";
 const CARGO_HOME_VARIABLE: &str = "CARGO_HOME";
 const DEFAULT_CARGO_DIRECTORY: &str = ".cargo";
 const EXECUTABLE_MODE: u32 = 0o755;
@@ -47,10 +46,6 @@ impl InstallationProbe for SystemInstallationProbe {
             maximum_output_bytes: MAXIMUM_DPKG_OUTPUT_BYTES,
         };
         run_process(command, None, &limits, &CancelFlag::default()).is_ok()
-    }
-
-    fn homebrew_prefix(&self) -> Option<PathBuf> {
-        non_empty_path(std::env::var_os(HOMEBREW_PREFIX_VARIABLE))
     }
 
     fn cargo_home(&self) -> Option<PathBuf> {

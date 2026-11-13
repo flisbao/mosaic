@@ -266,7 +266,6 @@ pub trait ExecutableReplacer {
 pub trait InstallationProbe {
     fn executable_path(&self) -> Result<std::path::PathBuf, ReleaseError>;
     fn owned_by_debian_package(&self, executable: &std::path::Path) -> bool;
-    fn homebrew_prefix(&self) -> Option<std::path::PathBuf>;
     fn cargo_home(&self) -> Option<std::path::PathBuf>;
 }
 

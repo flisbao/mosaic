@@ -104,7 +104,6 @@ pub fn plan_update(
     let facts = InstallFacts {
         owned_by_debian_package: InstallMethod::may_be_system_package(&executable)
             && probe.owned_by_debian_package(&executable),
-        homebrew_prefix: probe.homebrew_prefix(),
         cargo_home: probe.cargo_home(),
     };
     match InstallMethod::classify(&executable, &facts) {
@@ -280,9 +279,6 @@ mod tests {
         fn owned_by_debian_package(&self, _: &Path) -> bool {
             *self.probed.borrow_mut() = true;
             self.debian_owned
-        }
-        fn homebrew_prefix(&self) -> Option<PathBuf> {
-            None
         }
         fn cargo_home(&self) -> Option<PathBuf> {
             Some(PathBuf::from("/home/ana/.cargo"))
