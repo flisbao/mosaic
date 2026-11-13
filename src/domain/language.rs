@@ -43,10 +43,15 @@ impl Language {
     }
 
     pub fn detect(lookup: impl Fn(&str) -> Option<String>) -> Self {
-        std::iter::once(LANGUAGE_VARIABLE)
-            .chain(LOCALE_VARIABLES)
-            .find_map(|name| lookup(name).filter(|value| !value.trim().is_empty()))
-            .map_or(Language::English, |value| Language::from_locale(&value))
+        lookup(LANGUAGE_VARIABLE)
+            .and_then(|value| Self::from_setting(&value))
+            .or_else(|| {
+                LOCALE_VARIABLES
+                    .into_iter()
+                    .find_map(|name| lookup(name).filter(|value| !value.trim().is_empty()))
+                    .map(|value| Self::from_locale(&value))
+            })
+            .unwrap_or_default()
     }
 
     pub fn pick<T>(self, english: T, portuguese: T) -> T {
@@ -130,6 +135,34 @@ mod tests {
     }
 
     #[test]
+    fn an_unrecognized_explicit_variable_falls_back_to_the_locale() {
+        for value in ["de", "portuguese", "", "  "] {
+            let environment = lookup(&[("MOSAIC_LANGUAGE", value), ("LANG", "pt_BR.UTF-8")]);
+            assert_eq!(
+                Language::detect(environment),
+                Language::BrazilianPortuguese,
+                "{value:?}"
+            );
+            let environment = lookup(&[("MOSAIC_LANGUAGE", value), ("LC_ALL", "en_US.UTF-8")]);
+            assert_eq!(
+                Language::detect(environment),
+                Language::English,
+                "{value:?}"
+            );
+        }
+        let environment = lookup(&[("MOSAIC_LANGUAGE", "de")]);
+        assert_eq!(Language::detect(environment), Language::English);
+    }
+
+    #[test]
+    fn the_explicit_variable_accepts_the_same_values_as_the_ui_setting() {
+        let environment = lookup(&[("MOSAIC_LANGUAGE", "PT_br"), ("LANG", "en_US")]);
+        assert_eq!(Language::detect(environment), Language::BrazilianPortuguese);
+        let environment = lookup(&[("MOSAIC_LANGUAGE", " en "), ("LANG", "pt_BR")]);
+        assert_eq!(Language::detect(environment), Language::English);
+    }
+
+    #[test]
     fn locale_variables_follow_the_posix_order() {
         let environment = lookup(&[("LC_ALL", "C"), ("LC_MESSAGES", "pt_BR"), ("LANG", "pt_BR")]);
         assert_eq!(Language::detect(environment), Language::English);
@@ -146,8 +179,8 @@ mod tests {
     }
 
     #[test]
-    fn any_other_value_means_english() {
-        let environment = lookup(&[("MOSAIC_LANGUAGE", "fr_FR"), ("LANG", "pt_BR")]);
+    fn any_other_locale_means_english() {
+        let environment = lookup(&[("MOSAIC_LANGUAGE", "fr_FR"), ("LANG", "fr_FR")]);
         assert_eq!(Language::detect(environment), Language::English);
     }
 }
