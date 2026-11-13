@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use crate::application::ports::{ArchiveExtractor, ChecksumCalculator, ReleaseError};
@@ -15,6 +16,7 @@ const SHA256SUM_PROGRAM: &str = "sha256sum";
 const SHASUM_PROGRAM: &str = "shasum";
 const SHASUM_ALGORITHM_ARGUMENTS: [&str; 2] = ["-a", "256"];
 const TAR_PROGRAM: &str = "tar";
+const TAR_DO_NOT_RESTORE_OWNER: &str = "-o";
 
 #[derive(Default)]
 pub struct ShaSumChecksum {
@@ -74,6 +76,19 @@ impl TarExtractor {
     }
 }
 
+impl TarExtractor {
+    fn extraction_command(archive: &Path, destination: &Path) -> Command {
+        let mut command = external_command(OsStr::new(TAR_PROGRAM));
+        command
+            .arg("-xzf")
+            .arg(archive)
+            .arg(TAR_DO_NOT_RESTORE_OWNER)
+            .arg("-C")
+            .arg(destination);
+        command
+    }
+}
+
 impl ArchiveExtractor for TarExtractor {
     fn extract(&self, archive: &Path, destination: &Path) -> Result<(), ReleaseError> {
         std::fs::create_dir_all(destination).map_err(|error| {
@@ -82,8 +97,7 @@ impl ArchiveExtractor for TarExtractor {
                 format!("não consegui criar a pasta: {error}"),
             ))
         })?;
-        let mut command = external_command(OsStr::new(TAR_PROGRAM));
-        command.arg("-xzf").arg(archive).arg("-C").arg(destination);
+        let command = Self::extraction_command(archive, destination);
         let limits = ProcessLimits {
             timeout: EXTRACTION_TIMEOUT,
             maximum_output_bytes: MAXIMUM_TOOL_OUTPUT_BYTES,
@@ -145,6 +159,14 @@ mod tests {
             fs::read_to_string(destination.join("pacote/mosaic")).unwrap(),
             "binario"
         );
+    }
+
+    #[test]
+    fn the_extraction_never_restores_the_owner_recorded_in_the_tarball() {
+        let command =
+            TarExtractor::extraction_command(Path::new("pacote.tar.gz"), Path::new("destino"));
+        let arguments: Vec<_> = command.get_args().collect();
+        assert!(arguments.contains(&OsStr::new("-o")));
     }
 
     #[test]
