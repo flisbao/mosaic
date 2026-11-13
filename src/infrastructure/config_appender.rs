@@ -140,6 +140,7 @@ fn joined(current: &str, block: &str) -> String {
 }
 
 fn replace_file(path: &Path, content: &str) -> Result<(), AppendError> {
+    let path = &fs::canonicalize(path).map_err(io_error(path))?;
     let permissions = fs::metadata(path).map_err(io_error(path))?.permissions();
     let temporary = path.with_extension("toml.tmp");
     let _ = fs::remove_file(&temporary);
@@ -197,6 +198,38 @@ mod tests {
                 .widget_ids,
             vec!["a", "novo"]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_stays_a_link_and_its_target_receives_the_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let dotfiles = directory.path().join("dotfiles");
+        let config_directory = directory.path().join("config");
+        fs::create_dir_all(&dotfiles).unwrap();
+        fs::create_dir_all(&config_directory).unwrap();
+        let original = "# versionado\n";
+        let target = dotfiles.join("mosaic.toml");
+        fs::write(&target, original).unwrap();
+        let link = config_file_path(&config_directory);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        append_blocks(
+            &config_directory,
+            &[BLOCK.to_string()],
+            Language::BrazilianPortuguese,
+        )
+        .unwrap();
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_link(&link).unwrap(), target);
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            format!("{original}\n{BLOCK}")
+        );
+        let leftovers: Vec<_> = fs::read_dir(&dotfiles).unwrap().collect();
+        assert_eq!(leftovers.len(), 1);
     }
 
     #[test]
