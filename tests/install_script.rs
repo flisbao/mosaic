@@ -15,6 +15,9 @@ const INSTALL_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh");
 const SHELL: &str = "/bin/sh";
 const TEXT_FILE_BUSY_MESSAGE: &str = "Text file busy";
 const TEXT_FILE_BUSY_RETRIES: u32 = 20;
+const INTERRUPTED_EXIT_STATUS: i32 = 130;
+const SIGNAL_WAIT_ATTEMPTS: u32 = 200;
+const SIGNAL_WAIT_STEP_MILLISECONDS: u64 = 25;
 const BASE_TOOLS: [&str; 13] = [
     "mktemp", "mkdir", "rm", "tar", "gzip", "install", "mv", "grep", "sed", "tr", "tail", "cut",
     "cat",
@@ -90,6 +93,10 @@ impl Environment {
     }
 
     fn run_once(&self, extra_environment: &[(&str, &str)]) -> Output {
+        self.command(extra_environment).output().unwrap()
+    }
+
+    fn command(&self, extra_environment: &[(&str, &str)]) -> Command {
         let mut search_path = self.toolbox().into_os_string();
         if let Some(extra) = &self.extra_path {
             search_path.push(":");
@@ -105,7 +112,7 @@ impl Environment {
         for (name, value) in extra_environment {
             command.env(name, value);
         }
-        command.output().unwrap()
+        command
     }
 
     fn run_default(&self) -> Output {
@@ -114,6 +121,18 @@ impl Environment {
             self.install_directory().to_str().unwrap(),
         )])
     }
+}
+
+fn wait_for(marker: &Path) {
+    for _ in 0..SIGNAL_WAIT_ATTEMPTS {
+        if marker.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(
+            SIGNAL_WAIT_STEP_MILLISECONDS,
+        ));
+    }
+    panic!("{} never appeared", marker.display());
 }
 
 fn find_on_host_path(tool: &str) -> Option<PathBuf> {
@@ -252,6 +271,57 @@ fn an_invalid_version_is_refused_before_any_download() {
         );
         assert!(environment.server.requests().is_empty(), "{invalid:?}");
     }
+}
+
+#[test]
+fn a_termination_signal_cleans_up_and_stops_the_installation() {
+    let mut environment = Environment::new();
+    environment.downloader = "slow-curl";
+    environment.server.set_latest("0.0.11");
+    environment.server.publish(
+        "0.0.11",
+        "x86_64-unknown-linux-musl",
+        &fake_mosaic_script("0.0.11"),
+    );
+    let wrappers = environment.path("wrappers");
+    fs::create_dir_all(&wrappers).unwrap();
+    let started = environment.path("download-started");
+    write_executable(
+        &wrappers.join("curl"),
+        &format!(
+            "#!/bin/sh\n: > '{}'\n'{}' 1\nexec '{}' \"$@\"\n",
+            started.display(),
+            find_on_host_path("sleep").unwrap().display(),
+            find_on_host_path("curl").unwrap().display()
+        ),
+    );
+    environment.extra_path = Some(wrappers);
+    let temporary_root = environment.path("tmp");
+    fs::create_dir_all(&temporary_root).unwrap();
+    let mut child = environment
+        .command(&[
+            (
+                "MOSAIC_INSTALL_DIR",
+                environment.install_directory().to_str().unwrap(),
+            ),
+            ("MOSAIC_VERSION", "v0.0.11"),
+            ("TMPDIR", temporary_root.to_str().unwrap()),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for(&started);
+    Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status()
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(INTERRUPTED_EXIT_STATUS));
+    assert!(leftovers(&temporary_root).is_empty());
+    assert!(!environment.install_directory().join("mosaic").exists());
+    assert_eq!(environment.server.requests().len(), 1);
 }
 
 #[test]

@@ -12,6 +12,7 @@ DEFAULT_DOWNLOAD_BASE="https://github.com/flisbao/mosaic/releases"
 EXECUTABLE_NAME="mosaic"
 EXECUTABLE_MODE=755
 VERSION_COMPONENT_COUNT=3
+INTERRUPTED_EXIT_STATUS=130
 
 fail() {
   printf 'install.sh: %s\n' "$1" >&2
@@ -190,7 +191,8 @@ main() {
   say "Installing Mosaic $version ($target) into $install_directory"
 
   work_directory=$(mktemp -d) || fail "could not create a temporary folder"
-  trap cleanup EXIT INT TERM HUP
+  trap cleanup EXIT
+  trap 'exit "$INTERRUPTED_EXIT_STATUS"' INT TERM HUP
 
   release_url="$download_base/download/$version"
   download_file "$release_url/$archive_name" "$work_directory/$archive_name"
