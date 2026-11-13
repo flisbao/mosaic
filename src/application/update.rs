@@ -182,7 +182,10 @@ pub fn newer_version_for_notice(
         Some(record) => record.latest.clone(),
         None => {
             let known = record.map(|record| record.latest);
-            let queried = source.latest_version().ok();
+            let queried = match source.latest_version() {
+                Err(ReleaseError::Cancelled) => return None,
+                other => other.ok(),
+            };
             let latest = queried.clone().or(known).unwrap_or_else(|| current.clone());
             let _ = store.save(&UpdateCheckRecord {
                 checked_at: now,
@@ -669,6 +672,24 @@ mod tests {
             None
         );
         assert_eq!(source.queries(), 1);
+    }
+
+    #[test]
+    fn a_cancelled_query_neither_notifies_nor_counts_as_the_attempt_of_the_day() {
+        let mut source = FakeSource::new("0.0.11");
+        source.latest = Err(ReleaseError::Cancelled);
+        let store = FakeStore::default();
+        let clock = FixedClock(fixed_now());
+        assert_eq!(
+            newer_version_for_notice(&source, &store, &clock, &version("0.0.10")),
+            None
+        );
+        assert_eq!(store.load(), None);
+        source.latest = Ok(version("0.0.11"));
+        assert_eq!(
+            newer_version_for_notice(&source, &store, &clock, &version("0.0.10")),
+            Some(version("0.0.11"))
+        );
     }
 
     #[test]
